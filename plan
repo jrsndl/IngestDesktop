@@ -1,0 +1,165 @@
+1. Create Python app which will use QT 6 for GUI. No round corners, no gradients, no transparency. Minimalistic, flat design.
+2. App will be used for ingesting images into aan AYON pipeline tool.
+3. App will have a window separated into 4 areas
+3.1 the main infinite desktop area for user to select more, rearange and label ingesting images.
+3.2 AYON path selection panel, which will let the user to select the AYON folder and task from the tree structure viewer 
+3.3 filtering panel, including the file system folder structure viewer, allowing to concentrate on selected folders with images to be ingested
+3.4 ingest summary panel, showing spreadsheet of images to be ingested into AYON
+3.5 Bottom buttons for:
+- ingesting selected images into AYON
+- exiting the app
+- selecting source folder or multiple source folders
+- selecting Ayon Project
+
+Create modern looking UI, dark mode. with gray pallete. Use orange for selected items and buttons.
+Images will be loaded as previews (thumbnails) only. Full path will be stored in the app.  
+
+Project Structure:
+- main.py: Entry point of the application.
+- gui/: Contains the main window and other UI components.
+- logic/: Contains the core logic for the application.
+- ayon_client.py: Contains the logic for interacting with the AYON pipeline tool.
+- utils.py: Contains utility functions.
+- config.json: Contains the configuration for the application.
+
+Main window will have these areas:
+1. Top full wide bar with buttons for:
+- ingesting selected images into AYON
+- exiting the app
+- selecting source folder (only one source folder allowed)
+- selecting Ayon Project
+2. Left panel with AYON tree structure viewer for selecting the AYON folder and task from the tree structure viewer. Panel can be shrinked to hide and expanded to max half of the window width.
+3. Right area with filtering panel, including the file system folder structure viewer, allowing to concentrate on selected folders with images to be ingested. Panel can be shrinked to minimum and expanded to maximum width. Panel can be expanded to maximum of half of available width.
+4. Bottom - full wide panel with ingest area, showing spreadsheet of images to be ingested into AYON
+5. Big button for ingesting images to AYON in bottom, covering full app width.
+
+User flow:
+1. User opens the app
+2. App remembers last selected Folder and AYON project and task for each project.
+
+3. User selects source folder by browsing the file system or dragging the folder onto the app window. User can also start typing path in the text field. There is a Scan button which will scan the folder and all subfolders for images. This may take some time so it can be done in background. User can also cancel the scan.
+If user drags the folder onto the app window, the scan will start immediately.
+If user clicks the scan button the scan will start immediately.
+There is an option to not scan subfolders, only top folder.
+
+
+4. User selects Ayon Project from dropdown. Dropdown allows for favorite (indicated by star) and last used projects.
+
+5. The right side panel has two modes: select and show.
+
+In select mode, the user can see all images, and filtering serves for selecting the thumbnails in main window and rows in bottom spreadsheet panel. Select mode is default mode for the right panel.
+
+In Show mode, the user can only see images from selected subfolders, with additional filtering options further limiting the view.
+
+The user can switch between select and show mode by clicking a button in the top of the filtering panel.
+
+Below the select / show buttons is the file name search bar, accepting wildcards (case insensitive). Default value "*", maximum 20 characters.
+
+Below the file name search bar, there is the file age filter represented as a single integer input field. It can switch units between minutes hours or days. Default value 0, maximum 1000. If set to 0, it will not select / filter by age.
+
+Below the age filter, there is the tree view of the source folder structure. By default, root folder in tree view is selected, allowing the main middle area to show all images. User can select subfolders to filter the images to be shown in the main middle area. Any images outside the selected branch (up) will not be shown / selected.
+
+The folder structure tree view displays the user selected folder as a root folder.
+
+
+6. Left side panel displays AYON structure.
+On the top of the panel there are buttons to:
+- refresh the AYON structure
+- switch the panel functionality between assign and select mode.
+Below the buttons is the AYON tree structure viewer. 
+
+Assign mode:
+Double clicking the task will set the AYON path for all selected images to the selected task path. The current path will be overwritten. Only the task (tree leaf) can be assigned. Assign mode is default mode for the left panel.
+
+Select mode:
+User can select folder or task. If folder is selected, it selects the images in main window and bottom panel.
+
+
+7. Main infinite area displays thumbnails of images. 
+
+Every image is represented as a thumbnail.
+
+Each thumbnail has two borders. The inner border is for tagging selected images to be ingested or not. Green for ingest, dark red for not ingest. The outer border is for showing the selection state: selected-white thick border, not selected-thin gray border.
+
+Each image has a label below the thumbnail showing label. Label is initially the file name (without extension). User can edit the label. The label change will not rename the file on disk, but it will change the name in the ingest spreadsheet and the AYON variant name.
+
+Each thumbnail has a version number displayed on the middle of the right side of the thumbnail. The number is extracted from the file name by user definable regex pattern (default: _v(\\d+)). If there is no version number can be extracted, version will fall back to 1.
+
+
+Right click context menu for renaming selected images:
+- reset to file name : will set the label to the original file name (without extension)
+- search-replace in label : will allow user to search and replace text in the label
+- search-replace regex in label : will allow user to search and replace text in the label using regex
+- add prefix to label : will add prefix to the label
+- add suffix to label : will add suffix to the label
+- trim label from left : will remove N characters from the left of the label
+- trim label from right : will remove N characters from the right of the label
+
+Each image has an AYON path displayed on the top of the thumbnail. It is read only. User can not edit it directly, only by doubleclicking the left panel task item.
+
+Selecting images:
+- single click inside the thumbnail selects the image
+- shift + click selects range of images
+- ctrl + click toggles selection of image
+- drag selection allows to select multiple images
+- double click to the empty space to toogle between select all and invert selected images selection
+
+Tagging images to be ingested:
+- by right click context menu toogle: tag / untag selected
+- by default, all images are tagged to be ingested
+- tags are color coded, green for ingest, dark red for not ingest
+
+Populating the main area - arangement of the thumbnails:
+- thumbnails will be displayed in rows and columns
+- preference for number of thumbnails per row - user definable
+- preference for thumbnails size - user definable
+- preference for row distance - user definable
+- preference for column distance - user definable
+- preference for empty space between thumbnails from the same file system folder - user definable
+
+- by default each file system folder is displayed as a row with thumbnails sorted by file name
+- if there are many thumbnails ( more then user defined per row), it will create new row
+- there will be 
+- thumbnails can be selected by selecting row (select all)
+- thumbnails can be selected by right click context menu toogle: select / deselect
+- by default, thumbnails are sorted by file name
+- thumbnails are also sorted by file system folder - all thumbnails from the same file system folder are displayed together, one after another
+- thumbnails from different file system folders are separated by empty space.
+
+8. Bottom panel - Spreadsheet view
+Shows the same data as main view but in spreadsheet form.
+Allows user to select rows (images)
+At the top of the spreadsheet, there are controls:
+- checkbox: "selected only" (to only display rows corresponding to selected thumbnails)
+- checkbox: "tagged only" (to only display rows where image is tagged for ingest)
+- button: "version check" : will compare version from file with next available version in AYON and show warning if it is older.
+- button: "untag lower version" untag rows with version lower than last version in AYON
+- button: "select lower version" select rows with version lower than last version in AYON
+- button: "check duplicates" : will check for duplicates with the same AYON path and the same label. It will only check the images that are tagged for ingest. Duplicates will be selected, rows will have red background.
+- button: "invert tags" : will invert the tags of the selected images (toggle between tag and untag).
+- button: "tag/untag selected" : will tag/untag all selected images
+
+- Columns:
+- Ingest checkbox (user editable)
+- Small thumbnail preview
+- Label (user editable, initially from filename)
+- Version (user editable, initially from filename)
+- Last Version in AYON
+- AYON Path
+- Age (in units from right panel filter)
+
+- Sortable columns
+- Allows user to and tag or untag images for ingest. (done by ingest checkbox)
+- Allows user to edit the label in spreadsheet. The right click context menu in main window performs the same operations as the right click context menu in spreadsheet for label editing.
+- Allows user to edit the version in spreadsheet by typing number
+- Allows user to multi select rows by clicking the row number and using shift and ctrl keys.
+- Allows user to select rows by clicking on the thumbnail - selects corresponding row
+
+9. Ingest Button
+Clicking the "Ingest" button will:
+- "check duplicates" - same as in top panel. If duplicates found, ingest is stopped with message.
+- "check versions" - same as in top panel. If older versions found, select them and show message - ingest is stopped with message.
+- start ingest process. The ingest process will first create csv file with all the data required for AYON TrayPublisher CSV ingest
+- The CSV is used by TrayPublisher to ingest the files into AYON - calling external process
+- After TrayPublisher finishes, app will use AYON API to check if the files are in AYON and set the colors of the spreadsheet rows to bright green (ingested) or red (error) and show message to the user.
+

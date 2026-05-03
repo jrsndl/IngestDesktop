@@ -1,0 +1,178 @@
+/* General Styles */
+QWidget {
+    background-color: #2b2b2b;
+    color: #e0e0e0;
+    font-family: "Segoe UI", Arial, sans-serif;
+    font-size: 12px;
+    border: none;
+}
+QWidget#TopBar {
+    background-color: #2a2a2a;
+    border: 1px solid #ffffff;
+    margin: 4px;
+    border-radius: 4px;
+}
+
+/* ScrollBars */
+QScrollBar:vertical {
+    border: none;
+    background: #333333;
+    width: 10px;
+    margin: 0px 0px 0px 0px;
+}
+QScrollBar::handle:vertical {
+    background: #555555;
+    min-height: 20px;
+}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0px;
+}
+
+QScrollBar:horizontal {
+    border: none;
+    background: #333333;
+    height: 10px;
+    margin: 0px 0px 0px 0px;
+}
+QScrollBar::handle:horizontal {
+    background: #555555;
+    min-width: 20px;
+}
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+    width: 0px;
+}
+
+/* Buttons */
+QPushButton {
+    background-color: #3d3d3d;
+    border: 1px solid #4d4d4d;
+    padding: 5px 15px;
+    min-height: 25px;
+}
+QPushButton:hover {
+    background-color: #4d4d4d;
+}
+QPushButton:pressed, QPushButton:checked {
+    background-color: #ff9800;
+    color: #000000;
+}
+QPushButton#IngestButton {
+    background-color: #ff9800;
+    color: #000000;
+    font-weight: bold;
+    font-size: 14px;
+}
+QPushButton#IngestButton:hover {
+    background-color: #ffa726;
+}
+
+/* Inputs */
+QLineEdit, QComboBox, QSpinBox {
+    background-color: #1e1e1e;
+    border: 1px solid #4d4d4d;
+    padding: 3px;
+    selection-background-color: #ff9800;
+}
+QSpinBox::up-button, QSpinBox::down-button {
+    background-color: #333333;
+    width: 16px;
+    border-left: 1px solid #4d4d4d;
+}
+QSpinBox::up-button:hover, QSpinBox::down-button:hover {
+    background-color: #444444;
+}
+QSpinBox::up-button:pressed, QSpinBox::down-button:pressed {
+    background-color: #ff9800;
+}
+QSpinBox::up-arrow {
+    image: none;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-bottom: 5px solid #e0e0e0;
+    width: 0;
+    height: 0;
+}
+QSpinBox::down-arrow {
+    image: none;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid #e0e0e0;
+    width: 0;
+    height: 0;
+}
+QComboBox::drop-down {
+    border: none;
+}
+
+/* Panels & Splitters */
+QSplitter::handle {
+    background-color: #1e1e1e;
+}
+
+/* Tree & Table Views */
+QTreeView, QTableView, QListView {
+    background-color: #1e1e1e;
+    alternate-background-color: #252525;
+    border: 1px solid #333333;
+    gridline-color: #333333;
+    selection-background-color: #ff9800;
+    selection-color: #000000;
+}
+QTableView::item:selected {
+    background-color: #555555;
+    color: #ffffff;
+}
+QHeaderView::section {
+    background-color: #333333;
+    padding: 4px;
+    border: 1px solid #1e1e1e;
+}
+
+/* Custom Thumbnail Items (Conceptual) */
+.ThumbnailWidget {
+    border: 1px solid #444444; /* Outer border */
+}
+.ThumbnailWidget[selected="true"] {
+    border: 2px solid #ffffff;
+}
+.ThumbnailWidget .ImageBorder {
+    border: 2px solid #558b2f; /* Inner border - Ingest Green */
+}
+.ThumbnailWidget[tagged="false"] .ImageBorder {
+    border: 2px solid #c62828; /* Inner border - Not Ingest Dark Red */
+}
+
+/* AYON Warning */
+QLabel#AyonWarning {
+    color: #ff5252;
+    font-weight: bold;
+    font-size: 14px;
+    background-color: #3d2626;
+    border: 1px solid #ff5252;
+    border-radius: 4px;
+    padding: 20px;
+}
+
+/* Preset Widget */
+#PresetWidget {
+    background-color: #333333;
+    border: 1px solid #444444;
+    border-radius: 8px;
+    margin-bottom: 5px;
+}
+#PresetWidget[selected="true"] {
+    border: 2px solid #ff9800;
+    background-color: #3d3d3d;
+}
+#PresetHeader {
+    background-color: #2d2d2d;
+    border-top-left-radius: 8px;
+    border-top-right-radius: 8px;
+    border-bottom: 1px solid #444444;
+}
+#PresetHeader[selected="true"] {
+    background-color: #4a4a4a;
+}
+#PresetWidget QLabel {
+    background-color: transparent;
+}
