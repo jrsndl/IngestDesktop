@@ -5,7 +5,7 @@ import tempfile
 import subprocess
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QSplitter, 
                              QPushButton, QMessageBox, QInputDialog, QApplication,
-                             QDialog, QLineEdit, QLabel, QHBoxLayout, QPlainTextEdit)
+                             QDialog, QLineEdit, QLabel, QHBoxLayout, QPlainTextEdit, QFormLayout)
 from PySide6.QtCore import Qt, QTimer, QItemSelectionModel, QItemSelection, QThread, Signal
 from PySide6.QtGui import QKeySequence, QCursor, QShortcut
 
@@ -53,6 +53,41 @@ class RenameDialog(QDialog):
         
     def get_text(self):
         return self.edit.text().strip()
+
+class SearchReplaceDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Search and Replace Labels")
+        self.setMinimumWidth(400)
+        layout = QFormLayout(self)
+        
+        self.search_edit = QLineEdit()
+        self.replace_edit = QLineEdit()
+        
+        layout.addRow("Search for:", self.search_edit)
+        layout.addRow("Replace with:", self.replace_edit)
+        
+        # Style hints
+        self.search_edit.setMinimumHeight(30)
+        self.replace_edit.setMinimumHeight(30)
+        
+        btns = QHBoxLayout()
+        self.btn_ok = QPushButton("Replace All")
+        self.btn_ok.setObjectName("IngestButton")
+        self.btn_ok.setMinimumHeight(35)
+        self.btn_ok.clicked.connect(self.accept)
+        
+        self.btn_cancel = QPushButton("Cancel")
+        self.btn_cancel.setMinimumHeight(35)
+        self.btn_cancel.clicked.connect(self.reject)
+        
+        btns.addStretch()
+        btns.addWidget(self.btn_ok)
+        btns.addWidget(self.btn_cancel)
+        layout.addRow(btns)
+        
+    def get_values(self):
+        return self.search_edit.text(), self.replace_edit.text()
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -410,12 +445,7 @@ class MainWindow(QMainWindow):
         self.save_config()
 
     def _on_age_filter_changed(self, value, units):
-        self.model.age_unit = units
-        if self.model.items:
-            self.model.dataChanged.emit(
-                self.model.index(0, 5), 
-                self.model.index(len(self.model.items)-1, 5)
-            )
+        self.model.set_age_unit(units)
 
     def _update_ages(self):
         import time
@@ -613,11 +643,6 @@ class MainWindow(QMainWindow):
         # Trigger the rename action with the specific row index
         self._on_label_action("rename", (row, item_data))
 
-    def _on_label_action(self, action, data):
-        if action == "tag":
-            self._on_tag_selection()
-            return
-            
     def _on_filter_search_changed(self, text):
         if self._selection_lock: return
         self._selection_lock = True
@@ -676,58 +701,58 @@ class MainWindow(QMainWindow):
             # 'Show' mode - Filter the thumbnails
             self.thumb_area.set_path_filter(path)
 
+    def _on_label_action(self, action, data):
+        if action == "tag":
+            self._on_tag_selection()
+            return
+
         if action == "rename_done":
             row, new_label = data
             idx = self.model.index(row, 2)
             self.model.dataChanged.emit(idx, idx)
             return
 
+        if action == "search_replace":
+            dialog = SearchReplaceDialog(self)
+            if dialog.exec():
+                search_str, replace_str = dialog.get_values()
+                if search_str:
+                    self.model.modify_labels(self.spreadsheet.table.selectionModel(), "search_replace", (search_str, replace_str))
+                    self.log_message(f"Replaced '{search_str}' with '{replace_str}' in selected labels.", "success")
+            return
+
         if action in ["prefix", "suffix", "rename"]:
             initial_text = ""
-            if action == "rename" and data:
-                initial_text = getattr(data, 'label', "")
-            
             if action == "rename":
+                row_idx = -1
+                # Handle both (row, item) and just item data
+                if isinstance(data, tuple):
+                    row_idx, item = data
+                    initial_text = item.label
+                else:
+                    initial_text = getattr(data, 'label', "")
+                    # Find row index if not provided
+                    for i, item in enumerate(self.model.items):
+                        if item == data:
+                            row_idx = i
+                            break
+
                 dialog = RenameDialog(initial_text, self)
                 if dialog.exec():
-                    data = dialog.get_text()
-                else:
-                    return
+                    new_label = dialog.get_text()
+                    if new_label and row_idx != -1:
+                        old_label = initial_text
+                        idx = self.model.index(row_idx, 2)
+                        if self.model.setData(idx, new_label, Qt.EditRole):
+                            self.log_message(f"Renamed '{old_label}' -> '{new_label}'", "success")
+                            self.spreadsheet.table.resizeColumnToContents(2)
+                return
             else:
                 title = f"Add {action.capitalize()}"
-                text, ok = QInputDialog.getText(self, title, "Enter text:", text=initial_text)
+                text, ok = QInputDialog.getText(self, title, "Enter text:")
                 if not ok or not text: return
                 data = text
         
-        if action == "rename":
-            row_idx = -1
-            initial_text = ""
-            
-            # Handle both (row, item) and just item data
-            if isinstance(data, tuple):
-                row_idx, item = data
-                initial_text = item.label
-            else:
-                initial_text = getattr(data, 'label', "")
-                # Find row index if not provided
-                for i, item in enumerate(self.model.items):
-                    if item == data:
-                        row_idx = i
-                        break
-
-            dialog = RenameDialog(initial_text, self)
-            if dialog.exec():
-                new_label = dialog.get_text()
-                if new_label and row_idx != -1:
-                    old_label = initial_text
-                    # Use model's setData for consistency and validation
-                    idx = self.model.index(row_idx, 2)
-                    if self.model.setData(idx, new_label, Qt.EditRole):
-                        self.log_message(f"Renamed '{old_label}' -> '{new_label}'", "success")
-                        # Auto-resize Label column
-                        self.spreadsheet.table.resizeColumnToContents(2)
-            return
-
         self.model.modify_labels(self.spreadsheet.table.selectionModel(), action, data)
         self.log_message(f"Applied bulk action '{action}' with data '{data}' to selection.")
 

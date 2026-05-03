@@ -26,7 +26,7 @@ class ImageTableModel(QAbstractTableModel):
     data_changed = Signal()
 
     COLUMNS = [
-        "Ingest", "Thumbnail", "Label", "Category", "Version", 
+        "Tag", "Thumbnail", "Label", "Category", "Version", 
         "Last AYON Version", "Age", "AYON Path"
     ]
 
@@ -143,6 +143,11 @@ class ImageTableModel(QAbstractTableModel):
         self.items = []
         self.endResetModel()
 
+    def set_age_unit(self, unit):
+        if unit in ["minutes", "hours", "days"]:
+            self.age_unit = unit
+            self.layoutChanged.emit()
+
     def add_items(self, new_items):
         self.beginInsertRows(QModelIndex(), len(self.items), len(self.items) + len(new_items) - 1)
         self.items.extend(new_items)
@@ -167,24 +172,20 @@ class ImageTableModel(QAbstractTableModel):
         for row in rows:
             item = self.items[row]
             if action == "reset":
-                # For sequences, we need to strip version and counter to get the clean original label
-                # But wait, the scanner already did this for the initial label.
-                # However, if we want to "reset", we can't easily go back to base_name without logic.
-                # Simplest is to store the original label or re-apply stripping.
-                # For now, let's just use a more permissive reset or assume item.filename minus ext
-                # is the best we can do without more info.
-                # Actually, scanner.py uses base_name.
+                # Strip extensions, counters, and versions to reset to base name
                 name = os.path.splitext(item.filename)[0]
-                # Strip counter like .0001 or _0001
                 name = re.sub(r'[\._]\d{3,6}$', '', name)
-                # Strip version like _v001
                 name = re.sub(r'(_v\d+)', '', name)
                 item.label = name
             elif action == "prefix":
                 item.label = f"{data}{item.label}"
             elif action == "suffix":
                 item.label = f"{item.label}{data}"
+            elif action == "search_replace":
+                search_str, replace_str = data
+                item.label = item.label.replace(search_str, replace_str)
         
+        # Notify views that Label column (2) changed
         self.dataChanged.emit(self.index(min(rows), 2), self.index(max(rows), 2))
     def sort(self, column, order=Qt.AscendingOrder):
         """Sort the model data."""

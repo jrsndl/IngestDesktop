@@ -627,6 +627,10 @@ class ThumbnailArea(QWidget):
         suffix_action = QAction("Add Suffix...", self)
         suffix_action.triggered.connect(lambda: self.label_action_requested.emit("suffix", None))
         menu.addAction(suffix_action)
+        
+        search_replace_action = QAction("Search and Replace...", self)
+        search_replace_action.triggered.connect(lambda: self.label_action_requested.emit("search_replace", None))
+        menu.addAction(search_replace_action)
         menu.exec(event.globalPos())
 
     def wheelEvent(self, event):

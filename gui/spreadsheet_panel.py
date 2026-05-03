@@ -86,11 +86,13 @@ class SpreadsheetPanel(QWidget):
         # Set columns to Interactive to allow user adjustment
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.Interactive)
+        header.setSectionResizeMode(0, QHeaderView.Fixed) # Tag
         header.setSectionResizeMode(2, QHeaderView.Interactive) # Label
         header.setSectionResizeMode(3, QHeaderView.Interactive) # Category
         header.setSectionResizeMode(4, QHeaderView.Interactive) # Version
         
         # Initial fit
+        self.table.setColumnWidth(0, 40)
         self.table.resizeColumnToContents(2)
         self.table.resizeColumnToContents(3)
         self.table.resizeColumnToContents(4)
@@ -170,5 +172,9 @@ class SpreadsheetPanel(QWidget):
         suffix_action = QAction("Add Suffix...", self)
         suffix_action.triggered.connect(lambda: self.label_action_requested.emit("suffix", None))
         menu.addAction(suffix_action)
+        
+        search_replace_action = QAction("Search and Replace...", self)
+        search_replace_action.triggered.connect(lambda: self.label_action_requested.emit("search_replace", None))
+        menu.addAction(search_replace_action)
         
         menu.exec(self.table.viewport().mapToGlobal(pos))
