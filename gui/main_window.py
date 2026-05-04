@@ -186,12 +186,14 @@ class HelpOverlay(QWidget):
         y = 0
         y = draw_shortcut(painter, keys_rect, "{product_type}", "Product Type from the matched preset", y)
         y = draw_shortcut(painter, keys_rect, "{task_name}", "Task name from assigned AYON path", y)
-        y = draw_shortcut(painter, keys_rect, "{folder_name}", "Last folder name from assigned AYON path", y)
-        y = draw_shortcut(painter, keys_rect, "{parent_folder}", "Folder name above the last folder", y)
-        y = draw_shortcut(painter, keys_rect, "{label}", "Current label (including your edits)", y)
+        y = draw_shortcut(painter, keys_rect, "{ayon_folder_path}", "AYON path excluding the task", y)
+        y = draw_shortcut(painter, keys_rect, "{label}", "Current label (including edits)", y)
         y = draw_shortcut(painter, keys_rect, "{variant}", "Expanded variant string", y)
-        y = draw_shortcut(painter, keys_rect, "{file_name}", "Raw filename without extension", y)
-        y = draw_shortcut(painter, keys_rect, "{extension}", "Raw file extension without dot", y)
+        y = draw_shortcut(painter, keys_rect, "{filename}", "Full path (hashes for sequences)", y)
+        y = draw_shortcut(painter, keys_rect, "{repre}", "Representation from preset", y)
+        y = draw_shortcut(painter, keys_rect, "{head} / {tail}", "Handle Start / End from preset", y)
+        y = draw_shortcut(painter, keys_rect, "{slate_exists}", "True/False based on preset", y)
+        y = draw_shortcut(painter, keys_rect, "{fps}", "FPS from preset", y)
         
         # Footer
         painter.setPen(QColor(120, 120, 120))

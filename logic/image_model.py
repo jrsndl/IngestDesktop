@@ -261,16 +261,41 @@ class ImageTableModel(QAbstractTableModel):
             if len(ayon_parts) > 2:
                 parent_folder = ayon_parts[-3]
         
+        ayon_folder_path = "/".join(item.ayon_path.split("/")[:-1])
+        
+        # Filename with hashes for sequences
+        filename_val = item.file_path.replace("\\", "/")
+        if item.is_sequence:
+            import re
+            base, ext = os.path.splitext(filename_val)
+            # Find the last number in the basename
+            match = re.search(r"(\d+)$", base)
+            if match:
+                digits = match.group(1)
+                hashes = "#" * len(digits)
+                filename_val = base[:match.start()] + hashes + ext
+        
+        p_data = item.preset_data or {}
+        
         # Replacement mapping
         replacements = {
             "{product_type}": item.product_type or "",
             "{task_name}": task_name,
             "{folder_name}": folder_name,
             "{parent_folder}": parent_folder,
+            "{ayon_folder_path}": ayon_folder_path,
             "{label}": item.label or "",
             "{variant}": self._expand_string(item.variant, item) if text != item.variant else (item.variant or ""),
+            "{filename}": filename_val,
             "{file_name}": os.path.splitext(os.path.basename(item.file_path))[0],
-            "{extension}": os.path.splitext(item.file_path)[1].lower().lstrip(".")
+            "{extension}": os.path.splitext(item.file_path)[1].lower().lstrip("."),
+            "{repre}": p_data.get("Representation", ""),
+            "{head}": str(p_data.get("Handles Start", "0")),
+            "{tail}": str(p_data.get("Handles End", "0")),
+            "{slate_exists}": "True" if p_data.get("Slate Exists") else "False",
+            "{fps}": str(p_data.get("FPS", "")),
+            "{repre_color}": p_data.get("Colorspace", ""),
+            "{repre_tags}": p_data.get("Rep. Tags", ""),
         }
         
         import re
