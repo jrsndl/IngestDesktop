@@ -143,7 +143,7 @@ class ImageScanner(QThread):
                 source_path = first_path
 
             p_type = "sequences" if len(paths) > 1 else "stills"
-            matched_preset = evaluate_preset(first_path, self.presets, p_type)
+            matched_preset = evaluate_preset(first_path, self.presets, p_type, label=label)
 
             item = ImageItem(source_path, label=label, version=version, category=category, preset_name=matched_preset)
             self._fill_metadata(item, source_path)
@@ -158,7 +158,7 @@ class ImageScanner(QThread):
                 self.canceled.emit()
                 return
             
-            matched_preset = evaluate_preset(f, self.presets, "videos")
+            matched_preset = evaluate_preset(f, self.presets, "videos", label=os.path.splitext(os.path.basename(f))[0])
             item = ImageItem(f, category="Video", preset_name=matched_preset)
             self._fill_metadata(item, f)
             final_items.append(item)
@@ -171,7 +171,7 @@ class ImageScanner(QThread):
                 self.canceled.emit()
                 return
             
-            matched_preset = evaluate_preset(f, self.presets, "other")
+            matched_preset = evaluate_preset(f, self.presets, "other", label=os.path.splitext(os.path.basename(f))[0])
             item = ImageItem(f, category="Other", preset_name=matched_preset)
             self._fill_metadata(item, f)
             final_items.append(item)

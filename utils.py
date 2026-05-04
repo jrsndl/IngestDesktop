@@ -62,7 +62,7 @@ def get_sequence_counter(filename):
         return match.group(1)
     return ""
 
-def evaluate_preset(file_path, presets, p_type):
+def evaluate_preset(file_path, presets, p_type, label=None):
     """Evaluate which preset name matches the given file path."""
     p_list = presets.get(p_type, [])
     for p in p_list:
@@ -81,4 +81,6 @@ def evaluate_preset(file_path, presets, p_type):
             # path excluding file name, use forward slashes
             path_dir = os.path.dirname(file_path).replace("\\", "/").lower()
             if fnmatch.fnmatch(path_dir, f_str): return p.get("Name")
+        elif f_by == "label" and label:
+            if fnmatch.fnmatch(label.lower(), f_str): return p.get("Name")
     return None

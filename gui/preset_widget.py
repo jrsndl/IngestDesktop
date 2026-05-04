@@ -68,7 +68,7 @@ class PresetWidget(QFrame):
         
         # 2. Filter By
         self.filter_by = QComboBox()
-        self.filter_by.addItems(["Extension", "name", "path"])
+        self.filter_by.addItems(["Extension", "Name", "Path", "Label"])
         self.add_row("Filter By:", self.filter_by)
         
         # 3. Filter
