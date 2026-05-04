@@ -1,5 +1,5 @@
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QPushButton, QTreeView, 
-                             QHBoxLayout, QLabel, QMenu, QLineEdit, QComboBox)
+                             QHBoxLayout, QLabel, QMenu, QLineEdit, QComboBox, QSplitter)
 from PySide6.QtGui import QStandardItemModel, QStandardItem, QIcon, QColor, QFont, QAction
 from PySide6.QtCore import Signal, Qt, QSortFilterProxyModel, QEvent
 
@@ -151,9 +151,57 @@ class AyonPanel(QWidget):
         header.customContextMenuRequested.connect(self._on_header_context_menu)
         header.setSectionsClickable(True)
         
-        self.layout.addWidget(self.tree)
+        # 5. Splitter for Task Tree and Product Info
+        self.splitter = QSplitter(Qt.Vertical)
         
-        self.assigned_paths = set()
+        # Container for the top part (Buttons + Search + Tree)
+        self.top_container = QWidget()
+        top_layout = QVBoxLayout(self.top_container)
+        top_layout.setContentsMargins(0, 0, 0, 0)
+        top_layout.addLayout(btn_layout)
+        top_layout.addLayout(search_layout)
+        top_layout.addLayout(extra_btn_layout)
+        top_layout.addWidget(self.tree)
+        
+        self.splitter.addWidget(self.top_container)
+        
+        # Container for Product Info
+        self.product_container = QWidget()
+        self.product_layout = QVBoxLayout(self.product_container)
+        self.product_layout.setContentsMargins(0, 5, 0, 0)
+        
+        header_layout = QHBoxLayout()
+        header_layout.addWidget(QLabel("<b>Task Products:</b>"))
+        header_layout.addStretch()
+        
+        self.btn_hide_products = QPushButton("Hide")
+        self.btn_hide_products.setCheckable(True)
+        self.btn_hide_products.setFixedWidth(50)
+        self.btn_hide_products.setStyleSheet("font-size: 10px; padding: 2px;")
+        self.btn_hide_products.toggled.connect(self._on_hide_products_toggled)
+        header_layout.addWidget(self.btn_hide_products)
+        
+        self.product_layout.addLayout(header_layout)
+        
+        self.combo_product_types = CheckableComboBox()
+        self.combo_product_types.setPlaceholderText("Filter types...")
+        self.combo_product_types.activated.connect(self._refresh_product_list)
+        self.product_layout.addWidget(self.combo_product_types)
+        
+        self.product_view = QTreeView()
+        self.product_model = QStandardItemModel()
+        self.product_model.setHorizontalHeaderLabels(["Product Name", "Type", "Last Version"])
+        self.product_view.setModel(self.product_model)
+        self.product_view.setHeaderHidden(False)
+        self.product_view.setEditTriggers(QTreeView.NoEditTriggers)
+        self.product_layout.addWidget(self.product_view)
+        
+        self.splitter.addWidget(self.product_container)
+        self.layout.addWidget(self.splitter)
+        
+        # Initial splitter sizes
+        self.splitter.setStretchFactor(0, 3)
+        self.splitter.setStretchFactor(1, 1)
 
         # Unreachable Warning Label
         self.lbl_unreachable = QLabel("AYON Unreachable")
@@ -162,24 +210,6 @@ class AyonPanel(QWidget):
         self.lbl_unreachable.setWordWrap(True)
         self.lbl_unreachable.hide()
         self.layout.addWidget(self.lbl_unreachable)
-        
-        # 8. Product Info Section
-        self.layout.addSpacing(10)
-        self.layout.addWidget(QLabel("<b>Task Products:</b>"))
-        
-        self.combo_product_types = CheckableComboBox()
-        self.combo_product_types.setPlaceholderText("Filter types...")
-        self.combo_product_types.activated.connect(self._refresh_product_list)
-        self.layout.addWidget(self.combo_product_types)
-        
-        self.product_view = QTreeView()
-        self.product_view.setMaximumHeight(200)
-        self.product_model = QStandardItemModel()
-        self.product_model.setHorizontalHeaderLabels(["Product Name", "Last Version"])
-        self.product_view.setModel(self.product_model)
-        self.product_view.setHeaderHidden(False)
-        self.product_view.setEditTriggers(QTreeView.NoEditTriggers)
-        self.layout.addWidget(self.product_view)
         
         self.all_products = [] # Cache for current selected task
 
@@ -316,11 +346,27 @@ class AyonPanel(QWidget):
         for p in self.all_products:
             if p['type'] in checked_types:
                 name_item = QStandardItem(p['name'])
+                type_item = QStandardItem(p['type'])
                 ver_item = QStandardItem(f"v{p['version']:03d}")
                 ver_item.setTextAlignment(Qt.AlignCenter)
-                self.product_model.appendRow([name_item, ver_item])
+                self.product_model.appendRow([name_item, type_item, ver_item])
                 
         self.product_view.resizeColumnToContents(0)
+        self.product_view.resizeColumnToContents(1)
+
+    def _on_hide_products_toggled(self, checked):
+        if checked:
+            self.combo_product_types.hide()
+            self.product_view.hide()
+            self.btn_hide_products.setText("Show")
+            # Shrink the product container in the splitter
+            self.splitter.setSizes([1000, 30])
+        else:
+            self.combo_product_types.show()
+            self.product_view.show()
+            self.btn_hide_products.setText("Hide")
+            # Restore some size
+            self.splitter.setSizes([700, 300])
 
     def update_assigned_status(self, assigned_paths):
         """Iterate through the tree and bold tasks that are assigned to items."""
