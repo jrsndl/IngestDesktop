@@ -1,8 +1,9 @@
 import os
 import time
 import re
+import fnmatch
 from PySide6.QtCore import QThread, Signal
-from utils import get_all_files, get_version_from_name, generate_thumbnail, strip_sequence_counter, get_sequence_counter
+from utils import get_all_files, get_version_from_name, generate_thumbnail, strip_sequence_counter, get_sequence_counter, evaluate_preset
 from logic.image_model import ImageItem
 
 class ImageScanner(QThread):
@@ -101,26 +102,6 @@ class ImageScanner(QThread):
         total_units = len(groups) + len(videos) + len(others)
         current = 0
 
-        def match_preset(file_path, p_type):
-            p_list = self.presets.get(p_type, [])
-            for p in p_list:
-                f_by = p.get("Filter By", "Extension").lower()
-                f_str = p.get("Filter", "").lower()
-                if not f_str: continue
-                
-                if f_by == "extension":
-                    ext = os.path.splitext(file_path)[1].lower().lstrip(".")
-                    if f_str == ext: return p.get("Name")
-                elif f_by == "name":
-                    # name excluding extension
-                    name = os.path.splitext(os.path.basename(file_path))[0].lower()
-                    if f_str in name: return p.get("Name")
-                elif f_by == "path":
-                    # path excluding file name, use forward slashes
-                    path_dir = os.path.dirname(file_path).replace("\\", "/").lower()
-                    if f_str in path_dir: return p.get("Name")
-            return None
-
         # 1. Process Image Groups (Stills and Sequences)
         for key, paths in groups.items():
             if self._is_canceled:
@@ -162,7 +143,7 @@ class ImageScanner(QThread):
                 source_path = first_path
 
             p_type = "sequences" if len(paths) > 1 else "stills"
-            matched_preset = match_preset(first_path, p_type)
+            matched_preset = evaluate_preset(first_path, self.presets, p_type)
 
             item = ImageItem(source_path, label=label, version=version, category=category, preset_name=matched_preset)
             self._fill_metadata(item, source_path)
@@ -177,7 +158,7 @@ class ImageScanner(QThread):
                 self.canceled.emit()
                 return
             
-            matched_preset = match_preset(f, "videos")
+            matched_preset = evaluate_preset(f, self.presets, "videos")
             item = ImageItem(f, category="Video", preset_name=matched_preset)
             self._fill_metadata(item, f)
             final_items.append(item)
@@ -190,7 +171,7 @@ class ImageScanner(QThread):
                 self.canceled.emit()
                 return
             
-            matched_preset = match_preset(f, "other")
+            matched_preset = evaluate_preset(f, self.presets, "other")
             item = ImageItem(f, category="Other", preset_name=matched_preset)
             self._fill_metadata(item, f)
             final_items.append(item)

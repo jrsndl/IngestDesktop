@@ -18,6 +18,7 @@ from gui.prefs_dialog import PreferencesDialog
 from logic.image_model import ImageTableModel
 from logic.scanner import ImageScanner
 from ayon_client import AyonClient
+from utils import evaluate_preset
 
 
 class RenameDialog(QDialog):
@@ -468,7 +469,7 @@ class MainWindow(QMainWindow):
         self.refresh_hierarchy_async(project_name)
 
     def _update_model_presets(self):
-        """Update the model's category-to-preset-name mapping."""
+        """Update the model's category-to-preset-name mapping and re-evaluate items."""
         active_map = {}
         presets = self.config.get("presets", {})
         for p_type, p_list in presets.items():
@@ -488,6 +489,18 @@ class MainWindow(QMainWindow):
             elif p_type == "other": active_map["Other"] = active_name
             
         self.model.set_presets(active_map)
+        
+        # Re-evaluate every item in the model
+        for item in self.model.items:
+            cat = item.category
+            p_type = "other"
+            if "sequence" in cat.lower(): p_type = "sequences"
+            elif cat == "Still": p_type = "stills"
+            elif cat == "Video": p_type = "videos"
+            
+            item.preset_name = evaluate_preset(item.file_path, presets, p_type)
+            
+        self.model.layoutChanged.emit()
 
     def refresh_ayon(self):
         self.refresh_ayon_async(reconnect=False)

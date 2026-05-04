@@ -1,5 +1,6 @@
 import os
 import re
+import fnmatch
 from PySide6.QtGui import QPixmap, QImageReader
 from PySide6.QtCore import Qt
 
@@ -60,3 +61,24 @@ def get_sequence_counter(filename):
     if match:
         return match.group(1)
     return ""
+
+def evaluate_preset(file_path, presets, p_type):
+    """Evaluate which preset name matches the given file path."""
+    p_list = presets.get(p_type, [])
+    for p in p_list:
+        f_by = p.get("Filter By", "Extension").lower()
+        f_str = p.get("Filter", "").lower()
+        if not f_str: continue
+        
+        if f_by == "extension":
+            ext = os.path.splitext(file_path)[1].lower().lstrip(".")
+            if fnmatch.fnmatch(ext, f_str): return p.get("Name")
+        elif f_by == "name":
+            # name excluding extension
+            name = os.path.splitext(os.path.basename(file_path))[0].lower()
+            if fnmatch.fnmatch(name, f_str): return p.get("Name")
+        elif f_by == "path":
+            # path excluding file name, use forward slashes
+            path_dir = os.path.dirname(file_path).replace("\\", "/").lower()
+            if fnmatch.fnmatch(path_dir, f_str): return p.get("Name")
+    return None
