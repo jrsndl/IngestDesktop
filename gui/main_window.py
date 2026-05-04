@@ -796,10 +796,16 @@ class MainWindow(QMainWindow):
             
             selection = QItemSelection()
             selected_paths = []
+            first_idx = None
+            
             for item in self.thumb_area.scene.selectedItems():
                 # Find the current row for this data object
                 try:
                     row = self.model.items.index(item.data)
+                    idx = self.model.index(row, 0)
+                    if first_idx is None or idx.row() < first_idx.row():
+                        first_idx = idx
+                        
                     # Select the full row for robust F2 operation
                     tl = self.model.index(row, 0)
                     br = self.model.index(row, self.model.columnCount() - 1)
@@ -810,6 +816,8 @@ class MainWindow(QMainWindow):
             
             if not selection.isEmpty():
                 self.spreadsheet.table.selectionModel().select(selection, QItemSelectionModel.Select)
+                if first_idx:
+                    self.spreadsheet.table.scrollTo(first_idx)
             
             # Sync to FilterPanel
             self.filter_panel.select_paths(selected_paths)
