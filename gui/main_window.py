@@ -89,7 +89,7 @@ class HelpOverlay(QWidget):
         
         # Main Box
         box_width = 650
-        box_height = 550
+        box_height = 720
         box_rect = QRect((self.width() - box_width) // 2, (self.height() - box_height) // 2, box_width, box_height)
         
         # Background with border
@@ -107,11 +107,11 @@ class HelpOverlay(QWidget):
         font.setPointSize(13)
         font.setBold(True)
         painter.setFont(font)
-        painter.drawText(header_rect.adjusted(25, 0, 0, 0), Qt.AlignVCenter | Qt.AlignLeft, "INGESTDESKTOP KEYBOARD GUIDE")
+        painter.drawText(header_rect.adjusted(25, 0, 0, 0), Qt.AlignVCenter | Qt.AlignLeft, "INGESTDESKTOP USER GUIDE")
         
         # Columns
-        col1_rect = box_rect.adjusted(30, 80, -box_width//2 - 10, -50)
-        col2_rect = box_rect.adjusted(box_width//2 + 10, 80, -30, -50)
+        col1_rect = box_rect.adjusted(30, 80, -box_width//2 - 10, -320)
+        col2_rect = box_rect.adjusted(box_width//2 + 10, 80, -30, -320)
         
         def draw_shortcut(p, rect, key, desc, y_off):
             f = p.font()
@@ -172,6 +172,23 @@ class HelpOverlay(QWidget):
         painter.drawText(col2_rect.adjusted(0, y, 0, 0), Qt.AlignLeft, "NAVIGATION")
         y += 30
         y = draw_shortcut(painter, col2_rect, "Click Folder", "Filter by folder", y)
+
+        # Preset Keywords (Full Width)
+        y_keys = 410
+        painter.setPen(QColor(100, 100, 100))
+        font.setBold(True)
+        painter.setFont(font)
+        painter.drawText(box_rect.adjusted(30, y_keys, 0, 0), Qt.AlignLeft, "PRESET VARIANT KEYWORDS")
+        y_keys += 30
+        
+        keys_rect = box_rect.adjusted(30, y_keys, -30, -50)
+        y = 0
+        y = draw_shortcut(painter, keys_rect, "{product_type}", "Product Type from the matched preset", y)
+        y = draw_shortcut(painter, keys_rect, "{task_name}", "Task name from assigned AYON path", y)
+        y = draw_shortcut(painter, keys_rect, "{folder_name}", "Last folder name from assigned AYON path", y)
+        y = draw_shortcut(painter, keys_rect, "{parent_folder}", "Folder name above the last folder", y)
+        y = draw_shortcut(painter, keys_rect, "{label}", "Current label (including your edits)", y)
+        y = draw_shortcut(painter, keys_rect, "{file_name}", "Raw filename without extension", y)
         
         # Footer
         painter.setPen(QColor(120, 120, 120))
