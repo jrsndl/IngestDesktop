@@ -317,6 +317,7 @@ class MainWindow(QMainWindow):
         self.filter_panel.folder_selected.connect(self._on_filter_folder_selected)
         self.filter_panel.age_changed.connect(self._on_age_filter_changed)
         self.filter_panel.search_changed.connect(self._on_filter_search_changed)
+        self.filter_panel.mode_group.buttonClicked.connect(self._on_filter_mode_changed)
         self.h_splitter.addWidget(self.filter_panel)
 
         self.main_layout.addWidget(self.h_splitter, 1)
@@ -890,6 +891,11 @@ class MainWindow(QMainWindow):
         if first_idx:
             self.spreadsheet.table.scrollTo(first_idx)
 
+    def _on_filter_mode_changed(self, button):
+        if button == self.filter_panel.btn_select:
+            # Clear thumbnail filtering when switching back to select mode
+            self.thumb_area.set_path_filter("")
+            
     def _on_filter_folder_selected(self, path):
         # Determine mode from filter panel
         is_select_mode = self.filter_panel.btn_select.isChecked()
