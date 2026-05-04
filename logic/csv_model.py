@@ -38,26 +38,37 @@ class CSVPreviewModel(QAbstractTableModel):
         return len(self.tagged_items)
 
     def columnCount(self, parent=QModelIndex()):
-        return len(self.column_defs)
+        return len(self.column_defs) + 1
 
     def data(self, index, role=Qt.DisplayRole):
         if not index.isValid(): return None
+        col = index.column()
+        row = index.row()
+        item = self.tagged_items[row]
+
+        if role == Qt.DecorationRole:
+            if col == 0:
+                return item.thumbnail
+            return None
+
         if role == Qt.DisplayRole:
-            item = self.tagged_items[index.row()]
-            if index.column() < len(self.column_defs):
-                header, template = self.column_defs[index.column()]
-                # Re-use source_model._expand_string
+            if col == 0:
+                return None
+            
+            csv_col = col - 1
+            if csv_col < len(self.column_defs):
+                header, template = self.column_defs[csv_col]
                 return self.source_model._expand_string(template, item, use_global_camel=True)
         
-        if role == Qt.ForegroundRole:
-            return None # Use default
-            
         return None
 
     def headerData(self, section, orientation, role=Qt.DisplayRole):
         if orientation == Qt.Horizontal and role == Qt.DisplayRole:
-            if section < len(self.column_defs):
-                return self.column_defs[section][0]
+            if section == 0:
+                return "Thumbnail"
+            csv_col = section - 1
+            if csv_col < len(self.column_defs):
+                return self.column_defs[csv_col][0]
         return None
 
     def flags(self, index):

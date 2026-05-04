@@ -134,15 +134,19 @@ class SpreadsheetPanel(QWidget):
     def _setup_csv_view(self):
         if not self.csv_model: return
         self.table.setModel(self.csv_model)
-        self.table.verticalHeader().setDefaultSectionSize(25)
-        # Clear delegates
+        self.table.verticalHeader().setDefaultSectionSize(40)
+        # Set delegate for thumbnail column (index 0 in CSV mode)
+        self.table.setItemDelegateForColumn(0, ScalingDelegate(self.table))
+        # Clear delegate for index 1
         self.table.setItemDelegateForColumn(1, QStyledItemDelegate(self.table))
         
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.Interactive)
         
-        # Auto resize all columns
-        for col in range(self.csv_model.columnCount()):
+        # Initial fit
+        self.table.setColumnWidth(0, 60)
+        # Auto resize all CSV columns
+        for col in range(1, self.csv_model.columnCount()):
             self.table.resizeColumnToContents(col)
 
     def _on_csv_toggled(self, checked):
