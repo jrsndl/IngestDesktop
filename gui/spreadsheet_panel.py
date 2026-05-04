@@ -91,9 +91,10 @@ class SpreadsheetPanel(QWidget):
         header.setSectionResizeMode(QHeaderView.Interactive)
         header.setSectionResizeMode(0, QHeaderView.Fixed) # Tag
         header.setSectionResizeMode(2, QHeaderView.Interactive) # Label
-        header.setSectionResizeMode(3, QHeaderView.Interactive) # Product Name
-        header.setSectionResizeMode(4, QHeaderView.Interactive) # Category
-        header.setSectionResizeMode(5, QHeaderView.Interactive) # Preset
+        header.setSectionResizeMode(3, QHeaderView.Interactive) # Variant
+        header.setSectionResizeMode(4, QHeaderView.Interactive) # Product Name
+        header.setSectionResizeMode(5, QHeaderView.Interactive) # Category
+        header.setSectionResizeMode(6, QHeaderView.Interactive) # Preset
         header.setSectionResizeMode(7, QHeaderView.Interactive) # Version
         
         # Initial fit
@@ -102,6 +103,7 @@ class SpreadsheetPanel(QWidget):
         self.table.resizeColumnToContents(3)
         self.table.resizeColumnToContents(4)
         self.table.resizeColumnToContents(5)
+        self.table.resizeColumnToContents(6)
         self.table.resizeColumnToContents(7)
         
         # Connect model data change to auto-resize Label column
@@ -114,7 +116,8 @@ class SpreadsheetPanel(QWidget):
         # If Label column (2) was changed, auto-resize it
         if top_left.column() <= 2 <= bottom_right.column():
             self.table.resizeColumnToContents(2)
-            self.table.resizeColumnToContents(3)
+            self.table.resizeColumnToContents(3) # Variant
+            self.table.resizeColumnToContents(4) # Product Name
 
     def _on_row_height_change(self, value):
         # Non-linear mapping (quadratic)

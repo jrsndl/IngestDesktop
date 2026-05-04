@@ -35,7 +35,7 @@ class ImageTableModel(QAbstractTableModel):
     data_changed = Signal()
 
     COLUMNS = [
-        "Tag", "Thumbnail", "Label", "Product Name", "Category", "Preset", "Variant", "Version", 
+        "Tag", "Thumbnail", "Label", "Variant", "Product Name", "Category", "Preset", "Version", 
         "Last Version", "Age", "AYON Path"
     ]
 
@@ -68,20 +68,20 @@ class ImageTableModel(QAbstractTableModel):
         if role == Qt.ForegroundRole:
             if not item.is_tagged:
                 return QColor("#ff4444")
-            # Dim non-editable text columns
-            if col in [3, 4, 5, 7, 8, 9]:
+            # Dim non-editable text columns: Variant(3), Product Name(4), Category(5), Preset(6), Last Version(8), Age(9), Path(10)
+            if col in [3, 4, 5, 6, 8, 9, 10]:
                 return QColor("#888888")
             return None
 
         if role in [Qt.DisplayRole, Qt.EditRole]:
             if col == 2: return item.label
-            if col == 3: # Product Name
-                return self._expand_string(self.product_name_template, item, use_global_camel=True)
-            if col == 4: return item.category
-            if col == 5: # Preset
-                return item.preset_name if item.preset_name else "-"
-            if col == 6: # Variant
+            if col == 3: # Variant
                 return self._expand_string(item.variant, item)
+            if col == 4: # Product Name
+                return self._expand_string(self.product_name_template, item, use_global_camel=True)
+            if col == 5: return item.category
+            if col == 6: # Preset
+                return item.preset_name if item.preset_name else "-"
             if col == 7: return str(item.version)
             if role == Qt.DisplayRole:
                 if col == 8: return str(item.last_ayon_version) if item.last_ayon_version else "-"
@@ -221,12 +221,11 @@ class ImageTableModel(QAbstractTableModel):
         def get_value(item):
             if column == 0: return item.is_tagged
             if column == 2: return item.label
-            if column == 3: return self._expand_string(self.product_name_template, item, use_global_camel=True)
-            if column == 4: return item.category
-            if column == 5: 
+            if column == 3: return self._expand_string(item.variant, item)
+            if column == 4: return self._expand_string(self.product_name_template, item, use_global_camel=True)
+            if column == 5: return item.category
+            if column == 6: 
                 return item.preset_name or ""
-            if column == 6:
-                return self._expand_string(item.variant, item)
             if column == 7: return item.version
             if column == 8: return item.last_ayon_version or 0
             if column == 9: return item.age_minutes
