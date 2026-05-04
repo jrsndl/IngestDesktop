@@ -343,7 +343,8 @@ class MainWindow(QMainWindow):
         self.btn_toggle_log = QPushButton("Log History")
         self.btn_toggle_log.setFlat(True)
         self.btn_toggle_log.setCheckable(True)
-        self.btn_toggle_log.setStyleSheet("color: #888888; text-decoration: underline;")
+        self.btn_toggle_log.setFixedHeight(14)
+        self.btn_toggle_log.setStyleSheet("color: #888888; text-decoration: underline; font-size: 9px;")
         self.btn_toggle_log.clicked.connect(self._toggle_log)
         self.statusBar().addPermanentWidget(self.btn_toggle_log)
 
