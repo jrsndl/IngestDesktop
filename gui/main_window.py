@@ -176,7 +176,7 @@ class MainWindow(QMainWindow):
         self.main_layout.addWidget(self.h_splitter, 1)
 
         # 5. Big Ingest Button
-        self.btn_ingest_big = QPushButton("INGEST SELECTED IMAGES")
+        self.btn_ingest_big = QPushButton("Ingest Tagged to AYON")
         self.btn_ingest_big.setObjectName("IngestButton")
         self.btn_ingest_big.setMinimumHeight(50)
         self.btn_ingest_big.clicked.connect(self.perform_ingest)
