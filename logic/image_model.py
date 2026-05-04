@@ -6,7 +6,8 @@ from PySide6.QtGui import QPixmap, QColor
 class ImageItem:
     def __init__(self, file_path, label=None, version=1, category="Other", 
                  preset_name=None, variant=None, product_type=None, camel_case=True,
-                 representation=None, colorspace=None, rep_tags=None):
+                 representation=None, colorspace=None, rep_tags=None, is_sequence=False,
+                 preset_data=None):
         self.file_path = file_path
         self.filename = os.path.basename(file_path)
         self.label = label or os.path.splitext(self.filename)[0]
@@ -28,8 +29,10 @@ class ImageItem:
         self.product_type = product_type
         self.camel_case = camel_case
         self.representation = representation
+        self.is_sequence = is_sequence
         self.colorspace = colorspace
         self.rep_tags = rep_tags
+        self.preset_data = preset_data or {}
 
 class ImageTableModel(QAbstractTableModel):
     data_changed = Signal()

@@ -143,6 +143,7 @@ class ImageScanner(QThread):
                 source_path = first_path
 
             p_type = "sequences" if len(paths) > 1 else "stills"
+            is_seq = (len(paths) > 1)
             matched_p = evaluate_preset(first_path, self.presets, p_type, label=label)
             preset_name = matched_p.get("Name") if matched_p else None
             variant = matched_p.get("Variant") if matched_p else None
@@ -154,7 +155,8 @@ class ImageScanner(QThread):
 
             item = ImageItem(source_path, label=label, version=version, category=category, 
                              preset_name=preset_name, variant=variant, product_type=product_type, camel_case=camel_case,
-                             representation=representation, colorspace=colorspace, rep_tags=rep_tags)
+                             representation=representation, colorspace=colorspace, rep_tags=rep_tags, is_sequence=is_seq,
+                             preset_data=matched_p)
             self._fill_metadata(item, source_path)
             
             final_items.append(item)
@@ -176,7 +178,8 @@ class ImageScanner(QThread):
             colorspace = matched_p.get("Colorspace", "sRGB") if matched_p else "sRGB"
             rep_tags = matched_p.get("Tags", "passing") if matched_p else "passing"
             item = ImageItem(f, category="Video", preset_name=preset_name, variant=variant, product_type=product_type, camel_case=camel_case,
-                             representation=representation, colorspace=colorspace, rep_tags=rep_tags)
+                             representation=representation, colorspace=colorspace, rep_tags=rep_tags,
+                             preset_data=matched_p)
             self._fill_metadata(item, f)
             final_items.append(item)
             current += 1
@@ -197,7 +200,8 @@ class ImageScanner(QThread):
             colorspace = matched_p.get("Colorspace", "sRGB") if matched_p else "sRGB"
             rep_tags = matched_p.get("Tags", "passing") if matched_p else "passing"
             item = ImageItem(f, category="Other", preset_name=preset_name, variant=variant, product_type=product_type, camel_case=camel_case,
-                             representation=representation, colorspace=colorspace, rep_tags=rep_tags)
+                             representation=representation, colorspace=colorspace, rep_tags=rep_tags,
+                             preset_data=matched_p)
             self._fill_metadata(item, f)
             final_items.append(item)
             current += 1
