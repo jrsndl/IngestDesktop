@@ -188,6 +188,7 @@ class HelpOverlay(QWidget):
         y = draw_shortcut(painter, keys_rect, "{folder_name}", "Last folder name from assigned AYON path", y)
         y = draw_shortcut(painter, keys_rect, "{parent_folder}", "Folder name above the last folder", y)
         y = draw_shortcut(painter, keys_rect, "{label}", "Current label (including your edits)", y)
+        y = draw_shortcut(painter, keys_rect, "{variant}", "Expanded variant string", y)
         y = draw_shortcut(painter, keys_rect, "{file_name}", "Raw filename without extension", y)
         y = draw_shortcut(painter, keys_rect, "{extension}", "Raw file extension without dot", y)
         
