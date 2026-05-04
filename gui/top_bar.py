@@ -6,6 +6,7 @@ class TopBar(QWidget):
     project_changed = Signal(str)
     prefs_requested = Signal()
     rescan_requested = Signal()
+    help_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -44,6 +45,25 @@ class TopBar(QWidget):
         self.btn_prefs = QPushButton("Preferences")
         self.btn_prefs.clicked.connect(self.prefs_requested.emit)
         self.layout.addWidget(self.btn_prefs)
+
+        # Help Button
+        self.btn_help = QPushButton("?")
+        self.btn_help.setFixedSize(24, 24)
+        self.btn_help.setToolTip("Keyboard Shortcuts (Help)")
+        self.btn_help.setStyleSheet("""
+            QPushButton {
+                border-radius: 12px;
+                background-color: #444444;
+                color: white;
+                font-weight: bold;
+                border: 1px solid #666666;
+            }
+            QPushButton:hover {
+                background-color: #555555;
+            }
+        """)
+        self.btn_help.clicked.connect(self.help_requested.emit)
+        self.layout.addWidget(self.btn_help)
 
     def set_path(self, path):
         self.path_display.setText(path)

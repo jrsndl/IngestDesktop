@@ -6,8 +6,8 @@ import subprocess
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QSplitter, 
                              QPushButton, QMessageBox, QInputDialog, QApplication,
                              QDialog, QLineEdit, QLabel, QHBoxLayout, QPlainTextEdit, QFormLayout)
-from PySide6.QtCore import Qt, QTimer, QItemSelectionModel, QItemSelection, QThread, Signal
-from PySide6.QtGui import QKeySequence, QCursor, QShortcut
+from PySide6.QtCore import Qt, QTimer, QItemSelectionModel, QItemSelection, QThread, Signal, QRect
+from PySide6.QtGui import QKeySequence, QCursor, QShortcut, QPainter, QColor
 
 from gui.top_bar import TopBar
 from gui.ayon_panel import AyonPanel
@@ -53,6 +53,93 @@ class RenameDialog(QDialog):
         
     def get_text(self):
         return self.edit.text().strip()
+
+class HelpOverlay(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
+        self.hide()
+        
+    def show_help(self):
+        self.show()
+        self.raise_()
+        self.setFocus()
+
+    def hide_help(self):
+        self.hide()
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Escape:
+            self.hide_help()
+        else:
+            super().keyPressEvent(event)
+
+    def mousePressEvent(self, event):
+        self.hide_help()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        # Dim background
+        painter.setBrush(QColor(0, 0, 0, 200))
+        painter.setPen(Qt.NoPen)
+        painter.drawRect(self.rect())
+        
+        # Content box
+        box_width = 500
+        box_height = 500
+        box_rect = QRect((self.width() - box_width) // 2, (self.height() - box_height) // 2, box_width, box_height)
+        
+        painter.setBrush(QColor(30, 30, 30))
+        painter.setPen(QColor(80, 80, 80))
+        painter.drawRoundedRect(box_rect, 10, 10)
+        
+        # Text
+        painter.setPen(QColor(255, 255, 255))
+        font = painter.font()
+        font.setPointSize(16)
+        font.setBold(True)
+        painter.setFont(font)
+        
+        title_rect = QRect(box_rect.left(), box_rect.top() + 20, box_rect.width(), 40)
+        painter.drawText(title_rect, Qt.AlignCenter, "Keyboard Shortcuts")
+        
+        font.setPointSize(10)
+        font.setBold(False)
+        painter.setFont(font)
+        
+        content_text = """
+GENERAL CONTROLS:
+  Ctrl + A        Select All (contextual based on mouse)
+  F2              Rename selected item
+  Space           Toggle Maximize view
+  Esc             Close this help
+
+THUMBNAIL VIEW:
+  + / =           Zoom In
+  -               Zoom Out
+  Z               Zoom to Fit
+  F               Focus Selection
+  Ctrl + Wheel    Zoom at cursor position
+
+SPREADSHEET VIEW:
+  Double Click    Edit cell (Label, Category, Version)
+  Enter           Submit edit
+  Esc             Cancel edit
+
+AYON HIERARCHY:
+  Right Click     Assignment / Selection Menu
+  Click Header    Sort by column (Name, Status, etc.)
+
+FOLDER FILTER:
+  Click Folder    Select all files in that folder
+        """
+        text_rect = box_rect.adjusted(30, 70, -30, -20)
+        painter.drawText(text_rect, Qt.AlignLeft | Qt.AlignTop, content_text.strip())
+        
+        painter.setPen(QColor(150, 150, 150))
+        painter.drawText(box_rect.adjusted(0, 0, 0, -15), Qt.AlignBottom | Qt.AlignCenter, "Click anywhere or press ESC to close")
 
 class SearchReplaceDialog(QDialog):
     def __init__(self, parent=None):
@@ -125,6 +212,7 @@ class MainWindow(QMainWindow):
         self.top_bar.project_changed.connect(self._on_project_changed)
         self.top_bar.prefs_requested.connect(self.show_preferences)
         self.top_bar.rescan_requested.connect(self.rescan_current)
+        self.top_bar.help_requested.connect(self.show_help)
         self.main_layout.addWidget(self.top_bar, 0)
 
         # Main Splitter (Left, Center, Right)
@@ -185,12 +273,16 @@ class MainWindow(QMainWindow):
         # 6. Log Console (expandable)
         self.log_console = QPlainTextEdit()
         self.log_console.setReadOnly(True)
-        self.log_console.setMaximumHeight(150)
-        self.log_console.hide()
-        self.log_console.setStyleSheet("background-color: #0f0f0f; color: #aaaaaa; font-family: Consolas, monospace; font-size: 11px;")
+        self.log_console.setMaximumHeight(100)
+        self.log_console.setStyleSheet("background-color: #0c0c0c; color: #cccccc; font-family: Consolas, monospace;")
         self.main_layout.addWidget(self.log_console, 0)
         
-        # Toggle button in status bar
+        # 7. Help Overlay
+        self.help_overlay = HelpOverlay(self)
+        
+        # Initial config
+        self.load_config()
+
         self.btn_toggle_log = QPushButton("Log History")
         self.btn_toggle_log.setFlat(True)
         self.btn_toggle_log.setCheckable(True)
@@ -402,6 +494,14 @@ class MainWindow(QMainWindow):
         self._hier_thread.finished.connect(self.ayon_panel.set_hierarchy)
         self._hier_thread.finished.connect(self._update_ayon_visuals)
         self._hier_thread.start()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, 'help_overlay'):
+            self.help_overlay.setGeometry(self.rect())
+
+    def show_help(self):
+        self.help_overlay.show_help()
 
     def show_preferences(self):
         # Store old values to check if re-scan is needed
