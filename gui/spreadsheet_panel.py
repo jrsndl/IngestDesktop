@@ -149,11 +149,41 @@ class SpreadsheetPanel(QWidget):
             self.table.setFocus()
             
         if event.type() == QEvent.KeyPress:
+            # Handle Ctrl+V Paste
+            if event.modifiers() == Qt.ControlModifier and event.key() == Qt.Key_V:
+                from PySide6.QtWidgets import QApplication
+                clipboard = QApplication.clipboard()
+                text = clipboard.text()
+                if text:
+                    self._perform_paste(text)
+                return True
+                
             if event.key() == Qt.Key_Space:
                 if self.table.underMouse():
                     self.maximize_toggle_requested.emit()
                     return True
         return super().eventFilter(source, event)
+
+    def _perform_paste(self, text):
+        selection_model = self.table.selectionModel()
+        if not selection_model.hasSelection():
+            return
+            
+        # Get selected indexes
+        indexes = selection_model.selectedIndexes()
+        model = self.table.model()
+        
+        # Track if any data actually changed to log it
+        changed_count = 0
+        for idx in indexes:
+            # Only paste if column is editable
+            if model.flags(idx) & Qt.ItemIsEditable:
+                if model.setData(idx, text, Qt.EditRole):
+                    changed_count += 1
+        
+        if changed_count > 0:
+            # We could emit a signal for logging if needed, but the model handles dataChanged
+            pass
 
     def _on_context_menu(self, pos):
         menu = QMenu(self)
