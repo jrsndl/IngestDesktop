@@ -262,6 +262,7 @@ class ImageTableModel(QAbstractTableModel):
             "{folder_name}": folder_name,
             "{parent_folder}": parent_folder,
             "{label}": item.label or "",
+            "{variant}": self._expand_string(item.variant, item) if text != item.variant else (item.variant or ""),
             "{file_name}": os.path.splitext(os.path.basename(item.file_path))[0],
             "{extension}": os.path.splitext(item.file_path)[1].lower().lstrip(".")
         }
