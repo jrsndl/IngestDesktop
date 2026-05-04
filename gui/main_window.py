@@ -16,6 +16,7 @@ from gui.thumbnail_area import ThumbnailArea
 from gui.spreadsheet_panel import SpreadsheetPanel
 from gui.prefs_dialog import PreferencesDialog
 from logic.image_model import ImageTableModel
+from logic.csv_model import CSVPreviewModel
 from logic.scanner import ImageScanner
 from ayon_client import AyonClient
 from utils import evaluate_preset
@@ -244,9 +245,9 @@ class MainWindow(QMainWindow):
         self.config = self.load_config()
 
         # Logic
-        self.model = ImageTableModel()
-        self.model.product_name_template = self.config.get("product_name", "{label}")
         self.model.product_name_camel = self.config.get("product_name_camel", True)
+        
+        self.csv_preview_model = CSVPreviewModel(self.model, self.config)
         
         # Clean credentials
         server_url = self.config.get("ayon_server_url", "").strip()
@@ -301,6 +302,7 @@ class MainWindow(QMainWindow):
         
         self.spreadsheet = SpreadsheetPanel()
         self.spreadsheet.set_model(self.model)
+        self.spreadsheet.set_csv_model(self.csv_preview_model)
         self.spreadsheet.btn_tag_sel.clicked.connect(self._on_tag_selection)
         self.spreadsheet.maximize_toggle_requested.connect(lambda: self.toggle_maximize("spreadsheet"))
         self.spreadsheet.version_check_clicked.connect(self.perform_version_check)
@@ -662,6 +664,8 @@ class MainWindow(QMainWindow):
             )
             self.model.product_name_template = self.config.get("product_name", "{label}")
             self.model.product_name_camel = self.config.get("product_name_camel", True)
+            
+            self.csv_preview_model.refresh_config(self.config)
             
             if scan_affected and self.config.get("last_source_folder"):
                 self.start_scan(self.config["last_source_folder"])

@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, 
                              QPushButton, QFormLayout, QSpinBox, QComboBox, QFileDialog, 
-                             QTabWidget, QScrollArea, QWidget, QCheckBox)
+                             QTabWidget, QScrollArea, QWidget, QCheckBox, QPlainTextEdit)
 from PySide6.QtCore import Qt
 from gui.preset_widget import PresetWidget
 
@@ -82,6 +82,22 @@ class PreferencesDialog(QDialog):
         self.csv_form.addRow("CSV Quote Character:", self.csv_quotechar)
         
         self.csv_layout.addLayout(self.csv_form)
+        self.csv_layout.addSpacing(10)
+        self.csv_layout.addWidget(QLabel("<b>CSV Columns (Header=Value):</b>"))
+        
+        self.csv_columns = QPlainTextEdit()
+        # Default columns if not set
+        default_cols = [
+            "File Path={file_path}",
+            "AYON Path={ayon_path}",
+            "Product Name={product_name}",
+            "Variant={variant}",
+            "Version={version}"
+        ]
+        conf_cols = self.config.get("csv_columns", "\n".join(default_cols))
+        self.csv_columns.setPlainText(conf_cols)
+        self.csv_layout.addWidget(self.csv_columns)
+        
         self.csv_layout.addStretch()
         self.tabs.addTab(self.csv_tab, "CSV")
 
@@ -308,6 +324,7 @@ class PreferencesDialog(QDialog):
             "product_name_camel": self.product_name_camel.isChecked(),
             "csv_delimiter": self.csv_delimiter.text(),
             "csv_quotechar": self.csv_quotechar.text(),
+            "csv_columns": self.csv_columns.toPlainText(),
             "low_res_size": self.low_res_size.value(),
             "high_res_size": self.high_res_size.value(),
             "presets": presets,

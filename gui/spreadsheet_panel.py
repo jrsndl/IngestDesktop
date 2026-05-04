@@ -22,6 +22,7 @@ class SpreadsheetPanel(QWidget):
     version_check_clicked = Signal()
     maximize_toggle_requested = Signal()
     label_action_requested = Signal(str, object)
+    csv_mode_changed = Signal(bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -41,6 +42,10 @@ class SpreadsheetPanel(QWidget):
         self.btn_check_dup = QPushButton("Check duplicates")
         self.btn_tag_sel = QPushButton("Tag/Untag Selected")
         
+        self.btn_csv = QPushButton("CSV")
+        self.btn_csv.setCheckable(True)
+        self.btn_csv.toggled.connect(self._on_csv_toggled)
+        
         self.btn_check_ver.clicked.connect(self.version_check_clicked.emit)
         self.btn_check_dup.clicked.connect(self.check_duplicates_clicked.emit)
         
@@ -56,6 +61,7 @@ class SpreadsheetPanel(QWidget):
         controls_layout.addWidget(self.btn_check_ver)
         controls_layout.addWidget(self.btn_check_dup)
         controls_layout.addWidget(self.btn_tag_sel)
+        controls_layout.addWidget(self.btn_csv)
         controls_layout.addStretch()
         controls_layout.addWidget(self.lbl_row_height)
         controls_layout.addWidget(self.slider_row_height)
@@ -79,11 +85,24 @@ class SpreadsheetPanel(QWidget):
         self.table.horizontalHeader().setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.horizontalHeader().customContextMenuRequested.connect(self._on_header_context_menu)
         
-        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._on_context_menu)
+        
+        self.standard_model = None
+        self.csv_model = None
+        self._is_csv_mode = False
 
     def set_model(self, model):
+        self.standard_model = model
         self.table.setModel(model)
+        self._setup_standard_view()
+
+    def set_csv_model(self, model):
+        self.csv_model = model
+
+    def _setup_standard_view(self):
+        if not self.standard_model: return
+        self.table.setModel(self.standard_model)
+        # Selection model might have changed
         self.table.selectionModel().selectionChanged.connect(self.update_filtering)
         # Set row height for thumbnails
         self.table.verticalHeader().setDefaultSectionSize(40)
@@ -111,6 +130,36 @@ class SpreadsheetPanel(QWidget):
         
         # Connect model data change to auto-resize Label column
         self.table.model().dataChanged.connect(self._on_model_data_changed)
+
+    def _setup_csv_view(self):
+        if not self.csv_model: return
+        self.table.setModel(self.csv_model)
+        self.table.verticalHeader().setDefaultSectionSize(25)
+        # Clear delegates
+        self.table.setItemDelegateForColumn(1, QStyledItemDelegate(self.table))
+        
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.Interactive)
+        
+        # Auto resize all columns
+        for col in range(self.csv_model.columnCount()):
+            self.table.resizeColumnToContents(col)
+
+    def _on_csv_toggled(self, checked):
+        self._is_csv_mode = checked
+        if checked:
+            self._setup_csv_view()
+        else:
+            self._setup_standard_view()
+        
+        # Hide/Show other controls
+        self.btn_check_ver.setEnabled(not checked)
+        self.btn_check_dup.setEnabled(not checked)
+        self.btn_tag_sel.setEnabled(not checked)
+        self.btn_selected_only.setEnabled(not checked)
+        self.btn_tagged_only.setEnabled(not checked)
+        
+        self.csv_mode_changed.emit(checked)
         
         self.table.installEventFilter(self)
         self.table.viewport().installEventFilter(self)
@@ -134,6 +183,7 @@ class SpreadsheetPanel(QWidget):
 
     def update_filtering(self):
         """Update row visibility based on active filters."""
+        if self._is_csv_mode: return # No filtering in CSV mode, it's already filtered
         selected_only = self.btn_selected_only.isChecked()
         tagged_only = self.btn_tagged_only.isChecked()
         
