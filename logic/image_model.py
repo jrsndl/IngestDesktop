@@ -7,7 +7,7 @@ class ImageItem:
     def __init__(self, file_path, label=None, version=1, category="Other", 
                  preset_name=None, variant=None, product_type=None, camel_case=True,
                  representation=None, colorspace=None, rep_tags=None, is_sequence=False,
-                 preset_data=None):
+                 preset_data=None, frame_start=None, frame_end=None, metadata=None):
         self.file_path = file_path
         self.filename = os.path.basename(file_path)
         self.label = label or os.path.splitext(self.filename)[0]
@@ -33,6 +33,9 @@ class ImageItem:
         self.colorspace = colorspace
         self.rep_tags = rep_tags
         self.preset_data = preset_data or {}
+        self.frame_start = frame_start
+        self.frame_end = frame_end
+        self.metadata = metadata or {}
 
 class ImageTableModel(QAbstractTableModel):
     data_changed = Signal()
@@ -54,6 +57,15 @@ class ImageTableModel(QAbstractTableModel):
     def set_presets(self, presets):
         self.presets = presets
         self.layoutChanged.emit()
+
+    def update_item(self, item):
+        """Notify the model that an item has been updated (e.g. metadata fetched)."""
+        try:
+            row = self.items.index(item)
+            # Notify that all data columns for this row might have changed
+            self.dataChanged.emit(self.index(row, 0), self.index(row, self.columnCount() - 1))
+        except ValueError:
+            pass
 
     def rowCount(self, parent=QModelIndex()):
         return len(self.items)
@@ -300,6 +312,8 @@ class ImageTableModel(QAbstractTableModel):
             "{repre_color}": p_data.get("Colorspace", ""),
             "{repre_tags}": p_data.get("Tags", ""),
             "{version}": str(item.version),
+            "{frame_start}": str(item.frame_start) if item.frame_start is not None else "",
+            "{frame_end}": str(item.frame_end) if item.frame_end is not None else "",
         }
         
         import re
@@ -316,4 +330,15 @@ class ImageTableModel(QAbstractTableModel):
             return val
 
         res = re.sub(pattern, replacer, text)
+        
+        # Meta data tokens (e.g. {metadata.width})
+        def metadata_replacer(match):
+            key = match.group(1).lower()
+            val = item.metadata.get(key)
+            if val is not None:
+                return str(val)
+            return match.group(0) # Keep token if not found
+            
+        res = re.sub(r"\{metadata\.([^}]+)\}", metadata_replacer, res)
+            
         return res

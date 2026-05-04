@@ -3,18 +3,26 @@ import time
 import re
 import fnmatch
 from PySide6.QtCore import QThread, Signal
-from utils import get_all_files, get_version_from_name, generate_thumbnail, strip_sequence_counter, get_sequence_counter, evaluate_preset
+from utils import (get_all_files, get_version_from_name, generate_thumbnail, 
+                   generate_video_thumbnail, generate_placeholder_thumbnail,
+                   strip_sequence_counter, get_sequence_counter, evaluate_preset)
 from logic.image_model import ImageItem
+from logic.metadata import get_image_info_metadata
 
 class ImageScanner(QThread):
     progress = Signal(int, int) # current, total
     finished = Signal(list)
+    item_updated = Signal(object)
     canceled = Signal()
 
     def __init__(self, directory, recursive=True, version_regex="_v(\\d+)", 
                  thumbnail_size=150, age_source="Modification Date",
                  detect_sequences=True, seq_thumb_frame="Middle", 
-                 extensions=None, presets=None):
+                 extensions=None, presets=None,
+                 stills_start_frame=1001, stills_end_frame=1001,
+                 video_start_from_tc=False, video_start_frame=1001,
+                 ffmpeg_path="ffmpeg.exe", ffprobe_path="ffprobe.exe",
+                 oiiotool_path="oiiotool.exe", ocio_config=""):
         super().__init__()
         self.directory = directory
         self.recursive = recursive
@@ -25,6 +33,14 @@ class ImageScanner(QThread):
         self.seq_thumb_frame = seq_thumb_frame
         self.extensions = extensions or {}
         self.presets = presets or {}
+        self.stills_start_frame = stills_start_frame
+        self.stills_end_frame = stills_end_frame
+        self.video_start_from_tc = video_start_from_tc
+        self.video_start_frame = video_start_frame
+        self.ffmpeg_path = ffmpeg_path
+        self.ffprobe_path = ffprobe_path
+        self.oiiotool_path = oiiotool_path
+        self.ocio_config = ocio_config
         self._is_canceled = False
 
     def cancel(self):
@@ -63,6 +79,10 @@ class ImageScanner(QThread):
             if self._is_canceled:
                 self.canceled.emit()
                 return
+
+            # Completely ignore generated thumbnails
+            if f.lower().endswith("_thumbnail.png"):
+                continue
 
             ext = os.path.splitext(f)[1].lower()
             if ext in img_exts:
@@ -141,6 +161,8 @@ class ImageScanner(QThread):
             else:
                 label = os.path.splitext(os.path.basename(first_path))[0]
                 source_path = first_path
+                first_f = self.stills_start_frame
+                last_f = self.stills_end_frame
 
             p_type = "sequences" if len(paths) > 1 else "stills"
             is_seq = (len(paths) > 1)
@@ -152,12 +174,15 @@ class ImageScanner(QThread):
             representation = matched_p.get("Representation", "{extension}") if matched_p else "{extension}"
             colorspace = matched_p.get("Colorspace", "sRGB") if matched_p else "sRGB"
             rep_tags = matched_p.get("Tags", "passing") if matched_p else "passing"
-
+            
             item = ImageItem(source_path, label=label, version=version, category=category, 
                              preset_name=preset_name, variant=variant, product_type=product_type, camel_case=camel_case,
                              representation=representation, colorspace=colorspace, rep_tags=rep_tags, is_sequence=is_seq,
-                             preset_data=matched_p)
+                             preset_data=matched_p, frame_start=first_f, frame_end=last_f)
             self._fill_metadata(item, source_path)
+            
+            # Save ref for metadata extraction later
+            item._meta_source = first_path
             
             final_items.append(item)
             current += 1
@@ -177,10 +202,18 @@ class ImageScanner(QThread):
             representation = matched_p.get("Representation", "{extension}") if matched_p else "{extension}"
             colorspace = matched_p.get("Colorspace", "sRGB") if matched_p else "sRGB"
             rep_tags = matched_p.get("Tags", "passing") if matched_p else "passing"
+            
+            start_f = self.video_start_frame
             item = ImageItem(f, category="Video", preset_name=preset_name, variant=variant, product_type=product_type, camel_case=camel_case,
                              representation=representation, colorspace=colorspace, rep_tags=rep_tags,
-                             preset_data=matched_p)
+                             preset_data=matched_p, frame_start=start_f, frame_end=start_f)
             self._fill_metadata(item, f)
+            
+            # Save ref for metadata extraction later
+            item._meta_source = f
+            item._video_start_from_tc = self.video_start_from_tc
+            item._video_default_start = self.video_start_frame
+
             final_items.append(item)
             current += 1
             self.progress.emit(current, total_units)
@@ -208,11 +241,62 @@ class ImageScanner(QThread):
             self.progress.emit(current, total_units)
 
         self.finished.emit(final_items)
+        
+        # --- Phase 2: Async Metadata Extraction ---
+        from concurrent.futures import ThreadPoolExecutor
+        
+        # Filter items that actually need metadata (sequences and videos)
+        meta_queue = [item for item in final_items if hasattr(item, "_meta_source")]
+        if not meta_queue:
+            return
+
+        def process_item_metadata(item):
+            if self._is_canceled: return
+            
+            metadata = get_image_info_metadata(item._meta_source, self.ffprobe_path, self.oiiotool_path)
+            if not metadata: return
+            
+            item.metadata.update(metadata)
+            
+            # 1. Video Thumbnail Generation
+            if item.category == "Video":
+                thumb_path = item._meta_source + "_thumbnail.png"
+                if not os.path.exists(thumb_path):
+                    duration = metadata.get("duration")
+                    generate_video_thumbnail(item._meta_source, self.ffmpeg_path, 
+                                             frame_mode=self.seq_thumb_frame, duration=duration)
+                
+                # Update icon if thumbnail exists now
+                if os.path.exists(thumb_path):
+                    item.thumbnail = generate_thumbnail(thumb_path, self.thumbnail_size)
+
+            # 2. Special handling for videos: start frame from TC
+            if item.category == "Video" and getattr(item, "_video_start_from_tc", False):
+                start_from_tc = metadata.get("start_from_tc")
+                if start_from_tc is not None:
+                    item.frame_start = start_from_tc
+                    item.frame_end = start_from_tc
+            
+            self.item_updated.emit(item)
+
+        # Use a thread pool to extract metadata in parallel
+        # 4-8 workers is usually good for I/O and external processes
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            executor.map(process_item_metadata, meta_queue)
 
     def _fill_metadata(self, item, file_path):
         """Helper to fill common metadata for an item."""
         # Thumbnail
-        item.thumbnail = generate_thumbnail(file_path, self.thumbnail_size)
+        if item.category == "Video":
+            # Check for existing sidecar thumbnail
+            thumb_path = file_path + "_thumbnail.png"
+            if os.path.exists(thumb_path):
+                item.thumbnail = generate_thumbnail(thumb_path, self.thumbnail_size)
+            else:
+                # Use gray placeholder until background extraction finishes
+                item.thumbnail = generate_placeholder_thumbnail(self.thumbnail_size, "#555555")
+        else:
+            item.thumbnail = generate_thumbnail(file_path, self.thumbnail_size)
         
         # Times
         try:

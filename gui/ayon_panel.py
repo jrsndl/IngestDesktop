@@ -97,7 +97,6 @@ class AyonPanel(QWidget):
         self.btn_mode.setChecked(True) # Assign mode is default
         btn_layout.addWidget(self.btn_refresh)
         btn_layout.addWidget(self.btn_mode)
-        self.layout.addLayout(btn_layout)
 
         # Search Controls
         search_layout = QHBoxLayout()
@@ -111,7 +110,6 @@ class AyonPanel(QWidget):
         
         search_layout.addWidget(self.search_edit, 2)
         search_layout.addWidget(self.search_combo, 1)
-        self.layout.addLayout(search_layout)
 
         # Assigned/Clear Controls
         extra_btn_layout = QHBoxLayout()
@@ -124,7 +122,6 @@ class AyonPanel(QWidget):
         
         extra_btn_layout.addWidget(self.btn_assigned_only)
         extra_btn_layout.addWidget(self.btn_clear_all)
-        self.layout.addLayout(extra_btn_layout)
 
         # Tree View
         self.tree = QTreeView()

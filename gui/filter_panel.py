@@ -1,10 +1,10 @@
 import os
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QPushButton, QLineEdit, 
                              QHBoxLayout, QLabel, QSpinBox, QTreeView, QFileSystemModel, QButtonGroup, QComboBox)
-from PySide6.QtCore import Signal, Qt, QDir, QIdentityProxyModel, QItemSelectionModel
+from PySide6.QtCore import Signal, Qt, QDir, QSortFilterProxyModel, QItemSelectionModel
 from PySide6.QtGui import QColor
 
-class TagColorProxyModel(QIdentityProxyModel):
+class TagColorProxyModel(QSortFilterProxyModel):
     def __init__(self, main_model, parent=None):
         super().__init__(parent)
         self.main_model = main_model
@@ -20,11 +20,21 @@ class TagColorProxyModel(QIdentityProxyModel):
             if not item.is_tagged:
                 abs_path = os.path.normpath(os.path.abspath(item.file_path))
                 self._untagged_paths.add(abs_path)
-        self.layoutChanged.emit()
+        self.invalidateFilter()
 
     def _on_model_data_changed(self, tl, br):
-        # Only rebuild if column 0 (tagging) was affected
         self._rebuild_cache()
+
+    def filterAcceptsRow(self, source_row, source_parent):
+        source_model = self.sourceModel()
+        idx = source_model.index(source_row, 0, source_parent)
+        file_name = source_model.fileName(idx)
+        
+        # Completely hide generated thumbnails
+        if file_name.lower().endswith("_thumbnail.png"):
+            return False
+            
+        return super().filterAcceptsRow(source_row, source_parent)
 
     def data(self, index, role=Qt.DisplayRole):
         if role == Qt.ForegroundRole:

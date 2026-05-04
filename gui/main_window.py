@@ -5,7 +5,7 @@ import tempfile
 import subprocess
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QSplitter, 
                              QPushButton, QMessageBox, QInputDialog, QApplication,
-                             QDialog, QLineEdit, QLabel, QHBoxLayout, QPlainTextEdit, QFormLayout)
+                             QDialog, QLineEdit, QLabel, QHBoxLayout, QPlainTextEdit, QFormLayout, QScrollArea)
 from PySide6.QtCore import Qt, QTimer, QItemSelectionModel, QItemSelection, QThread, Signal, QRect
 from PySide6.QtGui import QKeySequence, QCursor, QShortcut, QPainter, QColor
 
@@ -56,63 +56,20 @@ class RenameDialog(QDialog):
     def get_text(self):
         return self.edit.text().strip()
 
-class HelpOverlay(QWidget):
+class HelpContentWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
-        self.hide()
+        self.setFixedWidth(710)
+        self.setFixedHeight(1400) # Extra room for generous spacing
         
-    def show_help(self):
-        self.show()
-        self.raise_()
-        self.setFocus()
-
-    def hide_help(self):
-        self.hide()
-
-    def keyPressEvent(self, event):
-        if event.key() == Qt.Key_Escape:
-            self.hide_help()
-        else:
-            super().keyPressEvent(event)
-
-    def mousePressEvent(self, event):
-        self.hide_help()
-
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         
-        # Dim background
-        painter.setBrush(QColor(0, 0, 0, 170))
+        # Background
+        painter.setBrush(QColor(25, 25, 25, 255))
         painter.setPen(Qt.NoPen)
         painter.drawRect(self.rect())
-        
-        # Main Box
-        box_width = 650
-        box_height = 720
-        box_rect = QRect((self.width() - box_width) // 2, (self.height() - box_height) // 2, box_width, box_height)
-        
-        # Background with border
-        painter.setBrush(QColor(25, 25, 25, 250))
-        painter.setPen(QColor(80, 80, 80))
-        painter.drawRoundedRect(box_rect, 4, 4)
-        
-        # Header
-        header_rect = QRect(box_rect.left(), box_rect.top(), box_rect.width(), 60)
-        painter.setBrush(QColor(40, 40, 40))
-        painter.drawRoundedRect(header_rect, 4, 4)
-        
-        painter.setPen(QColor(255, 255, 255))
-        font = painter.font()
-        font.setPointSize(13)
-        font.setBold(True)
-        painter.setFont(font)
-        painter.drawText(header_rect.adjusted(25, 0, 0, 0), Qt.AlignVCenter | Qt.AlignLeft, "INGESTDESKTOP USER GUIDE")
-        
-        # Columns
-        col1_rect = box_rect.adjusted(30, 80, -box_width//2 - 10, -320)
-        col2_rect = box_rect.adjusted(box_width//2 + 10, 80, -30, -320)
         
         def draw_shortcut(p, rect, key, desc, y_off):
             f = p.font()
@@ -125,11 +82,16 @@ class HelpOverlay(QWidget):
             f.setBold(False)
             p.setFont(f)
             p.setPen(QColor(180, 180, 180))
-            p.drawText(rect.adjusted(120, y_off, 0, 0), Qt.AlignLeft, desc)
-            return y_off + 25
+            p.drawText(rect.adjusted(160, y_off, 0, 0), Qt.AlignLeft, desc)
+            return y_off + 35 # More vertical spacing (was 25)
 
+        col1_rect = QRect(40, 20, 310, 1300)
+        col2_rect = QRect(370, 20, 310, 1300)
+        
+        font = painter.font()
+        
         # Col 1
-        y = 0
+        y = 20
         painter.setPen(QColor(100, 100, 100))
         font.setBold(True)
         painter.setFont(font)
@@ -151,7 +113,7 @@ class HelpOverlay(QWidget):
         y = draw_shortcut(painter, col1_rect, "Ctrl+Wheel", "Zoom at cursor", y)
 
         # Col 2
-        y = 0
+        y = 20
         painter.setPen(QColor(100, 100, 100))
         font.setBold(True)
         painter.setFont(font)
@@ -175,34 +137,119 @@ class HelpOverlay(QWidget):
         y = draw_shortcut(painter, col2_rect, "Click Folder", "Filter by folder", y)
 
         # Preset Keywords (Full Width)
-        y_keys = 410
+        y_keys = 520 # Lowered due to column spacing
+        full_rect = QRect(40, y_keys, 630, 900)
+        y = 0
         painter.setPen(QColor(100, 100, 100))
         font.setBold(True)
         painter.setFont(font)
-        painter.drawText(box_rect.adjusted(30, y_keys, 0, 0), Qt.AlignLeft, "PRESET VARIANT KEYWORDS")
-        y_keys += 30
+        painter.drawText(full_rect.adjusted(0, y, 0, 0), Qt.AlignLeft, "PRESET VARIANT KEYWORDS")
+        y += 40
         
-        keys_rect = box_rect.adjusted(30, y_keys, -30, -50)
-        y = 0
-        y = draw_shortcut(painter, keys_rect, "{product_type}", "Product Type from the matched preset", y)
-        y = draw_shortcut(painter, keys_rect, "{task_name}", "Task name from assigned AYON path", y)
-        y = draw_shortcut(painter, keys_rect, "{ayon_folder_path}", "AYON path excluding the task", y)
-        y = draw_shortcut(painter, keys_rect, "{label}", "Current label (including edits)", y)
-        y = draw_shortcut(painter, keys_rect, "{variant}", "Expanded variant string", y)
-        y = draw_shortcut(painter, keys_rect, "{filename}", "Full path (hashes for sequences)", y)
-        y = draw_shortcut(painter, keys_rect, "{file_name} / {extension}", "Base name / Extension (no dot)", y)
-        y = draw_shortcut(painter, keys_rect, "{repre}", "Representation from preset", y)
-        y = draw_shortcut(painter, keys_rect, "{head} / {tail}", "Handle Start / End from preset", y)
-        y = draw_shortcut(painter, keys_rect, "{slate_exists}", "True/False based on preset", y)
-        y = draw_shortcut(painter, keys_rect, "{fps}", "FPS from preset", y)
-        y = draw_shortcut(painter, keys_rect, "{version}", "Current version from spreadsheet", y)
+        y = draw_shortcut(painter, full_rect, "{product_type}", "Product Type from the matched preset", y)
+        y = draw_shortcut(painter, full_rect, "{task_name}", "Task name from assigned AYON path", y)
+        y = draw_shortcut(painter, full_rect, "{ayon_folder_path}", "AYON path excluding the task", y)
+        y = draw_shortcut(painter, full_rect, "{label}", "Current label (including edits)", y)
+        y = draw_shortcut(painter, full_rect, "{variant}", "Expanded variant string", y)
+        y = draw_shortcut(painter, full_rect, "{filename}", "Full path (hashes for sequences)", y)
+        y = draw_shortcut(painter, full_rect, "{file_name}", "Base name without extension", y)
+        y = draw_shortcut(painter, full_rect, "{extension}", "File extension without dot", y)
+        y = draw_shortcut(painter, full_rect, "{repre}", "Representation from preset", y)
+        y = draw_shortcut(painter, full_rect, "{head} / {tail}", "Handle Start / End from preset", y)
+        y = draw_shortcut(painter, full_rect, "{slate_exists}", "True/False based on preset", y)
+        y = draw_shortcut(painter, full_rect, "{fps}", "FPS from preset", y)
+        y = draw_shortcut(painter, full_rect, "{version}", "Current version from spreadsheet", y)
+        y = draw_shortcut(painter, full_rect, "{metadata.width}", "Source image width (integer)", y)
+        y = draw_shortcut(painter, full_rect, "{metadata.height}", "Source image height (integer)", y)
+        y = draw_shortcut(painter, full_rect, "{metadata.timecode}", "Technical timecode (from file)", y)
+        y = draw_shortcut(painter, full_rect, "{metadata.start_from_tc}", "Calculated integer start frame from TC", y)
+        y = draw_shortcut(painter, full_rect, "{metadata.nb_frames}", "Total frame count (Duration * FPS)", y)
+        y = draw_shortcut(painter, full_rect, "{metadata.duration}", "Total duration in seconds (float)", y)
+        y = draw_shortcut(painter, full_rect, "{metadata.framerate}", "Extracted technical framerate (float)", y)
+
+class HelpOverlay(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
+        self.hide()
+        
+        # Main layout for the overlay
+        self.overlay_layout = QVBoxLayout(self)
+        self.overlay_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Semi-transparent background
+        self.bg_widget = QWidget()
+        self.bg_widget.setStyleSheet("background-color: rgba(0, 0, 0, 180);")
+        self.overlay_layout.addWidget(self.bg_widget)
+        
+        # Center container for the help box
+        self.center_layout = QVBoxLayout(self.bg_widget)
+        self.center_layout.setContentsMargins(100, 60, 100, 60)
+        
+        self.box = QWidget()
+        self.box.setFixedWidth(750)
+        self.box.setStyleSheet("background-color: #191919; border: 1px solid #505050; border-radius: 4px;")
+        self.center_layout.addWidget(self.box, 0, Qt.AlignCenter)
+        
+        self.box_layout = QVBoxLayout(self.box)
+        self.box_layout.setContentsMargins(0, 0, 0, 0)
+        self.box_layout.setSpacing(0)
+        
+        # Header
+        self.header = QLabel(" INGESTDESKTOP USER GUIDE")
+        self.header.setFixedHeight(60)
+        self.header.setStyleSheet("""
+            background-color: #282828; 
+            color: white; 
+            font-weight: bold; 
+            font-size: 14px; 
+            padding-left: 25px;
+            border-top-left-radius: 4px;
+            border-top-right-radius: 4px;
+        """)
+        self.box_layout.addWidget(self.header)
+        
+        # Scroll Area
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setStyleSheet("background: transparent; border: none;")
+        self.scroll.setFrameShape(QScrollArea.NoFrame)
+        
+        self.content = HelpContentWidget()
+        self.scroll.setWidget(self.content)
+        self.box_layout.addWidget(self.scroll)
         
         # Footer
-        painter.setPen(QColor(120, 120, 120))
-        font.setBold(False)
-        font.setPointSize(8)
-        painter.setFont(font)
-        painter.drawText(box_rect.adjusted(0, 0, -25, -20), Qt.AlignBottom | Qt.AlignRight, "Click anywhere or press ESC to exit")
+        self.footer = QLabel("Click anywhere or press ESC to exit")
+        self.footer.setFixedHeight(35)
+        self.footer.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.footer.setStyleSheet("color: #777777; font-size: 9px; padding-right: 20px; border-top: 1px solid #333333;")
+        self.box_layout.addWidget(self.footer)
+
+    def show_help(self):
+        # Set height to 80% of main window
+        if self.parent():
+            parent_h = self.parent().height()
+            self.box.setFixedHeight(int(parent_h * 0.8))
+            
+        self.show()
+        self.raise_()
+        self.setFocus()
+
+    def hide_help(self):
+        self.hide()
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Escape:
+            self.hide_help()
+        else:
+            super().keyPressEvent(event)
+
+    def mousePressEvent(self, event):
+        # Only hide if clicked on the darkened background, not the box
+        if event.pos() in self.box.geometry():
+            return
+        self.hide_help()
 
 class SearchReplaceDialog(QDialog):
     def __init__(self, parent=None):
@@ -244,6 +291,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("IngestDesktop - AYON Pipeline Tool")
         self.resize(1200, 800)
+        self.setAcceptDrops(True)
 
         # Load Config
         self.config = self.load_config()
@@ -320,7 +368,6 @@ class MainWindow(QMainWindow):
         self.thumb_area.scene.selectionChanged.connect(self._sync_selection_to_table)
         
         # Sync visuals
-        self.model.dataChanged.connect(lambda: self.filter_panel.refresh_colors())
         self.model.dataChanged.connect(self._update_ayon_visuals)
         
         self.h_splitter.addWidget(self.v_splitter)
@@ -456,16 +503,25 @@ class MainWindow(QMainWindow):
         
         self.scanner = ImageScanner(
             directory, 
-            version_regex=self.config.get("version_regex", "_v(\\d+)"),
+            version_regex=self.config.get("version_regex", r"([._]v|v)(\d+)"),
             thumbnail_size=self.config.get("thumbnail_size", 150),
             age_source=self.config.get("age_source", "Modification Date"),
             detect_sequences=self.config.get("detect_sequences", True),
             seq_thumb_frame=self.config.get("seq_thumb_frame", "Middle"),
             extensions=self.config.get("extensions", {}),
-            presets=self.config.get("presets", {})
+            presets=self.config.get("presets", {}),
+            stills_start_frame=self.config.get("stills_start_frame", 1001),
+            stills_end_frame=self.config.get("stills_end_frame", 1001),
+            video_start_from_tc=self.config.get("video_start_from_tc", False),
+            video_start_frame=self.config.get("video_start_frame", 1001),
+            ffmpeg_path=self.config.get("ffmpeg_path", "ffmpeg.exe"),
+            ffprobe_path=self.config.get("ffprobe_path", "ffprobe.exe"),
+            oiiotool_path=self.config.get("oiiotool_path", "oiiotool.exe"),
+            ocio_config=self.config.get("ocio_config", "")
         )
-        self.scanner.finished.connect(lambda items: self.log_message(f"Scan complete. Found {len(items)} items.", "success"))
+        self.scanner.finished.connect(lambda items: self.log_message(f"Scan complete. Found {len(items)} items. Fetching metadata in background...", "success"))
         self.scanner.finished.connect(self.model.add_items)
+        self.scanner.item_updated.connect(self.model.update_item)
         self.scanner.start()
         
         # Update config
@@ -486,15 +542,24 @@ class MainWindow(QMainWindow):
             
         self.scanner = ImageScanner(
             directory, 
-            version_regex=self.config.get("version_regex", "_v(\\d+)"),
+            version_regex=self.config.get("version_regex", r"([._]v|v)(\d+)"),
             thumbnail_size=self.config.get("thumbnail_size", 150),
             age_source=self.config.get("age_source", "Modification Date"),
             detect_sequences=self.config.get("detect_sequences", True),
             seq_thumb_frame=self.config.get("seq_thumb_frame", "Middle"),
             extensions=self.config.get("extensions", {}),
-            presets=self.config.get("presets", {})
+            presets=self.config.get("presets", {}),
+            stills_start_frame=self.config.get("stills_start_frame", 1001),
+            stills_end_frame=self.config.get("stills_end_frame", 1001),
+            video_start_from_tc=self.config.get("video_start_from_tc", False),
+            video_start_frame=self.config.get("video_start_frame", 1001),
+            ffmpeg_path=self.config.get("ffmpeg_path", "ffmpeg.exe"),
+            ffprobe_path=self.config.get("ffprobe_path", "ffprobe.exe"),
+            oiiotool_path=self.config.get("oiiotool_path", "oiiotool.exe"),
+            ocio_config=self.config.get("ocio_config", "")
         )
         self.scanner.finished.connect(self._on_rescan_finished)
+        self.scanner.item_updated.connect(self.model.update_item)
         self.scanner.start()
 
     def _on_rescan_finished(self, items):
@@ -643,7 +708,7 @@ class MainWindow(QMainWindow):
         # Store old values to check if re-scan is needed
         old_detect = self.config.get("detect_sequences", True)
         old_thumb = self.config.get("seq_thumb_frame", "Middle")
-        old_regex = self.config.get("version_regex", "_v(\\d+)")
+        old_regex = self.config.get("version_regex", r"([._]v|v)(\d+)")
         old_exts = json.dumps(self.config.get("extensions", {}), sort_keys=True)
 
         dialog = PreferencesDialog(self.config, self)
@@ -794,6 +859,7 @@ class MainWindow(QMainWindow):
         try:
             self.thumb_area.scene.clearSelection()
             selected_rows = [idx.row() for idx in self.spreadsheet.table.selectionModel().selectedRows()]
+            
             selected_paths = []
             for row in selected_rows:
                 if row < len(self.model.items):
@@ -819,7 +885,9 @@ class MainWindow(QMainWindow):
             selected_paths = []
             first_idx = None
             
-            for item in self.thumb_area.scene.selectedItems():
+            selected_items = self.thumb_area.scene.selectedItems()
+            
+            for item in selected_items:
                 # Find the current row for this data object
                 try:
                     row = self.model.items.index(item.data)
@@ -1302,3 +1370,28 @@ class MainWindow(QMainWindow):
         else:
             self.log_console.hide()
             self.btn_toggle_log.setText("Log History")
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        urls = event.mimeData().urls()
+        if not urls:
+            return
+            
+        # Take the first one
+        path = urls[0].toLocalFile()
+        if os.path.exists(path):
+            if os.path.isfile(path):
+                path = os.path.dirname(path)
+            
+            # Start scan
+            self.top_bar.path_display.setText(path)
+            self.start_scan(path)
+            event.acceptProposedAction()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, 'help_overlay'):
+            self.help_overlay.setGeometry(self.rect())

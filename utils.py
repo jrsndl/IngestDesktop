@@ -1,14 +1,24 @@
 import os
 import re
 import fnmatch
-from PySide6.QtGui import QPixmap, QImageReader
+from PySide6.QtGui import QPixmap, QImageReader, QColor
 from PySide6.QtCore import Qt
 
-def get_version_from_name(filename, pattern=r"_v(\d+)"):
-    """Extract version number from filename using regex."""
-    match = re.search(pattern, filename)
+def generate_placeholder_thumbnail(size=150, color="#444444"):
+    """Generate a solid color placeholder pixmap."""
+    pixmap = QPixmap(size, size)
+    pixmap.fill(QColor(color))
+    return pixmap
+
+def get_version_from_name(filename, pattern=r"([._]v|v)(\d+)"):
+    """
+    Extract version number from filename using regex.
+    Default pattern handles: _v001, .v001, v001 (case insensitive)
+    """
+    match = re.search(pattern, filename, re.IGNORECASE)
     if match:
-        return int(match.group(1))
+        # The digits are in the last capturing group
+        return int(match.groups()[-1])
     return 1
 
 def generate_thumbnail(image_path, size=150):
@@ -26,6 +36,41 @@ def generate_thumbnail(image_path, size=150):
         return None
         
     return QPixmap.fromImage(image)
+
+def generate_video_thumbnail(video_path, ffmpeg_path, frame_mode="Middle", duration=None):
+    """Generate a PNG thumbnail for a video file at the source path."""
+    import subprocess
+    if not ffmpeg_path or not os.path.exists(ffmpeg_path):
+        return None
+        
+    out_path = video_path + "_thumbnail.png"
+    
+    # Calculate timestamp based on mode
+    ss = "00:00:00"
+    if frame_mode == "Second":
+        ss = "00:00:01"
+    elif frame_mode == "Middle" and duration:
+        try:
+            mid = float(duration) / 2.0
+            ss = str(mid)
+        except: pass
+    
+    args = [
+        ffmpeg_path,
+        "-ss", ss,
+        "-i", video_path,
+        "-frames:v", "1",
+        "-q:v", "2",
+        "-y", out_path
+    ]
+    
+    try:
+        subprocess.run(args, capture_output=True, check=True)
+        if os.path.exists(out_path):
+            return out_path
+    except Exception:
+        pass
+    return None
 
 def get_all_files(directory, recursive=True):
     """Find all files in a directory."""

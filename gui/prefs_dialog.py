@@ -27,7 +27,7 @@ class PreferencesDialog(QDialog):
         self.api_key.setEchoMode(QLineEdit.Password)
         
         # Scanner Settings
-        self.version_regex = QLineEdit(self.config.get("version_regex", "_v(\\d+)"))
+        self.version_regex = QLineEdit(self.config.get("version_regex", r"([._]v|v)(\d+)"))
         self.product_name = QLineEdit(self.config.get("product_name", "{label}"))
         self.product_name_camel = QCheckBox("camelCase")
         self.product_name_camel.setChecked(self.config.get("product_name_camel", True))
@@ -65,6 +65,39 @@ class PreferencesDialog(QDialog):
         self.form.addRow("Age Calculation Source:", self.age_source)
         self.form.addRow("Sequence Detection:", self.detect_sequences)
         self.form.addRow("AYON Console Path:", self.console_layout)
+        
+        # Tool Paths
+        self.ffmpeg_path = QLineEdit(self.config.get("ffmpeg_path", "ffmpeg.exe"))
+        self.btn_browse_ffmpeg = QPushButton("Browse...")
+        self.btn_browse_ffmpeg.clicked.connect(lambda: self._on_browse_file(self.ffmpeg_path, "FFmpeg Executable", "Executable Files (*.exe);;All Files (*)"))
+        ffmpeg_lay = QHBoxLayout()
+        ffmpeg_lay.addWidget(self.ffmpeg_path)
+        ffmpeg_lay.addWidget(self.btn_browse_ffmpeg)
+        self.form.addRow("FFmpeg Path:", ffmpeg_lay)
+
+        self.ffprobe_path = QLineEdit(self.config.get("ffprobe_path", "ffprobe.exe"))
+        self.btn_browse_ffprobe = QPushButton("Browse...")
+        self.btn_browse_ffprobe.clicked.connect(lambda: self._on_browse_file(self.ffprobe_path, "FFprobe Executable", "Executable Files (*.exe);;All Files (*)"))
+        ffprobe_lay = QHBoxLayout()
+        ffprobe_lay.addWidget(self.ffprobe_path)
+        ffprobe_lay.addWidget(self.btn_browse_ffprobe)
+        self.form.addRow("FFprobe Path:", ffprobe_lay)
+
+        self.oiiotool_path = QLineEdit(self.config.get("oiiotool_path", "oiiotool.exe"))
+        self.btn_browse_oiio = QPushButton("Browse...")
+        self.btn_browse_oiio.clicked.connect(lambda: self._on_browse_file(self.oiiotool_path, "OIIOTool Executable", "Executable Files (*.exe);;All Files (*)"))
+        oiio_lay = QHBoxLayout()
+        oiio_lay.addWidget(self.oiiotool_path)
+        oiio_lay.addWidget(self.btn_browse_oiio)
+        self.form.addRow("OIIOTool Path:", oiio_lay)
+
+        self.ocio_config = QLineEdit(self.config.get("ocio_config", ""))
+        self.btn_browse_ocio = QPushButton("Browse...")
+        self.btn_browse_ocio.clicked.connect(lambda: self._on_browse_file(self.ocio_config, "OCIO Config", "OCIO Config (*.ocio);;All Files (*)"))
+        ocio_lay = QHBoxLayout()
+        ocio_lay.addWidget(self.ocio_config)
+        ocio_lay.addWidget(self.btn_browse_ocio)
+        self.form.addRow("OCIO Config:", ocio_lay)
         
         self.general_layout.addLayout(self.form)
         self.general_layout.addStretch()
@@ -165,6 +198,39 @@ class PreferencesDialog(QDialog):
             ext_layout.addWidget(ext_field)
             layout.addLayout(ext_layout)
 
+            # Default frames for stills/videos
+            start_f = None
+            end_f = None
+            video_tc_cb = None
+            if p_type == "stills":
+                frame_layout = QHBoxLayout()
+                frame_layout.addWidget(QLabel("Default Start Frame:"))
+                start_f = QSpinBox()
+                start_f.setRange(0, 999999)
+                start_f.setValue(self.config.get("stills_start_frame", 1001))
+                frame_layout.addWidget(start_f)
+                
+                frame_layout.addWidget(QLabel("Default End Frame:"))
+                end_f = QSpinBox()
+                end_f.setRange(0, 999999)
+                end_f.setValue(self.config.get("stills_end_frame", 1001))
+                frame_layout.addWidget(end_f)
+                
+                layout.addLayout(frame_layout)
+            elif p_type == "videos":
+                frame_layout = QHBoxLayout()
+                video_tc_cb = QCheckBox("Start Frame from TC")
+                video_tc_cb.setChecked(self.config.get("video_start_from_tc", False))
+                frame_layout.addWidget(video_tc_cb)
+                
+                frame_layout.addWidget(QLabel("Default Start Frame:"))
+                start_f = QSpinBox()
+                start_f.setRange(0, 999999)
+                start_f.setValue(self.config.get("video_start_frame", 1001))
+                frame_layout.addWidget(start_f)
+                
+                layout.addLayout(frame_layout)
+
             scroll = QScrollArea()
             scroll.setWidgetResizable(True)
             scroll_content = QWidget()
@@ -186,7 +252,7 @@ class PreferencesDialog(QDialog):
             layout.addLayout(btn_row)
             
             self.tabs.addTab(tab, label)
-            self.preset_containers[p_type] = (scroll_layout, [], None, ext_field) # (layout, widgets, selected_widget, ext_field)
+            self.preset_containers[p_type] = (scroll_layout, [], None, ext_field, start_f, end_f, video_tc_cb) # (layout, widgets, selected_widget, ext_field, start_f, end_f, video_tc_cb)
             
             # Load existing presets
             existing = self.config.get("presets", {}).get(p_type, [])
@@ -212,7 +278,7 @@ class PreferencesDialog(QDialog):
         self.layout.addLayout(self.btn_layout)
 
     def add_preset(self, p_type, data=None):
-        scroll_layout, widgets, _, _ = self.preset_containers[p_type]
+        scroll_layout, widgets, _, _, _, _, _ = self.preset_containers[p_type]
         pw = PresetWidget(p_type, data)
         pw.clicked.connect(self.select_preset)
         pw.move_up.connect(self.move_preset_up)
@@ -225,7 +291,7 @@ class PreferencesDialog(QDialog):
 
     def select_preset(self, pw):
         p_type = pw.preset_type
-        scroll_layout, widgets, selected, ext_field = self.preset_containers[p_type]
+        scroll_layout, widgets, selected, ext_field, start_f, end_f, video_tc_cb = self.preset_containers[p_type]
         
         # Deselect previous
         if selected:
@@ -233,11 +299,11 @@ class PreferencesDialog(QDialog):
             
         # Select new
         pw.set_selected(True)
-        self.preset_containers[p_type] = (scroll_layout, widgets, pw, ext_field)
+        self.preset_containers[p_type] = (scroll_layout, widgets, pw, ext_field, start_f, end_f, video_tc_cb)
 
     def move_preset_up(self, pw):
         p_type = pw.preset_type
-        scroll_layout, widgets, selected, ext_field = self.preset_containers[p_type]
+        scroll_layout, widgets, selected, ext_field, start_f, end_f, video_tc_cb = self.preset_containers[p_type]
         idx = widgets.index(pw)
         if idx > 0:
             widgets.pop(idx)
@@ -246,7 +312,7 @@ class PreferencesDialog(QDialog):
 
     def move_preset_down(self, pw):
         p_type = pw.preset_type
-        scroll_layout, widgets, selected, ext_field = self.preset_containers[p_type]
+        scroll_layout, widgets, selected, ext_field, start_f, end_f, video_tc_cb = self.preset_containers[p_type]
         idx = widgets.index(pw)
         if idx < len(widgets) - 1:
             widgets.pop(idx)
@@ -254,7 +320,7 @@ class PreferencesDialog(QDialog):
             self._rebuild_preset_layout(p_type)
 
     def _rebuild_preset_layout(self, p_type):
-        scroll_layout, widgets, selected, ext_field = self.preset_containers[p_type]
+        scroll_layout, widgets, selected, ext_field, start_f, end_f, video_tc_cb = self.preset_containers[p_type]
         # Remove widgets from layout (without deleting them)
         for i in reversed(range(scroll_layout.count())):
             item = scroll_layout.itemAt(i)
@@ -265,7 +331,7 @@ class PreferencesDialog(QDialog):
             scroll_layout.addWidget(w)
 
     def delete_selected_preset(self, p_type):
-        scroll_layout, widgets, selected, ext_field = self.preset_containers[p_type]
+        scroll_layout, widgets, selected, ext_field, start_f, end_f, video_tc_cb = self.preset_containers[p_type]
         if not selected:
             return
             
@@ -273,7 +339,7 @@ class PreferencesDialog(QDialog):
             widgets.remove(selected)
             selected.setParent(None)
             selected.deleteLater()
-            self.preset_containers[p_type] = (scroll_layout, widgets, None, ext_field)
+            self.preset_containers[p_type] = (scroll_layout, widgets, None, ext_field, start_f, end_f, video_tc_cb)
             
             # Select first available if any
             if widgets:
@@ -285,12 +351,12 @@ class PreferencesDialog(QDialog):
         pass
 
     def _on_browse_console(self):
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "Select AYON Console Executable", 
-            "", "Executable Files (*.exe);;All Files (*)"
-        )
+        self._on_browse_file(self.traypublisher_path, "Select AYON Console Executable", "Executable Files (*.exe);;All Files (*)")
+
+    def _on_browse_file(self, line_edit, title, filter_str):
+        file_path, _ = QFileDialog.getOpenFileName(self, title, "", filter_str)
         if file_path:
-            self.traypublisher_path.setText(file_path)
+            line_edit.setText(file_path)
 
     def _on_browse_scan_folder(self):
         dir_path = QFileDialog.getExistingDirectory(self, "Select Default Scan Folder", self.default_scan_folder.text())
@@ -300,7 +366,11 @@ class PreferencesDialog(QDialog):
     def get_settings(self):
         presets = {}
         extensions = {}
-        for p_type, (layout, widgets, selected, ext_field) in self.preset_containers.items():
+        stills_start = 1001
+        stills_end = 1001
+        video_tc = False
+        video_start = 1001
+        for p_type, (layout, widgets, selected, ext_field, start_f, end_f, video_tc_cb) in self.preset_containers.items():
             p_data = []
             for pw in widgets:
                 data = pw.get_data()
@@ -308,6 +378,12 @@ class PreferencesDialog(QDialog):
                 p_data.append(data)
             presets[p_type] = p_data
             extensions[p_type] = ext_field.text().strip()
+            if p_type == "stills":
+                stills_start = start_f.value()
+                stills_end = end_f.value()
+            elif p_type == "videos":
+                video_tc = video_tc_cb.isChecked()
+                video_start = start_f.value()
 
         return {
             "ayon_server_url": self.server_url.text(),
@@ -328,5 +404,13 @@ class PreferencesDialog(QDialog):
             "low_res_size": self.low_res_size.value(),
             "high_res_size": self.high_res_size.value(),
             "presets": presets,
-            "extensions": extensions
+            "extensions": extensions,
+            "stills_start_frame": stills_start,
+            "stills_end_frame": stills_end,
+            "video_start_from_tc": video_tc,
+            "video_start_frame": video_start,
+            "ffmpeg_path": self.ffmpeg_path.text(),
+            "ffprobe_path": self.ffprobe_path.text(),
+            "oiiotool_path": self.oiiotool_path.text(),
+            "ocio_config": self.ocio_config.text()
         }
