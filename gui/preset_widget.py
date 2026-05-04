@@ -84,8 +84,13 @@ class PresetWidget(QFrame):
         self.add_row("Product Type:", self.product_type)
         
         # 5. Variant
+        variant_layout = QHBoxLayout()
         self.variant = QLineEdit()
-        self.add_row("Variant:", self.variant)
+        self.camel_case = QCheckBox("CamelCase")
+        self.camel_case.setChecked(True)
+        variant_layout.addWidget(self.variant, 2)
+        variant_layout.addWidget(self.camel_case, 1)
+        self.add_row("Variant:", variant_layout)
         
         # 6. FPS
         self.fps = QDoubleSpinBox()
@@ -158,6 +163,7 @@ class PresetWidget(QFrame):
             self.filter_str.setText(data.get("Filter", ""))
             self.product_type.setCurrentText(data.get("Product Type", ""))
             self.variant.setText(data.get("Variant", ""))
+            self.camel_case.setChecked(data.get("CamelCase", True))
             self.fps.setValue(data.get("FPS", 24.0))
             self.handle_start.setValue(data.get("Handle Start", 0))
             self.handle_end.setValue(data.get("Handle End", 0))
@@ -173,6 +179,7 @@ class PresetWidget(QFrame):
                 "Filter": "png", 
                 "Product Type": "image", 
                 "Variant": "{label}",
+                "CamelCase": True,
                 "FPS": 24.0,
                 "Handle Start": 0,
                 "Handle End": 0,
@@ -184,6 +191,7 @@ class PresetWidget(QFrame):
                 "Filter": "exr", 
                 "Product Type": "render", 
                 "Variant": "{product_type}{task_name}{label}",
+                "CamelCase": True,
                 "FPS": 24.0,
                 "Handle Start": 0,
                 "Handle End": 0,
@@ -195,6 +203,7 @@ class PresetWidget(QFrame):
                 "Filter": "mov", 
                 "Product Type": "render", 
                 "Variant": "{label}",
+                "CamelCase": True,
                 "FPS": 24.0,
                 "Handle Start": 0,
                 "Handle End": 0,
@@ -206,6 +215,7 @@ class PresetWidget(QFrame):
                 "Filter": "nk", 
                 "Product Type": "workfile", 
                 "Variant": "{label}",
+                "CamelCase": True,
                 "FPS": 24.0,
                 "Handle Start": 0,
                 "Handle End": 0,
@@ -218,6 +228,7 @@ class PresetWidget(QFrame):
         self.filter_str.setText(d.get("Filter", ""))
         self.product_type.setCurrentText(d.get("Product Type", ""))
         self.variant.setText(d.get("Variant", ""))
+        self.camel_case.setChecked(d.get("CamelCase", True))
         self.fps.setValue(d.get("FPS", 24.0))
         self.handle_start.setValue(d.get("Handle Start", 0))
         self.handle_end.setValue(d.get("Handle End", 0))
@@ -231,6 +242,7 @@ class PresetWidget(QFrame):
             "Filter": self.filter_str.text(),
             "Product Type": self.product_type.currentText(),
             "Variant": self.variant.text(),
+            "CamelCase": self.camel_case.isChecked(),
             "FPS": self.fps.value(),
             "Handle Start": self.handle_start.value(),
             "Handle End": self.handle_end.value(),

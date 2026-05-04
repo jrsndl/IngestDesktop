@@ -502,6 +502,7 @@ class MainWindow(QMainWindow):
             item.preset_name = matched_p.get("Name") if matched_p else None
             item.variant = matched_p.get("Variant") if matched_p else None
             item.product_type = matched_p.get("Product Type") if matched_p else None
+            item.camel_case = matched_p.get("CamelCase", True) if matched_p else True
             
         self.model.layoutChanged.emit()
 

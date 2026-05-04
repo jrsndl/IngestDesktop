@@ -4,7 +4,8 @@ from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex, Signal
 from PySide6.QtGui import QPixmap, QColor
 
 class ImageItem:
-    def __init__(self, file_path, label=None, version=1, category="Other", preset_name=None, variant=None, product_type=None):
+    def __init__(self, file_path, label=None, version=1, category="Other", 
+                 preset_name=None, variant=None, product_type=None, camel_case=True):
         self.file_path = file_path
         self.filename = os.path.basename(file_path)
         self.label = label or os.path.splitext(self.filename)[0]
@@ -24,6 +25,7 @@ class ImageItem:
         self.preset_name = preset_name
         self.variant = variant
         self.product_type = product_type
+        self.camel_case = camel_case
 
 class ImageTableModel(QAbstractTableModel):
     data_changed = Signal()
@@ -254,8 +256,16 @@ class ImageTableModel(QAbstractTableModel):
             "{file_name}": os.path.splitext(os.path.basename(item.file_path))[0]
         }
         
-        res = variant
-        for key, val in replacements.items():
-            res = res.replace(key, val)
-            
+        import re
+        pattern = "|".join(re.escape(k) for k in replacements.keys())
+        
+        def replacer(match):
+            key = match.group(0)
+            val = replacements.get(key, key)
+            # CamelCase: if not at index 0, capitalize first char
+            if item.camel_case and match.start() > 0 and val:
+                val = val[0].upper() + val[1:]
+            return val
+
+        res = re.sub(pattern, replacer, variant)
         return res
