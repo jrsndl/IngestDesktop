@@ -190,6 +190,7 @@ class HelpOverlay(QWidget):
         y = draw_shortcut(painter, keys_rect, "{label}", "Current label (including edits)", y)
         y = draw_shortcut(painter, keys_rect, "{variant}", "Expanded variant string", y)
         y = draw_shortcut(painter, keys_rect, "{filename}", "Full path (hashes for sequences)", y)
+        y = draw_shortcut(painter, keys_rect, "{file_name} / {extension}", "Base name / Extension (no dot)", y)
         y = draw_shortcut(painter, keys_rect, "{repre}", "Representation from preset", y)
         y = draw_shortcut(painter, keys_rect, "{head} / {tail}", "Handle Start / End from preset", y)
         y = draw_shortcut(painter, keys_rect, "{slate_exists}", "True/False based on preset", y)

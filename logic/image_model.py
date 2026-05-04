@@ -291,7 +291,7 @@ class ImageTableModel(QAbstractTableModel):
             "{variant}": self._expand_string(item.variant, item) if text != item.variant else (item.variant or ""),
             "{filename}": filename_val,
             "{file_name}": os.path.splitext(os.path.basename(item.file_path))[0],
-            "{extension}": os.path.splitext(item.file_path)[1].lower().lstrip("."),
+            "{extension}": os.path.splitext(item.file_path)[1].replace(".", "").lower(),
             "{repre}": p_data.get("Representation", ""),
             "{head}": str(p_data.get("Handles Start", "0")),
             "{tail}": str(p_data.get("Handles End", "0")),
