@@ -66,6 +66,9 @@ class ImageTableModel(QAbstractTableModel):
         if role == Qt.ForegroundRole:
             if not item.is_tagged:
                 return QColor("#ff4444")
+            # Dim non-editable text columns
+            if col in [3, 4, 5, 7, 8, 9]:
+                return QColor("#888888")
             return None
 
         if role in [Qt.DisplayRole, Qt.EditRole]:
