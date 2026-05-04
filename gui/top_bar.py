@@ -56,6 +56,7 @@ class TopBar(QWidget):
                 font-weight: bold;
                 font-size: 14px;
                 border: 1px solid #666666;
+                padding: 0px;
             }
             QPushButton:hover {
                 background-color: #555555;
