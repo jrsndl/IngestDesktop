@@ -179,6 +179,8 @@ class PreferencesDialog(QDialog):
         scroll_layout, widgets, _, _ = self.preset_containers[p_type]
         pw = PresetWidget(p_type, data)
         pw.clicked.connect(self.select_preset)
+        pw.move_up.connect(self.move_preset_up)
+        pw.move_down.connect(self.move_preset_down)
         scroll_layout.addWidget(pw)
         widgets.append(pw)
         
@@ -196,6 +198,35 @@ class PreferencesDialog(QDialog):
         # Select new
         pw.set_selected(True)
         self.preset_containers[p_type] = (scroll_layout, widgets, pw, ext_field)
+
+    def move_preset_up(self, pw):
+        p_type = pw.preset_type
+        scroll_layout, widgets, selected, ext_field = self.preset_containers[p_type]
+        idx = widgets.index(pw)
+        if idx > 0:
+            widgets.pop(idx)
+            widgets.insert(idx - 1, pw)
+            self._rebuild_preset_layout(p_type)
+
+    def move_preset_down(self, pw):
+        p_type = pw.preset_type
+        scroll_layout, widgets, selected, ext_field = self.preset_containers[p_type]
+        idx = widgets.index(pw)
+        if idx < len(widgets) - 1:
+            widgets.pop(idx)
+            widgets.insert(idx + 1, pw)
+            self._rebuild_preset_layout(p_type)
+
+    def _rebuild_preset_layout(self, p_type):
+        scroll_layout, widgets, selected, ext_field = self.preset_containers[p_type]
+        # Remove widgets from layout (without deleting them)
+        for i in reversed(range(scroll_layout.count())):
+            item = scroll_layout.itemAt(i)
+            if item.widget():
+                scroll_layout.removeWidget(item.widget())
+        # Re-add in new order
+        for w in widgets:
+            scroll_layout.addWidget(w)
 
     def delete_selected_preset(self, p_type):
         scroll_layout, widgets, selected, ext_field = self.preset_containers[p_type]

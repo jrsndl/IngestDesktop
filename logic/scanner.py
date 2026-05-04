@@ -109,17 +109,16 @@ class ImageScanner(QThread):
                 if not f_str: continue
                 
                 if f_by == "extension":
-                    ext = os.path.splitext(file_path)[1].lower()
-                    if f_str.startswith("."):
-                        if ext == f_str: return p.get("Name")
-                    else:
-                        if ext == f".{f_str}": return p.get("Name")
+                    ext = os.path.splitext(file_path)[1].lower().lstrip(".")
+                    if f_str == ext: return p.get("Name")
                 elif f_by == "name":
-                    if f_str in os.path.basename(file_path).lower():
-                        return p.get("Name")
+                    # name excluding extension
+                    name = os.path.splitext(os.path.basename(file_path))[0].lower()
+                    if f_str in name: return p.get("Name")
                 elif f_by == "path":
-                    if f_str in file_path.lower():
-                        return p.get("Name")
+                    # path excluding file name, use forward slashes
+                    path_dir = os.path.dirname(file_path).replace("\\", "/").lower()
+                    if f_str in path_dir: return p.get("Name")
             return None
 
         # 1. Process Image Groups (Stills and Sequences)

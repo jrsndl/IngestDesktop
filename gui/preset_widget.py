@@ -5,6 +5,8 @@ from PySide6.QtCore import Signal, Qt
 
 class PresetWidget(QFrame):
     clicked = Signal(object)
+    move_up = Signal(object)
+    move_down = Signal(object)
 
     def __init__(self, preset_type, data=None, parent=None):
         super().__init__(parent)
@@ -33,9 +35,19 @@ class PresetWidget(QFrame):
         self.lbl_title = QLabel("Preset")
         self.lbl_title.setStyleSheet("font-weight: bold; font-size: 13px;")
         
+        self.btn_up = QPushButton("▲")
+        self.btn_up.setFixedSize(20, 20)
+        self.btn_up.clicked.connect(lambda: self.move_up.emit(self))
+        
+        self.btn_down = QPushButton("▼")
+        self.btn_down.setFixedSize(20, 20)
+        self.btn_down.clicked.connect(lambda: self.move_down.emit(self))
+
         self.header_layout.addWidget(self.btn_toggle)
         self.header_layout.addWidget(self.lbl_title)
         self.header_layout.addStretch()
+        self.header_layout.addWidget(self.btn_up)
+        self.header_layout.addWidget(self.btn_down)
         
         self.main_layout.addWidget(self.header)
 
