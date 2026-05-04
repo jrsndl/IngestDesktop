@@ -293,12 +293,12 @@ class ImageTableModel(QAbstractTableModel):
             "{file_name}": os.path.splitext(os.path.basename(item.file_path))[0],
             "{extension}": os.path.splitext(item.file_path)[1].replace(".", "").lower(),
             "{repre}": p_data.get("Representation", ""),
-            "{head}": str(p_data.get("Handles Start", "0")),
-            "{tail}": str(p_data.get("Handles End", "0")),
+            "{head}": str(p_data.get("Handle Start", "0")),
+            "{tail}": str(p_data.get("Handle End", "0")),
             "{slate_exists}": "True" if p_data.get("Slate Exists") else "False",
             "{fps}": str(p_data.get("FPS", "")),
             "{repre_color}": p_data.get("Colorspace", ""),
-            "{repre_tags}": p_data.get("Rep. Tags", ""),
+            "{repre_tags}": p_data.get("Tags", ""),
         }
         
         import re
