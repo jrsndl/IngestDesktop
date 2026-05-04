@@ -106,8 +106,12 @@ class SpreadsheetPanel(QWidget):
         self.table.selectionModel().selectionChanged.connect(self.update_filtering)
         # Set row height for thumbnails
         self.table.verticalHeader().setDefaultSectionSize(40)
+        
+        # Clear delegate from CSV mode (index 0)
+        self.table.setItemDelegateForColumn(0, QStyledItemDelegate(self.table))
         # Set delegate for thumbnail column (index 1)
         self.table.setItemDelegateForColumn(1, ScalingDelegate(self.table))
+        
         # Set columns to Interactive to allow user adjustment
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.Interactive)
@@ -121,6 +125,7 @@ class SpreadsheetPanel(QWidget):
         
         # Initial fit
         self.table.setColumnWidth(0, 40)
+        self.table.setColumnWidth(1, 60) # Thumbnail
         self.table.resizeColumnToContents(2)
         self.table.resizeColumnToContents(3)
         self.table.resizeColumnToContents(4)
