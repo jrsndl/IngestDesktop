@@ -26,15 +26,20 @@ class ImageTableModel(QAbstractTableModel):
     data_changed = Signal()
 
     COLUMNS = [
-        "Tag", "Thumbnail", "Label", "Category", "Version", 
+        "Tag", "Thumbnail", "Label", "Category", "Preset", "Version", 
         "Last AYON Version", "Age", "AYON Path"
     ]
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.items = []
+        self.presets = {} # category -> preset_name
         self.age_unit = "minutes" # minutes, hours, days
         self.label_allowed_regex = "^[a-zA-Z0-9_\\-\\.\\s]*$"
+
+    def set_presets(self, presets):
+        self.presets = presets
+        self.layoutChanged.emit()
 
     def rowCount(self, parent=QModelIndex()):
         return len(self.items)
@@ -57,10 +62,14 @@ class ImageTableModel(QAbstractTableModel):
         if role in [Qt.DisplayRole, Qt.EditRole]:
             if col == 2: return item.label
             if col == 3: return item.category
-            if col == 4: return str(item.version)
+            if col == 4: # Preset
+                cat = item.category
+                if cat.startswith("sequence"): cat = "Sequence"
+                return self.presets.get(cat, "-")
+            if col == 5: return str(item.version)
             if role == Qt.DisplayRole:
-                if col == 5: return str(item.last_ayon_version) if item.last_ayon_version else "-"
-                if col == 6: 
+                if col == 6: return str(item.last_ayon_version) if item.last_ayon_version else "-"
+                if col == 7: 
                     m = item.age_minutes
                     if self.age_unit == "minutes": return f"{m}m"
                     if self.age_unit == "hours": return f"{m//60}h"
@@ -70,7 +79,7 @@ class ImageTableModel(QAbstractTableModel):
                     if m < 60: return f"{m}m"
                     if m < 1440: return f"{m//60}h"
                     return f"{m//1440}d"
-                if col == 7: return item.ayon_path
+                if col == 8: return item.ayon_path
             else:
                 # For EditRole in non-label/version columns
                 return None
@@ -108,7 +117,7 @@ class ImageTableModel(QAbstractTableModel):
                 # if not re.match(self.label_allowed_regex, value):
                 #     return False
                 item.label = value
-            elif col == 4:
+            elif col == 5: # Version
                 try:
                     item.version = int(value)
                 except ValueError:
@@ -133,7 +142,7 @@ class ImageTableModel(QAbstractTableModel):
         flags = Qt.ItemIsEnabled | Qt.ItemIsSelectable
         if index.column() == 0:
             flags |= Qt.ItemIsUserCheckable
-        if index.column() in [2, 4]:
+        if index.column() in [2, 5]: # Label, Version
             flags |= Qt.ItemIsEditable
             
         return flags
@@ -195,10 +204,11 @@ class ImageTableModel(QAbstractTableModel):
             if column == 0: return item.is_tagged
             if column == 2: return item.label
             if column == 3: return item.category
-            if column == 4: return item.version
-            if column == 5: return item.last_ayon_version or 0
-            if column == 6: return item.age_minutes
-            if column == 7: return item.ayon_path
+            if column == 4: return self.presets.get(item.category, "")
+            if column == 5: return item.version
+            if column == 6: return item.last_ayon_version or 0
+            if column == 7: return item.age_minutes
+            if column == 8: return item.ayon_path
             return ""
 
         reverse = (order == Qt.DescendingOrder)

@@ -234,7 +234,12 @@ class PreferencesDialog(QDialog):
         presets = {}
         extensions = {}
         for p_type, (layout, widgets, selected, ext_field) in self.preset_containers.items():
-            presets[p_type] = [pw.get_data() for pw in widgets]
+            p_data = []
+            for pw in widgets:
+                data = pw.get_data()
+                data["Active"] = (pw == selected)
+                p_data.append(data)
+            presets[p_type] = p_data
             extensions[p_type] = ext_field.text().strip()
 
         return {

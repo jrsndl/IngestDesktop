@@ -369,6 +369,9 @@ class MainWindow(QMainWindow):
         self.thumb_area.slider_cols.setValue(self.config.get("default_columns", 12))
         self.thumb_area.slider_cols.valueChanged.connect(self._on_cols_changed)
 
+        # Update model presets mapping
+        self._update_model_presets()
+
         # Async AYON Load
         self.refresh_ayon_async()
 
@@ -461,6 +464,28 @@ class MainWindow(QMainWindow):
         self.save_config()
         
         self.refresh_hierarchy_async(project_name)
+
+    def _update_model_presets(self):
+        """Update the model's category-to-preset-name mapping."""
+        active_map = {}
+        presets = self.config.get("presets", {})
+        for p_type, p_list in presets.items():
+            active_name = "-"
+            for p in p_list:
+                if p.get("Active"):
+                    active_name = p.get("Name", "-")
+                    break
+            else:
+                if p_list:
+                    active_name = p_list[0].get("Name", "-")
+            
+            # Map back to model categories
+            if p_type == "stills": active_map["Still"] = active_name
+            elif p_type == "sequences": active_map["Sequence"] = active_name
+            elif p_type == "videos": active_map["Video"] = active_name
+            elif p_type == "other": active_map["Other"] = active_name
+            
+        self.model.set_presets(active_map)
 
     def refresh_ayon(self):
         self.refresh_ayon_async(reconnect=False)
@@ -560,6 +585,7 @@ class MainWindow(QMainWindow):
             self.thumb_area.update_label_validator(label_regex)
             
             self.save_config()
+            self._update_model_presets()
             
             # Check if scan-related settings changed
             new_exts = json.dumps(self.config.get("extensions", {}), sort_keys=True)
