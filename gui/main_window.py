@@ -501,6 +501,7 @@ class MainWindow(QMainWindow):
             matched_p = evaluate_preset(item.file_path, presets, p_type, label=item.label)
             item.preset_name = matched_p.get("Name") if matched_p else None
             item.variant = matched_p.get("Variant") if matched_p else None
+            item.product_type = matched_p.get("Product Type") if matched_p else None
             
         self.model.layoutChanged.emit()
 

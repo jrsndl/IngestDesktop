@@ -146,9 +146,10 @@ class ImageScanner(QThread):
             matched_p = evaluate_preset(first_path, self.presets, p_type, label=label)
             preset_name = matched_p.get("Name") if matched_p else None
             variant = matched_p.get("Variant") if matched_p else None
+            product_type = matched_p.get("Product Type") if matched_p else None
 
             item = ImageItem(source_path, label=label, version=version, category=category, 
-                             preset_name=preset_name, variant=variant)
+                             preset_name=preset_name, variant=variant, product_type=product_type)
             self._fill_metadata(item, source_path)
             
             final_items.append(item)
@@ -164,7 +165,8 @@ class ImageScanner(QThread):
             matched_p = evaluate_preset(f, self.presets, "videos", label=os.path.splitext(os.path.basename(f))[0])
             preset_name = matched_p.get("Name") if matched_p else None
             variant = matched_p.get("Variant") if matched_p else None
-            item = ImageItem(f, category="Video", preset_name=preset_name, variant=variant)
+            product_type = matched_p.get("Product Type") if matched_p else None
+            item = ImageItem(f, category="Video", preset_name=preset_name, variant=variant, product_type=product_type)
             self._fill_metadata(item, f)
             final_items.append(item)
             current += 1
@@ -179,7 +181,8 @@ class ImageScanner(QThread):
             matched_p = evaluate_preset(f, self.presets, "other", label=os.path.splitext(os.path.basename(f))[0])
             preset_name = matched_p.get("Name") if matched_p else None
             variant = matched_p.get("Variant") if matched_p else None
-            item = ImageItem(f, category="Other", preset_name=preset_name, variant=variant)
+            product_type = matched_p.get("Product Type") if matched_p else None
+            item = ImageItem(f, category="Other", preset_name=preset_name, variant=variant, product_type=product_type)
             self._fill_metadata(item, f)
             final_items.append(item)
             current += 1

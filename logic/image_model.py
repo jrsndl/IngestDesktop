@@ -4,7 +4,7 @@ from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex, Signal
 from PySide6.QtGui import QPixmap, QColor
 
 class ImageItem:
-    def __init__(self, file_path, label=None, version=1, category="Other", preset_name=None, variant=None):
+    def __init__(self, file_path, label=None, version=1, category="Other", preset_name=None, variant=None, product_type=None):
         self.file_path = file_path
         self.filename = os.path.basename(file_path)
         self.label = label or os.path.splitext(self.filename)[0]
@@ -23,6 +23,7 @@ class ImageItem:
         self.position = (0, 0) # (x, y)
         self.preset_name = preset_name
         self.variant = variant
+        self.product_type = product_type
 
 class ImageTableModel(QAbstractTableModel):
     data_changed = Signal()
@@ -67,7 +68,7 @@ class ImageTableModel(QAbstractTableModel):
             if col == 4: # Preset
                 return item.preset_name if item.preset_name else "-"
             if col == 5: # Variant
-                return item.variant if item.variant else "-"
+                return self._expand_variant(item)
             if col == 6: return str(item.version)
             if role == Qt.DisplayRole:
                 if col == 7: return str(item.last_ayon_version) if item.last_ayon_version else "-"
@@ -198,18 +199,20 @@ class ImageTableModel(QAbstractTableModel):
         
         # Notify views that Label column (2) changed
         self.dataChanged.emit(self.index(min(rows), 2), self.index(max(rows), 2))
+
     def sort(self, column, order=Qt.AscendingOrder):
-        """Sort the model data."""
-        self.layoutAboutToBeChanged.emit()
-        
-        def get_val(item):
+        """Sort model by a specific column."""
+        if not self.items:
+            return
+
+        def get_value(item):
             if column == 0: return item.is_tagged
             if column == 2: return item.label
             if column == 3: return item.category
             if column == 4: 
                 return item.preset_name or ""
             if column == 5:
-                return item.variant or ""
+                return self._expand_variant(item)
             if column == 6: return item.version
             if column == 7: return item.last_ayon_version or 0
             if column == 8: return item.age_minutes
@@ -217,6 +220,42 @@ class ImageTableModel(QAbstractTableModel):
             return ""
 
         reverse = (order == Qt.DescendingOrder)
-        self.items.sort(key=get_val, reverse=reverse)
-        
+        self.items.sort(key=get_value, reverse=reverse)
         self.layoutChanged.emit()
+
+    def _expand_variant(self, item):
+        if not item.variant:
+            return "-"
+            
+        variant = item.variant
+        
+        # Parse AYON path
+        # Example: /Project/FolderA/FolderB/Task
+        ayon_parts = [p for p in item.ayon_path.split("/") if p]
+        
+        task_name = ""
+        folder_name = ""
+        parent_folder = ""
+        
+        if ayon_parts:
+            task_name = ayon_parts[-1]
+            if len(ayon_parts) > 1:
+                folder_name = ayon_parts[-2]
+            if len(ayon_parts) > 2:
+                parent_folder = ayon_parts[-3]
+        
+        # Replacement mapping
+        replacements = {
+            "{product_type}": item.product_type or "",
+            "{task_name}": task_name,
+            "{folder_name}": folder_name,
+            "{parent_folder}": parent_folder,
+            "{label}": item.label or "",
+            "{file_name}": os.path.splitext(os.path.basename(item.file_path))[0]
+        }
+        
+        res = variant
+        for key, val in replacements.items():
+            res = res.replace(key, val)
+            
+        return res
