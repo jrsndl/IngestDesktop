@@ -1,7 +1,7 @@
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QPushButton, QTreeView, 
                              QHBoxLayout, QLabel, QMenu, QLineEdit, QComboBox)
 from PySide6.QtGui import QStandardItemModel, QStandardItem, QIcon, QColor, QFont, QAction
-from PySide6.QtCore import Signal, Qt, QSortFilterProxyModel
+from PySide6.QtCore import Signal, Qt, QSortFilterProxyModel, QEvent
 
 class AyonFilterProxy(QSortFilterProxyModel):
     def __init__(self, parent=None):
@@ -42,6 +42,38 @@ class AyonFilterProxy(QSortFilterProxyModel):
                 return True # Parent must be shown if child is shown
                 
         return False
+        
+class CheckableComboBox(QComboBox):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.view().viewport().installEventFilter(self)
+        self._changed = False
+
+    def eventFilter(self, object, event):
+        if object == self.view().viewport() and event.type() == QEvent.MouseButtonRelease:
+            index = self.view().indexAt(event.pos())
+            item = self.model().itemFromIndex(index)
+            if item.checkState() == Qt.Checked:
+                item.setCheckState(Qt.Unchecked)
+            else:
+                item.setCheckState(Qt.Checked)
+            self._changed = True
+            return True
+        return super().eventFilter(object, event)
+
+    def hidePopup(self):
+        if self._changed:
+            self._changed = False
+            self.activated.emit(self.currentIndex())
+        super().hidePopup()
+
+    def get_checked_items(self):
+        checked = []
+        for i in range(self.count()):
+            item = self.model().item(i)
+            if item.checkState() == Qt.Checked:
+                checked.append(item.text())
+        return checked
 
 class AyonPanel(QWidget):
     # Signal emitted when a task is double-clicked: (folder_path, task_name, task_type)
@@ -50,6 +82,7 @@ class AyonPanel(QWidget):
     unassign_requested = Signal(str) # full_ayon_path
     select_assigned_requested = Signal(str) # full_ayon_path
     clear_all_requested = Signal()
+    info_requested = Signal(str) # folder_id
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -110,6 +143,7 @@ class AyonPanel(QWidget):
         self.tree.doubleClicked.connect(self._on_double_click)
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._on_context_menu)
+        self.tree.selectionModel().selectionChanged.connect(self._on_selection_changed)
         
         # Header setup for hideable columns
         header = self.tree.header()
@@ -128,6 +162,26 @@ class AyonPanel(QWidget):
         self.lbl_unreachable.setWordWrap(True)
         self.lbl_unreachable.hide()
         self.layout.addWidget(self.lbl_unreachable)
+        
+        # 8. Product Info Section
+        self.layout.addSpacing(10)
+        self.layout.addWidget(QLabel("<b>Task Products:</b>"))
+        
+        self.combo_product_types = CheckableComboBox()
+        self.combo_product_types.setPlaceholderText("Filter types...")
+        self.combo_product_types.activated.connect(self._refresh_product_list)
+        self.layout.addWidget(self.combo_product_types)
+        
+        self.product_view = QTreeView()
+        self.product_view.setMaximumHeight(200)
+        self.product_model = QStandardItemModel()
+        self.product_model.setHorizontalHeaderLabels(["Product Name", "Last Version"])
+        self.product_view.setModel(self.product_model)
+        self.product_view.setHeaderHidden(False)
+        self.product_view.setEditTriggers(QTreeView.NoEditTriggers)
+        self.layout.addWidget(self.product_view)
+        
+        self.all_products = [] # Cache for current selected task
 
     def set_hierarchy(self, root_folders):
         self.model.removeRows(0, self.model.rowCount())
@@ -221,16 +275,52 @@ class AyonPanel(QWidget):
         item = self.model.itemFromIndex(first_col_index)
         data = item.data(Qt.UserRole)
         
-        # Check if it's a task (has folder_path in data)
-        if 'folderId' in data and 'folder_path' in data:
+        # Check if it's a task (has folderId in data)
+        if data and 'folderId' in data and 'folder_path' in data:
             folder_path = data.get('folder_path')
             task_name = data.get('name')
             task_type = data.get('type')
             self.task_selected.emit(folder_path, task_name, task_type)
-        else:
-            # It's a folder, maybe emit folder path if needed?
-            # For now we focus on tasks as ingestion targets
-            pass
+
+    def _on_selection_changed(self, selected, deselected):
+        indexes = self.tree.selectionModel().selectedIndexes()
+        if not indexes: return
+        
+        source_idx = self.proxy.mapToSource(indexes[0])
+        item = self.model.itemFromIndex(source_idx)
+        data = item.data(Qt.UserRole)
+        
+        if data and 'folderId' in data:
+            f_id = data.get('folderId')
+            self.info_requested.emit(f_id)
+
+    def set_products(self, products):
+        """Populate the product info list and types dropdown."""
+        self.all_products = products
+        
+        # Update types dropdown
+        types = sorted(list(set(p['type'] for p in products)))
+        self.combo_product_types.clear()
+        for t in types:
+            item = QStandardItem(t)
+            item.setCheckable(True)
+            item.setCheckState(Qt.Checked)
+            self.combo_product_types.model().appendRow(item)
+            
+        self._refresh_product_list()
+
+    def _refresh_product_list(self):
+        self.product_model.removeRows(0, self.product_model.rowCount())
+        checked_types = self.combo_product_types.get_checked_items()
+        
+        for p in self.all_products:
+            if p['type'] in checked_types:
+                name_item = QStandardItem(p['name'])
+                ver_item = QStandardItem(f"v{p['version']:03d}")
+                ver_item.setTextAlignment(Qt.AlignCenter)
+                self.product_model.appendRow([name_item, ver_item])
+                
+        self.product_view.resizeColumnToContents(0)
 
     def update_assigned_status(self, assigned_paths):
         """Iterate through the tree and bold tasks that are assigned to items."""

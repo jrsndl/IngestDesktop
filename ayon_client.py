@@ -84,20 +84,22 @@ class AyonClient:
             self.log.error(f"Error fetching hierarchy for project {project_name}: {e}")
             return []
 
-    def get_last_version(self, project_name, folder_path, product_name):
-        """Get the latest version number for a product in AYON."""
-        if not self.is_connected: return None
+    def get_products_for_folder(self, project_name, folder_id):
+        """Get all products and their latest versions for a folder."""
+        if not self.is_connected: return []
         try:
-            # Get product by path
-            product = ayon_api.get_product_by_path(project_name, f"{folder_path}/{product_name}")
-            if not product:
-                return 0
-            
-            # Get last version
-            last_version = ayon_api.get_last_version_by_product_id(project_name, product["id"])
-            if last_version:
-                return last_version["version"]
-            return 0
+            products = list(ayon_api.get_products(project_name, folder_ids=[folder_id]))
+            res = []
+            for prod in products:
+                # Get last version to show version number
+                last_v = ayon_api.get_last_version_by_product_id(project_name, prod["id"])
+                v_num = last_v["version"] if last_v else 0
+                res.append({
+                    "name": prod.get("name"),
+                    "type": prod.get("productType"),
+                    "version": v_num
+                })
+            return res
         except Exception as e:
-            self.log.error(f"Error fetching last version for {folder_path}/{product_name}: {e}")
-            return None
+            self.log.error(f"Error fetching products for folder {folder_id}: {e}")
+            return []

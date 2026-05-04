@@ -283,6 +283,7 @@ class MainWindow(QMainWindow):
         self.ayon_panel.select_assigned_requested.connect(self._on_ayon_select_assigned)
         self.ayon_panel.clear_all_requested.connect(self._on_ayon_clear_all)
         self.ayon_panel.btn_refresh.clicked.connect(self.refresh_ayon)
+        self.ayon_panel.info_requested.connect(self._on_ayon_info_requested)
         self.h_splitter.addWidget(self.ayon_panel)
 
         # 3. Center Area (Thumbnails + Spreadsheet)
@@ -1161,6 +1162,29 @@ class MainWindow(QMainWindow):
         if affected:
             self.model.dataChanged.emit(self.model.index(0, 7), self.model.index(len(self.model.items)-1, 7))
             self.log_message(f"Cleared all AYON assignments from {affected} items.", "warning")
+
+    def _on_ayon_info_requested(self, folder_id):
+        """Lazy load products for the selected folder."""
+        project = self.top_bar.combo_project.currentText()
+        if not project: return
+        
+        if hasattr(self, "_prod_thread") and self._prod_thread.isRunning():
+            self._prod_thread.terminate()
+
+        class ProductThread(QThread):
+            finished = Signal(list)
+            def __init__(self, ayon, project, f_id):
+                super().__init__()
+                self.ayon = ayon
+                self.project = project
+                self.f_id = f_id
+            def run(self):
+                products = self.ayon.get_products_for_folder(self.project, self.f_id)
+                self.finished.emit(products)
+
+        self._prod_thread = ProductThread(self.ayon, project, folder_id)
+        self._prod_thread.finished.connect(self.ayon_panel.set_products)
+        self._prod_thread.start()
 
     def log_message(self, message, level="info"):
         """Log a message to both status bar and console."""
