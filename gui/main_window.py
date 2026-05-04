@@ -409,7 +409,8 @@ class MainWindow(QMainWindow):
             age_source=self.config.get("age_source", "Modification Date"),
             detect_sequences=self.config.get("detect_sequences", True),
             seq_thumb_frame=self.config.get("seq_thumb_frame", "Middle"),
-            extensions=self.config.get("extensions", {})
+            extensions=self.config.get("extensions", {}),
+            presets=self.config.get("presets", {})
         )
         self.scanner.finished.connect(lambda items: self.log_message(f"Scan complete. Found {len(items)} items.", "success"))
         self.scanner.finished.connect(self.model.add_items)
@@ -438,7 +439,8 @@ class MainWindow(QMainWindow):
             age_source=self.config.get("age_source", "Modification Date"),
             detect_sequences=self.config.get("detect_sequences", True),
             seq_thumb_frame=self.config.get("seq_thumb_frame", "Middle"),
-            extensions=self.config.get("extensions", {})
+            extensions=self.config.get("extensions", {}),
+            presets=self.config.get("presets", {})
         )
         self.scanner.finished.connect(self._on_rescan_finished)
         self.scanner.start()

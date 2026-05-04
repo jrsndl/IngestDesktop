@@ -4,7 +4,7 @@ from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex, Signal
 from PySide6.QtGui import QPixmap, QColor
 
 class ImageItem:
-    def __init__(self, file_path, label=None, version=1, category="Other"):
+    def __init__(self, file_path, label=None, version=1, category="Other", preset_name=None):
         self.file_path = file_path
         self.filename = os.path.basename(file_path)
         self.label = label or os.path.splitext(self.filename)[0]
@@ -21,6 +21,7 @@ class ImageItem:
         self.modification_time = 0
         self.age_minutes = 0 
         self.position = (0, 0) # (x, y)
+        self.preset_name = preset_name
 
 class ImageTableModel(QAbstractTableModel):
     data_changed = Signal()
@@ -63,6 +64,8 @@ class ImageTableModel(QAbstractTableModel):
             if col == 2: return item.label
             if col == 3: return item.category
             if col == 4: # Preset
+                if item.preset_name:
+                    return item.preset_name
                 cat = item.category
                 if cat.startswith("sequence"): cat = "Sequence"
                 return self.presets.get(cat, "-")
@@ -204,7 +207,9 @@ class ImageTableModel(QAbstractTableModel):
             if column == 0: return item.is_tagged
             if column == 2: return item.label
             if column == 3: return item.category
-            if column == 4: return self.presets.get(item.category, "")
+            if column == 4: 
+                if item.preset_name: return item.preset_name
+                return self.presets.get(item.category, "")
             if column == 5: return item.version
             if column == 6: return item.last_ayon_version or 0
             if column == 7: return item.age_minutes

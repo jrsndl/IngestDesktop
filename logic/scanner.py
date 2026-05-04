@@ -12,7 +12,8 @@ class ImageScanner(QThread):
 
     def __init__(self, directory, recursive=True, version_regex="_v(\\d+)", 
                  thumbnail_size=150, age_source="Modification Date",
-                 detect_sequences=True, seq_thumb_frame="Middle", extensions=None):
+                 detect_sequences=True, seq_thumb_frame="Middle", 
+                 extensions=None, presets=None):
         super().__init__()
         self.directory = directory
         self.recursive = recursive
@@ -22,6 +23,7 @@ class ImageScanner(QThread):
         self.detect_sequences = detect_sequences
         self.seq_thumb_frame = seq_thumb_frame
         self.extensions = extensions or {}
+        self.presets = presets or {}
         self._is_canceled = False
 
     def cancel(self):
@@ -99,6 +101,27 @@ class ImageScanner(QThread):
         total_units = len(groups) + len(videos) + len(others)
         current = 0
 
+        def match_preset(file_path, p_type):
+            p_list = self.presets.get(p_type, [])
+            for p in p_list:
+                f_by = p.get("Filter By", "Extension").lower()
+                f_str = p.get("Filter", "").lower()
+                if not f_str: continue
+                
+                if f_by == "extension":
+                    ext = os.path.splitext(file_path)[1].lower()
+                    if f_str.startswith("."):
+                        if ext == f_str: return p.get("Name")
+                    else:
+                        if ext == f".{f_str}": return p.get("Name")
+                elif f_by == "name":
+                    if f_str in os.path.basename(file_path).lower():
+                        return p.get("Name")
+                elif f_by == "path":
+                    if f_str in file_path.lower():
+                        return p.get("Name")
+            return None
+
         # 1. Process Image Groups (Stills and Sequences)
         for key, paths in groups.items():
             if self._is_canceled:
@@ -139,7 +162,10 @@ class ImageScanner(QThread):
                 label = os.path.splitext(os.path.basename(first_path))[0]
                 source_path = first_path
 
-            item = ImageItem(source_path, label=label, version=version, category=category)
+            p_type = "sequences" if len(paths) > 1 else "stills"
+            matched_preset = match_preset(first_path, p_type)
+
+            item = ImageItem(source_path, label=label, version=version, category=category, preset_name=matched_preset)
             self._fill_metadata(item, source_path)
             
             final_items.append(item)
@@ -152,7 +178,8 @@ class ImageScanner(QThread):
                 self.canceled.emit()
                 return
             
-            item = ImageItem(f, category="Video")
+            matched_preset = match_preset(f, "videos")
+            item = ImageItem(f, category="Video", preset_name=matched_preset)
             self._fill_metadata(item, f)
             final_items.append(item)
             current += 1
@@ -164,7 +191,8 @@ class ImageScanner(QThread):
                 self.canceled.emit()
                 return
             
-            item = ImageItem(f, category="Other")
+            matched_preset = match_preset(f, "other")
+            item = ImageItem(f, category="Other", preset_name=matched_preset)
             self._fill_metadata(item, f)
             final_items.append(item)
             current += 1
