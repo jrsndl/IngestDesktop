@@ -70,6 +70,21 @@ class PreferencesDialog(QDialog):
         self.general_layout.addStretch()
         self.tabs.addTab(self.general_tab, "General")
 
+        # 1.5 CSV Tab (Metadata output settings)
+        self.csv_tab = QWidget()
+        self.csv_layout = QVBoxLayout(self.csv_tab)
+        self.csv_form = QFormLayout()
+        
+        self.csv_delimiter = QLineEdit(self.config.get("csv_delimiter", ","))
+        self.csv_quotechar = QLineEdit(self.config.get("csv_quotechar", '"'))
+        
+        self.csv_form.addRow("CSV Delimiter:", self.csv_delimiter)
+        self.csv_form.addRow("CSV Quote Character:", self.csv_quotechar)
+        
+        self.csv_layout.addLayout(self.csv_form)
+        self.csv_layout.addStretch()
+        self.tabs.addTab(self.csv_tab, "CSV")
+
         # 2. GUI Tab (UI and Preview settings)
         self.gui_tab = QWidget()
         self.gui_layout = QVBoxLayout(self.gui_tab)
@@ -291,6 +306,8 @@ class PreferencesDialog(QDialog):
             "default_scan_folder": self.default_scan_folder.text(),
             "product_name": self.product_name.text(),
             "product_name_camel": self.product_name_camel.isChecked(),
+            "csv_delimiter": self.csv_delimiter.text(),
+            "csv_quotechar": self.csv_quotechar.text(),
             "low_res_size": self.low_res_size.value(),
             "high_res_size": self.high_res_size.value(),
             "presets": presets,
