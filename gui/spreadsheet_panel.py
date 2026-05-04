@@ -41,6 +41,9 @@ class SpreadsheetPanel(QWidget):
         self.btn_check_dup = QPushButton("Check duplicates")
         self.btn_tag_sel = QPushButton("Tag/Untag Selected")
         
+        self.btn_check_ver.clicked.connect(self.version_check_clicked.emit)
+        self.btn_check_dup.clicked.connect(self.check_duplicates_clicked.emit)
+        
         self.lbl_row_height = QLabel("Row Height:")
         self.slider_row_height = QSlider(Qt.Horizontal)
         self.slider_row_height.setRange(0, 100)

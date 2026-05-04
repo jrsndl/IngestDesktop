@@ -84,22 +84,27 @@ class AyonClient:
             self.log.error(f"Error fetching hierarchy for project {project_name}: {e}")
             return []
 
-    def get_products_for_folder(self, project_name, folder_id):
-        """Get all products and their latest versions for a folder."""
-        if not self.is_connected: return []
+    def get_last_versions(self, project_name, folder_ids):
+        """Fetch all products for multiple folders and return a map: (folder_id, prod_name, prod_type) -> last_version."""
+        if not self.is_connected or not folder_ids: return {}
         try:
-            products = list(ayon_api.get_products(project_name, folder_ids=[folder_id]))
-            res = []
+            products = list(ayon_api.get_products(project_name, folder_ids=folder_ids))
+            res = {}
             for prod in products:
-                # Get last version to show version number
+                # Get last version
                 last_v = ayon_api.get_last_version_by_product_id(project_name, prod["id"])
                 v_num = last_v["version"] if last_v else 0
-                res.append({
-                    "name": prod.get("name"),
-                    "type": prod.get("productType"),
-                    "version": v_num
-                })
+                f_id = str(prod["folderId"])
+                res[(f_id, prod["name"], prod.get("productType"))] = v_num
             return res
         except Exception as e:
-            self.log.error(f"Error fetching products for folder {folder_id}: {e}")
-            return []
+            self.log.error(f"Error fetching versions for folders {folder_ids}: {e}")
+            return {}
+
+    def get_products_for_folder(self, project_name, folder_id):
+        """Get all products and their latest versions for a folder."""
+        versions = self.get_last_versions(project_name, [folder_id])
+        res = []
+        for (f_id, name, p_type), v in versions.items():
+            res.append({"name": name, "type": p_type, "version": v})
+        return res

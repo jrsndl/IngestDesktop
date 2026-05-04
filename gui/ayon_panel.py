@@ -213,6 +213,26 @@ class AyonPanel(QWidget):
         
         self.all_products = [] # Cache for current selected task
 
+    def get_path_to_id_map(self):
+        """Build a map of ayon_path -> folder_id from the current tree."""
+        mapping = {}
+        def _recurse(parent_item):
+            for r in range(parent_item.rowCount()):
+                item = parent_item.child(r, 0)
+                if not item: continue
+                data = item.data(Qt.UserRole)
+                if data:
+                    # For folders
+                    if "path" in data and "id" in data:
+                        mapping[data["path"]] = str(data["id"])
+                    # For tasks, path is in folder_path
+                    elif "folder_path" in data and "folderId" in data:
+                        mapping[data["folder_path"]] = str(data["folderId"])
+                
+                _recurse(item)
+        _recurse(self.model.invisibleRootItem())
+        return mapping
+
     def set_hierarchy(self, root_folders):
         self.model.removeRows(0, self.model.rowCount())
         

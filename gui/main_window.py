@@ -302,6 +302,7 @@ class MainWindow(QMainWindow):
         self.spreadsheet.set_model(self.model)
         self.spreadsheet.btn_tag_sel.clicked.connect(self._on_tag_selection)
         self.spreadsheet.maximize_toggle_requested.connect(lambda: self.toggle_maximize("spreadsheet"))
+        self.spreadsheet.version_check_clicked.connect(self.perform_version_check)
         self.spreadsheet.label_action_requested.connect(self._on_label_action)
         self.v_splitter.addWidget(self.spreadsheet)
         
@@ -1194,6 +1195,71 @@ class MainWindow(QMainWindow):
         self._prod_thread = ProductThread(self.ayon, project, folder_id)
         self._prod_thread.finished.connect(self.ayon_panel.set_products)
         self._prod_thread.start()
+
+    def perform_version_check(self):
+        """Batch check current versions in AYON for tagged items."""
+        project = self.top_bar.combo_project.currentText()
+        if not project: return
+        
+        tagged_items = [item for item in self.model.items if item.is_tagged and item.ayon_path]
+        if not tagged_items: 
+            self.log_message("No tagged items with AYON paths to check.", "warning")
+            return
+        
+        path_map = self.ayon_panel.get_path_to_id_map()
+        folder_ids = set()
+        items_to_check = []
+        
+        for item in tagged_items:
+            # ayon_path is /Project/Folder/Task - we need the folder path
+            folder_path = "/".join(item.ayon_path.split("/")[:-1])
+            f_id = path_map.get(folder_path)
+            if f_id:
+                folder_ids.add(f_id)
+                prod_name = self.model._expand_string(self.model.product_name_template, item, use_global_camel=True)
+                items_to_check.append((item, f_id, prod_name))
+
+        if not folder_ids:
+            self.log_message("Could not resolve AYON folder IDs for selected paths.", "error")
+            return
+            
+        self.log_message(f"Checking AYON versions for {len(tagged_items)} items...")
+        
+        if hasattr(self, "_ver_thread") and self._ver_thread.isRunning():
+            self._ver_thread.terminate()
+
+        class VersionThread(QThread):
+            finished = Signal(dict)
+            def __init__(self, ayon, project, f_ids):
+                super().__init__()
+                self.ayon = ayon
+                self.project = project
+                self.f_ids = f_ids
+            def run(self):
+                versions = self.ayon.get_last_versions(self.project, self.f_ids)
+                self.finished.emit(versions)
+
+        self._ver_thread = VersionThread(self.ayon, project, list(folder_ids))
+        self._ver_thread.finished.connect(lambda v_map: self._on_versions_fetched(v_map, items_to_check))
+        self._ver_thread.start()
+
+    def _on_versions_fetched(self, v_map, items_to_check):
+        updated = 0
+        for item, f_id, prod_name in items_to_check:
+            # Key is (f_id, prod_name, prod_type)
+            last_v = v_map.get((f_id, prod_name, item.product_type))
+            if last_v is not None:
+                item.last_ayon_version = last_v
+                updated += 1
+            else:
+                item.last_ayon_version = 0 # Not found
+        
+        # Refresh Last Version (8) and Version (7) columns
+        self.model.dataChanged.emit(
+            self.model.index(0, 7), 
+            self.model.index(len(self.model.items)-1, 8)
+        )
+        self.log_message(f"Version check complete. Updated {updated} items.")
 
     def log_message(self, message, level="info"):
         """Log a message to both status bar and console."""

@@ -68,6 +68,12 @@ class ImageTableModel(QAbstractTableModel):
         if role == Qt.ForegroundRole:
             if not item.is_tagged:
                 return QColor("#ff4444")
+            
+            # Version conflict: if server version >= current version
+            if item.last_ayon_version is not None and item.last_ayon_version >= item.version:
+                if col in [7, 8]: # Version, Last Version
+                    return QColor("#ff8c00")
+                    
             # Dim non-editable text columns: Variant(3), Product Name(4), Category(5), Preset(6), Last Version(8), Age(9), Path(10)
             if col in [3, 4, 5, 6, 8, 9, 10]:
                 return QColor("#888888")
