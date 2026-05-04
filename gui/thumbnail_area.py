@@ -75,7 +75,10 @@ class ThumbnailItem(QGraphicsObject):
         painter.drawRect(thumb_rect.adjusted(-4, -4, 4, 4))
 
         # Inner Border (Tagging) - Half of base_w
-        tag_color = QColor("#558b2f") if self.data.is_tagged else QColor("#c62828")
+        if self.data.is_tagged:
+            tag_color = QColor("#76ff03") if self.data.ayon_path else QColor("#558b2f")
+        else:
+            tag_color = QColor("#c62828")
         tag_pen = QPen(tag_color, base_w // 2)
         tag_pen.setCosmetic(True)
         painter.setPen(tag_pen)
