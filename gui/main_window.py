@@ -324,12 +324,24 @@ class MainWindow(QMainWindow):
         self.main_layout.addWidget(self.h_splitter, 1)
         self.main_layout.addSpacing(5)
 
-        # 5. Big Ingest Button
+        # 5. Big Ingest Button row
+        ingest_row_layout = QHBoxLayout()
+        ingest_row_layout.setSpacing(2)
+        
         self.btn_ingest_big = QPushButton("Ingest Tagged to AYON")
         self.btn_ingest_big.setObjectName("IngestButton")
         self.btn_ingest_big.setMinimumHeight(50)
         self.btn_ingest_big.clicked.connect(self.perform_ingest)
-        self.main_layout.addWidget(self.btn_ingest_big, 0)
+        ingest_row_layout.addWidget(self.btn_ingest_big, 1)
+        
+        self.btn_toggle_log = QPushButton("Log")
+        self.btn_toggle_log.setCheckable(True)
+        self.btn_toggle_log.setFixedSize(50, 50)
+        self.btn_toggle_log.setStyleSheet("font-size: 10px; color: #888888;")
+        self.btn_toggle_log.clicked.connect(self._toggle_log)
+        ingest_row_layout.addWidget(self.btn_toggle_log)
+        
+        self.main_layout.addLayout(ingest_row_layout)
         
         # 6. Log Console (expandable)
         self.log_console = QPlainTextEdit()
@@ -355,14 +367,6 @@ class MainWindow(QMainWindow):
         
         # Initial config
         self.load_config()
-
-        self.btn_toggle_log = QPushButton("Log History")
-        self.btn_toggle_log.setFlat(True)
-        self.btn_toggle_log.setCheckable(True)
-        self.btn_toggle_log.setFixedHeight(14)
-        self.btn_toggle_log.setStyleSheet("color: #888888; text-decoration: underline; font-size: 9px;")
-        self.btn_toggle_log.clicked.connect(self._toggle_log)
-        self.statusBar().addPermanentWidget(self.btn_toggle_log)
 
         # 6. Select All Shortcut
         self.shortcut_all = QShortcut(QKeySequence("Ctrl+A"), self)
