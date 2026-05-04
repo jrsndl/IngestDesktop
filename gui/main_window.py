@@ -195,6 +195,7 @@ class HelpOverlay(QWidget):
         y = draw_shortcut(painter, keys_rect, "{head} / {tail}", "Handle Start / End from preset", y)
         y = draw_shortcut(painter, keys_rect, "{slate_exists}", "True/False based on preset", y)
         y = draw_shortcut(painter, keys_rect, "{fps}", "FPS from preset", y)
+        y = draw_shortcut(painter, keys_rect, "{version}", "Current version from spreadsheet", y)
         
         # Footer
         painter.setPen(QColor(120, 120, 120))

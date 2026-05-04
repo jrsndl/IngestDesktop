@@ -299,6 +299,7 @@ class ImageTableModel(QAbstractTableModel):
             "{fps}": str(p_data.get("FPS", "")),
             "{repre_color}": p_data.get("Colorspace", ""),
             "{repre_tags}": p_data.get("Tags", ""),
+            "{version}": str(item.version),
         }
         
         import re
