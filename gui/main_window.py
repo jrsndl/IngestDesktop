@@ -244,6 +244,8 @@ class MainWindow(QMainWindow):
 
         # Logic
         self.model = ImageTableModel()
+        self.model.product_name_template = self.config.get("product_name", "{label}")
+        self.model.product_name_camel = self.config.get("product_name_camel", True)
         
         # Clean credentials
         server_url = self.config.get("ayon_server_url", "").strip()
@@ -656,6 +658,8 @@ class MainWindow(QMainWindow):
                 old_regex != self.config.get("version_regex") or
                 old_exts != new_exts
             )
+            self.model.product_name_template = self.config.get("product_name", "{label}")
+            self.model.product_name_camel = self.config.get("product_name_camel", True)
             
             if scan_affected and self.config.get("last_source_folder"):
                 self.start_scan(self.config["last_source_folder"])
@@ -681,11 +685,11 @@ class MainWindow(QMainWindow):
             source_time = item.modification_time if source == "Modification Date" else item.creation_time
             item.age_minutes = int((current_time - source_time) / 60)
         
-        # Notify the model that the age column (index 5) has changed
+        # Notify the model that the age column (index 9) has changed
         if self.model.items:
             self.model.dataChanged.emit(
-                self.model.index(0, 5), 
-                self.model.index(len(self.model.items)-1, 5)
+                self.model.index(0, 9), 
+                self.model.index(len(self.model.items)-1, 9)
             )
 
     def save_config(self):
@@ -1102,9 +1106,9 @@ class MainWindow(QMainWindow):
             item = self.model.items[row]
             item.ayon_path = ayon_path
             
-        # Notify the model that the AYON Path column (7) has changed for these rows
-        start_idx = self.model.index(min(selected_rows), 7)
-        end_idx = self.model.index(max(selected_rows), 7)
+        # Notify the model that the AYON Path column (10) has changed for these rows
+        start_idx = self.model.index(min(selected_rows), 10)
+        end_idx = self.model.index(max(selected_rows), 10)
         self.model.dataChanged.emit(start_idx, end_idx)
         
         # Feedback
@@ -1164,7 +1168,8 @@ class MainWindow(QMainWindow):
                 affected += 1
         
         if affected:
-            self.model.dataChanged.emit(self.model.index(0, 7), self.model.index(len(self.model.items)-1, 7))
+            # Column 10 is AYON Path
+            self.model.dataChanged.emit(self.model.index(0, 10), self.model.index(len(self.model.items)-1, 10))
             self.log_message(f"Cleared all AYON assignments from {affected} items.", "warning")
 
     def _on_ayon_info_requested(self, folder_id):

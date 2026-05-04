@@ -28,6 +28,9 @@ class PreferencesDialog(QDialog):
         
         # Scanner Settings
         self.version_regex = QLineEdit(self.config.get("version_regex", "_v(\\d+)"))
+        self.product_name = QLineEdit(self.config.get("product_name", "{label}"))
+        self.product_name_camel = QCheckBox("camelCase")
+        self.product_name_camel.setChecked(self.config.get("product_name_camel", True))
         
         self.age_source = QComboBox()
         self.age_source.addItems(["Modification Date", "Creation Date"])
@@ -57,6 +60,8 @@ class PreferencesDialog(QDialog):
         self.form.addRow("AYON API Key:", self.api_key)
         self.form.addRow("Default Scan Folder:", self.scan_folder_layout)
         self.form.addRow("Version Regex:", self.version_regex)
+        self.form.addRow("Product Name Template:", self.product_name)
+        self.form.addRow("Product Name camelCase:", self.product_name_camel)
         self.form.addRow("Age Calculation Source:", self.age_source)
         self.form.addRow("Sequence Detection:", self.detect_sequences)
         self.form.addRow("AYON Console Path:", self.console_layout)
@@ -284,6 +289,8 @@ class PreferencesDialog(QDialog):
             "seq_thumb_frame": self.seq_thumb_frame.currentText(),
             "traypublisher_path": self.traypublisher_path.text(),
             "default_scan_folder": self.default_scan_folder.text(),
+            "product_name": self.product_name.text(),
+            "product_name_camel": self.product_name_camel.isChecked(),
             "low_res_size": self.low_res_size.value(),
             "high_res_size": self.high_res_size.value(),
             "presets": presets,

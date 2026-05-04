@@ -35,7 +35,7 @@ class ImageTableModel(QAbstractTableModel):
     data_changed = Signal()
 
     COLUMNS = [
-        "Tag", "Thumbnail", "Label", "Category", "Preset", "Variant", "Version", 
+        "Tag", "Thumbnail", "Label", "Product Name", "Category", "Preset", "Variant", "Version", 
         "Last Version", "Age", "AYON Path"
     ]
 
@@ -45,6 +45,8 @@ class ImageTableModel(QAbstractTableModel):
         self.presets = {} # category -> preset_name
         self.age_unit = "minutes" # minutes, hours, days
         self.label_allowed_regex = "^[a-zA-Z0-9_\\-\\.\\s]*$"
+        self.product_name_template = "{label}"
+        self.product_name_camel = True
 
     def set_presets(self, presets):
         self.presets = presets
@@ -73,15 +75,17 @@ class ImageTableModel(QAbstractTableModel):
 
         if role in [Qt.DisplayRole, Qt.EditRole]:
             if col == 2: return item.label
-            if col == 3: return item.category
-            if col == 4: # Preset
+            if col == 3: # Product Name
+                return self._expand_string(self.product_name_template, item, use_global_camel=True)
+            if col == 4: return item.category
+            if col == 5: # Preset
                 return item.preset_name if item.preset_name else "-"
-            if col == 5: # Variant
+            if col == 6: # Variant
                 return self._expand_string(item.variant, item)
-            if col == 6: return str(item.version)
+            if col == 7: return str(item.version)
             if role == Qt.DisplayRole:
-                if col == 7: return str(item.last_ayon_version) if item.last_ayon_version else "-"
-                if col == 8: 
+                if col == 8: return str(item.last_ayon_version) if item.last_ayon_version else "-"
+                if col == 9: 
                     m = item.age_minutes
                     if self.age_unit == "minutes": return f"{m}m"
                     if self.age_unit == "hours": return f"{m//60}h"
@@ -91,7 +95,7 @@ class ImageTableModel(QAbstractTableModel):
                     if m < 60: return f"{m}m"
                     if m < 1440: return f"{m//60}h"
                     return f"{m//1440}d"
-                if col == 9: return item.ayon_path
+                if col == 10: return item.ayon_path
             else:
                 # For EditRole in non-label/version columns
                 return None
@@ -154,7 +158,7 @@ class ImageTableModel(QAbstractTableModel):
         flags = Qt.ItemIsEnabled | Qt.ItemIsSelectable
         if index.column() == 0:
             flags |= Qt.ItemIsUserCheckable
-        if index.column() in [2, 5]: # Label, Version
+        if index.column() in [2, 7]: # Label, Version
             flags |= Qt.ItemIsEditable
             
         return flags
@@ -217,22 +221,23 @@ class ImageTableModel(QAbstractTableModel):
         def get_value(item):
             if column == 0: return item.is_tagged
             if column == 2: return item.label
-            if column == 3: return item.category
-            if column == 4: 
+            if column == 3: return self._expand_string(self.product_name_template, item, use_global_camel=True)
+            if column == 4: return item.category
+            if column == 5: 
                 return item.preset_name or ""
-            if column == 5:
+            if column == 6:
                 return self._expand_string(item.variant, item)
-            if column == 6: return item.version
-            if column == 7: return item.last_ayon_version or 0
-            if column == 8: return item.age_minutes
-            if column == 9: return item.ayon_path
+            if column == 7: return item.version
+            if column == 8: return item.last_ayon_version or 0
+            if column == 9: return item.age_minutes
+            if column == 10: return item.ayon_path
             return ""
 
         reverse = (order == Qt.DescendingOrder)
         self.items.sort(key=get_value, reverse=reverse)
         self.layoutChanged.emit()
 
-    def _expand_string(self, text, item):
+    def _expand_string(self, text, item, use_global_camel=False):
         if not text:
             return ""
             
@@ -268,8 +273,10 @@ class ImageTableModel(QAbstractTableModel):
         def replacer(match):
             key = match.group(0)
             val = replacements.get(key, key)
-            # CamelCase: if not at index 0, capitalize first char
-            if item.camel_case and match.start() > 0 and val:
+            # CamelCase logic
+            camel = self.product_name_camel if use_global_camel else item.camel_case
+            
+            if camel and match.start() > 0 and val:
                 val = val[0].upper() + val[1:]
             return val
 
