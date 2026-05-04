@@ -72,15 +72,15 @@ def evaluate_preset(file_path, presets, p_type, label=None):
         
         if f_by == "extension":
             ext = os.path.splitext(file_path)[1].lower().lstrip(".")
-            if fnmatch.fnmatch(ext, f_str): return p.get("Name")
+            if fnmatch.fnmatch(ext, f_str): return p
         elif f_by == "name":
             # name excluding extension
             name = os.path.splitext(os.path.basename(file_path))[0].lower()
-            if fnmatch.fnmatch(name, f_str): return p.get("Name")
+            if fnmatch.fnmatch(name, f_str): return p
         elif f_by == "path":
             # path excluding file name, use forward slashes
             path_dir = os.path.dirname(file_path).replace("\\", "/").lower()
-            if fnmatch.fnmatch(path_dir, f_str): return p.get("Name")
+            if fnmatch.fnmatch(path_dir, f_str): return p
         elif f_by == "label" and label:
-            if fnmatch.fnmatch(label.lower(), f_str): return p.get("Name")
+            if fnmatch.fnmatch(label.lower(), f_str): return p
     return None

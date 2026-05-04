@@ -4,7 +4,7 @@ from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex, Signal
 from PySide6.QtGui import QPixmap, QColor
 
 class ImageItem:
-    def __init__(self, file_path, label=None, version=1, category="Other", preset_name=None):
+    def __init__(self, file_path, label=None, version=1, category="Other", preset_name=None, variant=None):
         self.file_path = file_path
         self.filename = os.path.basename(file_path)
         self.label = label or os.path.splitext(self.filename)[0]
@@ -22,12 +22,13 @@ class ImageItem:
         self.age_minutes = 0 
         self.position = (0, 0) # (x, y)
         self.preset_name = preset_name
+        self.variant = variant
 
 class ImageTableModel(QAbstractTableModel):
     data_changed = Signal()
 
     COLUMNS = [
-        "Tag", "Thumbnail", "Label", "Category", "Preset", "Version", 
+        "Tag", "Thumbnail", "Label", "Category", "Preset", "Variant", "Version", 
         "Last AYON Version", "Age", "AYON Path"
     ]
 
@@ -65,9 +66,11 @@ class ImageTableModel(QAbstractTableModel):
             if col == 3: return item.category
             if col == 4: # Preset
                 return item.preset_name if item.preset_name else "-"
-            if col == 5: return str(item.version)
+            if col == 5: # Variant
+                return item.variant if item.variant else "-"
+            if col == 6: return str(item.version)
             if role == Qt.DisplayRole:
-                if col == 6: return str(item.last_ayon_version) if item.last_ayon_version else "-"
+                if col == 7: return str(item.last_ayon_version) if item.last_ayon_version else "-"
                 if col == 7: 
                     m = item.age_minutes
                     if self.age_unit == "minutes": return f"{m}m"
@@ -205,10 +208,12 @@ class ImageTableModel(QAbstractTableModel):
             if column == 3: return item.category
             if column == 4: 
                 return item.preset_name or ""
-            if column == 5: return item.version
-            if column == 6: return item.last_ayon_version or 0
-            if column == 7: return item.age_minutes
-            if column == 8: return item.ayon_path
+            if column == 5:
+                return item.variant or ""
+            if column == 6: return item.version
+            if column == 7: return item.last_ayon_version or 0
+            if column == 8: return item.age_minutes
+            if column == 9: return item.ayon_path
             return ""
 
         reverse = (order == Qt.DescendingOrder)

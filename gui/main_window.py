@@ -498,7 +498,9 @@ class MainWindow(QMainWindow):
             elif cat == "Still": p_type = "stills"
             elif cat == "Video": p_type = "videos"
             
-            item.preset_name = evaluate_preset(item.file_path, presets, p_type, label=item.label)
+            matched_p = evaluate_preset(item.file_path, presets, p_type, label=item.label)
+            item.preset_name = matched_p.get("Name") if matched_p else None
+            item.variant = matched_p.get("Variant") if matched_p else None
             
         self.model.layoutChanged.emit()
 
