@@ -69,9 +69,12 @@ class SpreadsheetPanel(QWidget):
         self.table.verticalHeader().setDefaultAlignment(Qt.AlignCenter)
         self.table.verticalHeader().setStyleSheet("font-size: 9px; color: #888888;")
         self.table.verticalHeader().setFixedWidth(25)
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.layout.addWidget(self.table)
+        
+        # Header Context Menu
+        self.table.horizontalHeader().setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table.horizontalHeader().customContextMenuRequested.connect(self._on_header_context_menu)
         
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._on_context_menu)
@@ -178,3 +181,32 @@ class SpreadsheetPanel(QWidget):
         menu.addAction(search_replace_action)
         
         menu.exec(self.table.viewport().mapToGlobal(pos))
+
+    def _on_header_context_menu(self, pos):
+        menu = QMenu(self)
+        model = self.table.model()
+        if not model: return
+        
+        # Add "Show All" action
+        show_all = QAction("Show All Columns", self)
+        show_all.triggered.connect(self._show_all_columns)
+        menu.addAction(show_all)
+        menu.addSeparator()
+        
+        for col in range(model.columnCount()):
+            header_text = model.headerData(col, Qt.Horizontal)
+            if not header_text: continue
+            
+            action = QAction(header_text, self)
+            action.setCheckable(True)
+            action.setChecked(not self.table.isColumnHidden(col))
+            action.toggled.connect(lambda checked, c=col: self.table.setColumnHidden(c, not checked))
+            menu.addAction(action)
+            
+        menu.exec(self.table.horizontalHeader().mapToGlobal(pos))
+
+    def _show_all_columns(self):
+        model = self.table.model()
+        if not model: return
+        for col in range(model.columnCount()):
+            self.table.setColumnHidden(col, False)
