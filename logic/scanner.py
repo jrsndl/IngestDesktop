@@ -148,9 +148,13 @@ class ImageScanner(QThread):
             variant = matched_p.get("Variant") if matched_p else None
             product_type = matched_p.get("Product Type") if matched_p else None
             camel_case = matched_p.get("CamelCase", True) if matched_p else True
+            representation = matched_p.get("Representation", "{extension}") if matched_p else "{extension}"
+            colorspace = matched_p.get("Colorspace", "sRGB") if matched_p else "sRGB"
+            rep_tags = matched_p.get("Tags", "passing") if matched_p else "passing"
 
             item = ImageItem(source_path, label=label, version=version, category=category, 
-                             preset_name=preset_name, variant=variant, product_type=product_type, camel_case=camel_case)
+                             preset_name=preset_name, variant=variant, product_type=product_type, camel_case=camel_case,
+                             representation=representation, colorspace=colorspace, rep_tags=rep_tags)
             self._fill_metadata(item, source_path)
             
             final_items.append(item)
@@ -168,7 +172,11 @@ class ImageScanner(QThread):
             variant = matched_p.get("Variant") if matched_p else None
             product_type = matched_p.get("Product Type") if matched_p else None
             camel_case = matched_p.get("CamelCase", True) if matched_p else True
-            item = ImageItem(f, category="Video", preset_name=preset_name, variant=variant, product_type=product_type, camel_case=camel_case)
+            representation = matched_p.get("Representation", "{extension}") if matched_p else "{extension}"
+            colorspace = matched_p.get("Colorspace", "sRGB") if matched_p else "sRGB"
+            rep_tags = matched_p.get("Tags", "passing") if matched_p else "passing"
+            item = ImageItem(f, category="Video", preset_name=preset_name, variant=variant, product_type=product_type, camel_case=camel_case,
+                             representation=representation, colorspace=colorspace, rep_tags=rep_tags)
             self._fill_metadata(item, f)
             final_items.append(item)
             current += 1
@@ -185,7 +193,11 @@ class ImageScanner(QThread):
             variant = matched_p.get("Variant") if matched_p else None
             product_type = matched_p.get("Product Type") if matched_p else None
             camel_case = matched_p.get("CamelCase", True) if matched_p else True
-            item = ImageItem(f, category="Other", preset_name=preset_name, variant=variant, product_type=product_type, camel_case=camel_case)
+            representation = matched_p.get("Representation", "{extension}") if matched_p else "{extension}"
+            colorspace = matched_p.get("Colorspace", "sRGB") if matched_p else "sRGB"
+            rep_tags = matched_p.get("Tags", "passing") if matched_p else "passing"
+            item = ImageItem(f, category="Other", preset_name=preset_name, variant=variant, product_type=product_type, camel_case=camel_case,
+                             representation=representation, colorspace=colorspace, rep_tags=rep_tags)
             self._fill_metadata(item, f)
             final_items.append(item)
             current += 1

@@ -5,7 +5,8 @@ from PySide6.QtGui import QPixmap, QColor
 
 class ImageItem:
     def __init__(self, file_path, label=None, version=1, category="Other", 
-                 preset_name=None, variant=None, product_type=None, camel_case=True):
+                 preset_name=None, variant=None, product_type=None, camel_case=True,
+                 representation=None, colorspace=None, rep_tags=None):
         self.file_path = file_path
         self.filename = os.path.basename(file_path)
         self.label = label or os.path.splitext(self.filename)[0]
@@ -26,6 +27,9 @@ class ImageItem:
         self.variant = variant
         self.product_type = product_type
         self.camel_case = camel_case
+        self.representation = representation
+        self.colorspace = colorspace
+        self.rep_tags = rep_tags
 
 class ImageTableModel(QAbstractTableModel):
     data_changed = Signal()
@@ -70,7 +74,7 @@ class ImageTableModel(QAbstractTableModel):
             if col == 4: # Preset
                 return item.preset_name if item.preset_name else "-"
             if col == 5: # Variant
-                return self._expand_variant(item)
+                return self._expand_string(item.variant, item)
             if col == 6: return str(item.version)
             if role == Qt.DisplayRole:
                 if col == 7: return str(item.last_ayon_version) if item.last_ayon_version else "-"
@@ -214,7 +218,7 @@ class ImageTableModel(QAbstractTableModel):
             if column == 4: 
                 return item.preset_name or ""
             if column == 5:
-                return self._expand_variant(item)
+                return self._expand_string(item.variant, item)
             if column == 6: return item.version
             if column == 7: return item.last_ayon_version or 0
             if column == 8: return item.age_minutes
@@ -225,12 +229,10 @@ class ImageTableModel(QAbstractTableModel):
         self.items.sort(key=get_value, reverse=reverse)
         self.layoutChanged.emit()
 
-    def _expand_variant(self, item):
-        if not item.variant:
-            return "-"
+    def _expand_string(self, text, item):
+        if not text:
+            return ""
             
-        variant = item.variant
-        
         # Parse AYON path
         # Example: /Project/FolderA/FolderB/Task
         ayon_parts = [p for p in item.ayon_path.split("/") if p]
@@ -253,7 +255,8 @@ class ImageTableModel(QAbstractTableModel):
             "{folder_name}": folder_name,
             "{parent_folder}": parent_folder,
             "{label}": item.label or "",
-            "{file_name}": os.path.splitext(os.path.basename(item.file_path))[0]
+            "{file_name}": os.path.splitext(os.path.basename(item.file_path))[0],
+            "{extension}": os.path.splitext(item.file_path)[1].lower().lstrip(".")
         }
         
         import re
@@ -267,5 +270,5 @@ class ImageTableModel(QAbstractTableModel):
                 val = val[0].upper() + val[1:]
             return val
 
-        res = re.sub(pattern, replacer, variant)
+        res = re.sub(pattern, replacer, text)
         return res

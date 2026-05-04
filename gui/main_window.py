@@ -189,6 +189,7 @@ class HelpOverlay(QWidget):
         y = draw_shortcut(painter, keys_rect, "{parent_folder}", "Folder name above the last folder", y)
         y = draw_shortcut(painter, keys_rect, "{label}", "Current label (including your edits)", y)
         y = draw_shortcut(painter, keys_rect, "{file_name}", "Raw filename without extension", y)
+        y = draw_shortcut(painter, keys_rect, "{extension}", "Raw file extension without dot", y)
         
         # Footer
         painter.setPen(QColor(120, 120, 120))
@@ -520,6 +521,9 @@ class MainWindow(QMainWindow):
             item.variant = matched_p.get("Variant") if matched_p else None
             item.product_type = matched_p.get("Product Type") if matched_p else None
             item.camel_case = matched_p.get("CamelCase", True) if matched_p else True
+            item.representation = matched_p.get("Representation", "{extension}") if matched_p else "{extension}"
+            item.colorspace = matched_p.get("Colorspace", "sRGB") if matched_p else "sRGB"
+            item.rep_tags = matched_p.get("Tags", "passing") if matched_p else "passing"
             
         self.model.layoutChanged.emit()
 

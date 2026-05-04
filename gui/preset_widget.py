@@ -114,6 +114,18 @@ class PresetWidget(QFrame):
         self.slate_exists = QCheckBox("Slate Exists")
         self.add_row("", self.slate_exists)
 
+        # 9. Representation
+        self.representation = QLineEdit()
+        self.add_row("Representation:", self.representation)
+        
+        # 10. Colorspace
+        self.colorspace = QLineEdit()
+        self.add_row("Colorspace:", self.colorspace)
+        
+        # 11. Tags
+        self.rep_tags = QLineEdit()
+        self.add_row("Rep. Tags:", self.rep_tags)
+
         self.main_layout.addWidget(self.content_widget)
         self.content_widget.hide()
 
@@ -165,6 +177,9 @@ class PresetWidget(QFrame):
             self.variant.setText(data.get("Variant", ""))
             self.camel_case.setChecked(data.get("CamelCase", True))
             self.fps.setValue(data.get("FPS", 24.0))
+            self.representation.setText(data.get("Representation", "{extension}"))
+            self.colorspace.setText(data.get("Colorspace", "sRGB"))
+            self.rep_tags.setText(data.get("Tags", "passing"))
             self.handle_start.setValue(data.get("Handle Start", 0))
             self.handle_end.setValue(data.get("Handle End", 0))
             self.slate_exists.setChecked(data.get("Slate Exists", False))
@@ -230,6 +245,9 @@ class PresetWidget(QFrame):
         self.variant.setText(d.get("Variant", ""))
         self.camel_case.setChecked(d.get("CamelCase", True))
         self.fps.setValue(d.get("FPS", 24.0))
+        self.representation.setText(d.get("Representation", "{extension}"))
+        self.colorspace.setText(d.get("Colorspace", "sRGB"))
+        self.rep_tags.setText(d.get("Tags", "passing"))
         self.handle_start.setValue(d.get("Handle Start", 0))
         self.handle_end.setValue(d.get("Handle End", 0))
         self.slate_exists.setChecked(d.get("Slate Exists", False))
@@ -243,6 +261,9 @@ class PresetWidget(QFrame):
             "Product Type": self.product_type.currentText(),
             "Variant": self.variant.text(),
             "CamelCase": self.camel_case.isChecked(),
+            "Representation": self.representation.text(),
+            "Colorspace": self.colorspace.text(),
+            "Tags": self.rep_tags.text(),
             "FPS": self.fps.value(),
             "Handle Start": self.handle_start.value(),
             "Handle End": self.handle_end.value(),
