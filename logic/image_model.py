@@ -64,11 +64,7 @@ class ImageTableModel(QAbstractTableModel):
             if col == 2: return item.label
             if col == 3: return item.category
             if col == 4: # Preset
-                if item.preset_name:
-                    return item.preset_name
-                cat = item.category
-                if cat.startswith("sequence"): cat = "Sequence"
-                return self.presets.get(cat, "-")
+                return item.preset_name if item.preset_name else "-"
             if col == 5: return str(item.version)
             if role == Qt.DisplayRole:
                 if col == 6: return str(item.last_ayon_version) if item.last_ayon_version else "-"
@@ -208,8 +204,7 @@ class ImageTableModel(QAbstractTableModel):
             if column == 2: return item.label
             if column == 3: return item.category
             if column == 4: 
-                if item.preset_name: return item.preset_name
-                return self.presets.get(item.category, "")
+                return item.preset_name or ""
             if column == 5: return item.version
             if column == 6: return item.last_ayon_version or 0
             if column == 7: return item.age_minutes
