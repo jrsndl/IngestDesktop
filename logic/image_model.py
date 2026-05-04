@@ -36,7 +36,7 @@ class ImageTableModel(QAbstractTableModel):
 
     COLUMNS = [
         "Tag", "Thumbnail", "Label", "Category", "Preset", "Variant", "Version", 
-        "Last AYON Version", "Age", "AYON Path"
+        "Last Version", "Age", "AYON Path"
     ]
 
     def __init__(self, parent=None):
