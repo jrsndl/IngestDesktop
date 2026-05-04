@@ -330,19 +330,20 @@ class MainWindow(QMainWindow):
         # 6. Log Console (expandable)
         self.log_console = QPlainTextEdit()
         self.log_console.setReadOnly(True)
-        self.log_console.setMaximumHeight(80)
+        self.log_console.setMaximumHeight(50)
         self.log_console.setStyleSheet("""
             QPlainTextEdit {
                 background-color: #0c0c0c; 
                 color: #cccccc; 
                 font-family: Consolas, monospace; 
-                font-size: 10px;
+                font-size: 9px;
                 border: none;
                 padding: 0px;
             }
         """)
         self.log_console.hide() # Hide by default for extra compactness
         self.main_layout.addWidget(self.log_console, 0)
+        self.main_layout.setSpacing(2)
         
         # 7. Help Overlay
         self.help_overlay = HelpOverlay(self)
