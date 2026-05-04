@@ -245,6 +245,8 @@ class MainWindow(QMainWindow):
         self.config = self.load_config()
 
         # Logic
+        self.model = ImageTableModel()
+        self.model.product_name_template = self.config.get("product_name", "{label}")
         self.model.product_name_camel = self.config.get("product_name_camel", True)
         
         self.csv_preview_model = CSVPreviewModel(self.model, self.config)
