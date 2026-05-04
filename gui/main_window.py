@@ -82,64 +82,102 @@ class HelpOverlay(QWidget):
         painter.setRenderHint(QPainter.Antialiasing)
         
         # Dim background
-        painter.setBrush(QColor(0, 0, 0, 200))
+        painter.setBrush(QColor(0, 0, 0, 170))
         painter.setPen(Qt.NoPen)
         painter.drawRect(self.rect())
         
-        # Content box
-        box_width = 500
-        box_height = 500
+        # Main Box
+        box_width = 650
+        box_height = 550
         box_rect = QRect((self.width() - box_width) // 2, (self.height() - box_height) // 2, box_width, box_height)
         
-        painter.setBrush(QColor(30, 30, 30))
+        # Background with border
+        painter.setBrush(QColor(25, 25, 25, 250))
         painter.setPen(QColor(80, 80, 80))
-        painter.drawRoundedRect(box_rect, 10, 10)
+        painter.drawRoundedRect(box_rect, 4, 4)
         
-        # Text
+        # Header
+        header_rect = QRect(box_rect.left(), box_rect.top(), box_rect.width(), 60)
+        painter.setBrush(QColor(40, 40, 40))
+        painter.drawRoundedRect(header_rect, 4, 4)
+        
         painter.setPen(QColor(255, 255, 255))
         font = painter.font()
-        font.setPointSize(16)
+        font.setPointSize(13)
         font.setBold(True)
         painter.setFont(font)
+        painter.drawText(header_rect.adjusted(25, 0, 0, 0), Qt.AlignVCenter | Qt.AlignLeft, "INGESTDESKTOP KEYBOARD GUIDE")
         
-        title_rect = QRect(box_rect.left(), box_rect.top() + 20, box_rect.width(), 40)
-        painter.drawText(title_rect, Qt.AlignCenter, "Keyboard Shortcuts")
+        # Columns
+        col1_rect = box_rect.adjusted(30, 80, -box_width//2 - 10, -50)
+        col2_rect = box_rect.adjusted(box_width//2 + 10, 80, -30, -50)
         
-        font.setPointSize(10)
-        font.setBold(False)
+        def draw_shortcut(p, rect, key, desc, y_off):
+            f = p.font()
+            f.setBold(True)
+            f.setPointSize(9)
+            p.setFont(f)
+            p.setPen(QColor(180, 180, 255))
+            p.drawText(rect.adjusted(0, y_off, 0, 0), Qt.AlignLeft, key)
+            
+            f.setBold(False)
+            p.setFont(f)
+            p.setPen(QColor(180, 180, 180))
+            p.drawText(rect.adjusted(120, y_off, 0, 0), Qt.AlignLeft, desc)
+            return y_off + 25
+
+        # Col 1
+        y = 0
+        painter.setPen(QColor(100, 100, 100))
+        font.setBold(True)
         painter.setFont(font)
+        painter.drawText(col1_rect.adjusted(0, y, 0, 0), Qt.AlignLeft, "GENERAL")
+        y += 30
+        y = draw_shortcut(painter, col1_rect, "Ctrl + A", "Select All (contextual)", y)
+        y = draw_shortcut(painter, col1_rect, "F2", "Rename selected item", y)
+        y = draw_shortcut(painter, col1_rect, "Space", "Toggle Maximize view", y)
+        y = draw_shortcut(painter, col1_rect, "Esc", "Close this guide", y)
         
-        content_text = """
-GENERAL CONTROLS:
-  Ctrl + A        Select All (contextual based on mouse)
-  F2              Rename selected item
-  Space           Toggle Maximize view
-  Esc             Close this help
+        y += 25
+        painter.setPen(QColor(100, 100, 100))
+        painter.drawText(col1_rect.adjusted(0, y, 0, 0), Qt.AlignLeft, "THUMBNAILS")
+        y += 30
+        y = draw_shortcut(painter, col1_rect, "+ / =", "Zoom In", y)
+        y = draw_shortcut(painter, col1_rect, "-", "Zoom Out", y)
+        y = draw_shortcut(painter, col1_rect, "Z", "Reset Zoom", y)
+        y = draw_shortcut(painter, col1_rect, "F", "Focus Selection", y)
+        y = draw_shortcut(painter, col1_rect, "Ctrl+Wheel", "Zoom at cursor", y)
 
-THUMBNAIL VIEW:
-  + / =           Zoom In
-  -               Zoom Out
-  Z               Zoom to Fit
-  F               Focus Selection
-  Ctrl + Wheel    Zoom at cursor position
-
-SPREADSHEET VIEW:
-  Double Click    Edit cell (Label, Category, Version)
-  Enter           Submit edit
-  Esc             Cancel edit
-
-AYON HIERARCHY:
-  Right Click     Assignment / Selection Menu
-  Click Header    Sort by column (Name, Status, etc.)
-
-FOLDER FILTER:
-  Click Folder    Select all files in that folder
-        """
-        text_rect = box_rect.adjusted(30, 70, -30, -20)
-        painter.drawText(text_rect, Qt.AlignLeft | Qt.AlignTop, content_text.strip())
+        # Col 2
+        y = 0
+        painter.setPen(QColor(100, 100, 100))
+        font.setBold(True)
+        painter.setFont(font)
+        painter.drawText(col2_rect.adjusted(0, y, 0, 0), Qt.AlignLeft, "SPREADSHEET")
+        y += 30
+        y = draw_shortcut(painter, col2_rect, "Dbl Click", "Edit cell", y)
+        y = draw_shortcut(painter, col2_rect, "Enter", "Submit changes", y)
+        y = draw_shortcut(painter, col2_rect, "Esc", "Cancel edit", y)
         
-        painter.setPen(QColor(150, 150, 150))
-        painter.drawText(box_rect.adjusted(0, 0, 0, -15), Qt.AlignBottom | Qt.AlignCenter, "Click anywhere or press ESC to close")
+        y += 25
+        painter.setPen(QColor(100, 100, 100))
+        painter.drawText(col2_rect.adjusted(0, y, 0, 0), Qt.AlignLeft, "PIPELINE")
+        y += 30
+        y = draw_shortcut(painter, col2_rect, "Right Click", "Assignment menu", y)
+        y = draw_shortcut(painter, col2_rect, "Header Click", "Sort column", y)
+        
+        y += 25
+        painter.setPen(QColor(100, 100, 100))
+        painter.drawText(col2_rect.adjusted(0, y, 0, 0), Qt.AlignLeft, "NAVIGATION")
+        y += 30
+        y = draw_shortcut(painter, col2_rect, "Click Folder", "Filter by folder", y)
+        
+        # Footer
+        painter.setPen(QColor(120, 120, 120))
+        font.setBold(False)
+        font.setPointSize(8)
+        painter.setFont(font)
+        painter.drawText(box_rect.adjusted(0, 0, -25, -20), Qt.AlignBottom | Qt.AlignRight, "Click anywhere or press ESC to exit")
 
 class SearchReplaceDialog(QDialog):
     def __init__(self, parent=None):
