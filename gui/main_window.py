@@ -271,6 +271,7 @@ class MainWindow(QMainWindow):
         self.top_bar.rescan_requested.connect(self.rescan_current)
         self.top_bar.help_requested.connect(self.show_help)
         self.main_layout.addWidget(self.top_bar, 0)
+        self.main_layout.addSpacing(5)
 
         # Main Splitter (Left, Center, Right)
         self.h_splitter = QSplitter(Qt.Horizontal)
@@ -319,6 +320,7 @@ class MainWindow(QMainWindow):
         self.h_splitter.addWidget(self.filter_panel)
 
         self.main_layout.addWidget(self.h_splitter, 1)
+        self.main_layout.addSpacing(5)
 
         # 5. Big Ingest Button
         self.btn_ingest_big = QPushButton("Ingest Tagged to AYON")
