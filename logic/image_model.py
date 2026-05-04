@@ -78,7 +78,7 @@ class ImageTableModel(QAbstractTableModel):
             if col == 6: return str(item.version)
             if role == Qt.DisplayRole:
                 if col == 7: return str(item.last_ayon_version) if item.last_ayon_version else "-"
-                if col == 7: 
+                if col == 8: 
                     m = item.age_minutes
                     if self.age_unit == "minutes": return f"{m}m"
                     if self.age_unit == "hours": return f"{m//60}h"
@@ -88,7 +88,7 @@ class ImageTableModel(QAbstractTableModel):
                     if m < 60: return f"{m}m"
                     if m < 1440: return f"{m//60}h"
                     return f"{m//1440}d"
-                if col == 8: return item.ayon_path
+                if col == 9: return item.ayon_path
             else:
                 # For EditRole in non-label/version columns
                 return None
