@@ -343,7 +343,8 @@ class MainWindow(QMainWindow):
         """)
         self.log_console.hide() # Hide by default for extra compactness
         self.main_layout.addWidget(self.log_console, 0)
-        self.main_layout.setSpacing(2)
+        self.main_layout.setContentsMargins(5, 5, 5, 0)
+        self.main_layout.setSpacing(0)
         
         # 7. Help Overlay
         self.help_overlay = HelpOverlay(self)
