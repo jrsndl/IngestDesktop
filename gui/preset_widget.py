@@ -37,10 +37,14 @@ class PresetWidget(QFrame):
         
         self.btn_up = QPushButton("▲")
         self.btn_up.setFixedSize(20, 20)
+        self.btn_up.setToolTip("Move Up (Increase Priority)")
+        self.btn_up.setStyleSheet("QPushButton { min-height: 0px; padding: 0px; font-size: 10px; }")
         self.btn_up.clicked.connect(lambda: self.move_up.emit(self))
         
         self.btn_down = QPushButton("▼")
         self.btn_down.setFixedSize(20, 20)
+        self.btn_down.setToolTip("Move Down (Decrease Priority)")
+        self.btn_down.setStyleSheet("QPushButton { min-height: 0px; padding: 0px; font-size: 10px; }")
         self.btn_down.clicked.connect(lambda: self.move_down.emit(self))
 
         self.header_layout.addWidget(self.btn_toggle)
