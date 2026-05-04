@@ -47,13 +47,14 @@ class TopBar(QWidget):
         self.layout.addWidget(self.btn_prefs)
 
         self.btn_help = QPushButton("?")
-        self.btn_help.setFixedSize(24, 24)
+        self.btn_help.setFixedWidth(30)
         self.btn_help.setToolTip("Keyboard Shortcuts (Help)")
         self.btn_help.setStyleSheet("""
             QPushButton {
                 background-color: #444444;
                 color: white;
                 font-weight: bold;
+                font-size: 14px;
                 border: 1px solid #666666;
             }
             QPushButton:hover {
