@@ -144,6 +144,7 @@ class SpreadsheetPanel(QWidget):
         # Initial fit
         self.table.setColumnWidth(0, 40)
         self.table.setColumnWidth(1, 60) # Thumbnail
+        self.table.setColumnHidden(11, True) # Hide Key Value Pairs by default
         self.table.resizeColumnToContents(2)
         self.table.resizeColumnToContents(3)
         self.table.resizeColumnToContents(4)

@@ -207,3 +207,5 @@ Preferences: CSV: make sure the CSV columns text box expands to all available he
 Left AYON view:
 * with AYON path (and task) selected, the bottomm part shows product names and their versions
 * with item(s) selected (in thumb / spreadsheet / filter panel), double clicking the product name will set not only the AYON path (as by double clicking the task name), but also the label of all the selected items to the variant = double clicked product name with left-stripped product type. For example doubleclicking the imagemain (product=image) will set the AYON path (the selected path) AND the label (in this case: "main") of all the selected items.
+
+Spreadsheet view: by default, turn off visibility of the "Key Value Pairs" column.

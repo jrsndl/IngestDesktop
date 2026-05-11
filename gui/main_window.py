@@ -1622,11 +1622,18 @@ class MainWindow(QMainWindow):
 
     def _on_versions_fetched(self, v_map, items_to_check):
         updated = 0
+        collision_mode = self.config.get("version_collision", "fail")
+        
         for item, f_id, prod_name in items_to_check:
             # Key is (f_id, prod_name, prod_type)
             last_v = v_map.get((f_id, prod_name, item.product_type))
             if last_v is not None:
                 item.last_ayon_version = last_v
+                
+                # Auto-bump logic if requested
+                if collision_mode == "lowest":
+                    item.version = last_v + 1
+                    
                 updated += 1
             else:
                 item.last_ayon_version = 0 # Not found

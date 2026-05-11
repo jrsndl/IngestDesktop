@@ -1,6 +1,7 @@
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, 
                              QPushButton, QFormLayout, QSpinBox, QComboBox, QFileDialog, 
-                             QTabWidget, QScrollArea, QWidget, QCheckBox, QPlainTextEdit)
+                             QTabWidget, QScrollArea, QWidget, QCheckBox, QPlainTextEdit,
+                             QRadioButton, QButtonGroup)
 from PySide6.QtCore import Qt, Signal
 from gui.preset_widget import PresetWidget
 
@@ -98,6 +99,26 @@ class PreferencesDialog(QDialog):
         ocio_lay.addWidget(self.ocio_config)
         ocio_lay.addWidget(self.btn_browse_ocio)
         self.form.addRow("OCIO Config:", ocio_lay)
+
+        # Version Collision settings
+        self.ver_collision_fail = QRadioButton("fail on existing")
+        self.ver_collision_lowest = QRadioButton("set to lowest available")
+        self.ver_collision_group = QButtonGroup(self)
+        self.ver_collision_group.addButton(self.ver_collision_fail)
+        self.ver_collision_group.addButton(self.ver_collision_lowest)
+        
+        ver_collision_layout = QHBoxLayout()
+        ver_collision_layout.addWidget(self.ver_collision_fail)
+        ver_collision_layout.addWidget(self.ver_collision_lowest)
+        
+        # Load from config
+        ver_collision_pref = self.config.get("version_collision", "fail")
+        if ver_collision_pref == "lowest":
+            self.ver_collision_lowest.setChecked(True)
+        else:
+            self.ver_collision_fail.setChecked(True)
+            
+        self.form.addRow("Version Collision:", ver_collision_layout)
         
         self.general_layout.addLayout(self.form)
         self.general_layout.addStretch()
@@ -129,9 +150,8 @@ class PreferencesDialog(QDialog):
         ]
         conf_cols = self.config.get("csv_columns", "\n".join(default_cols))
         self.csv_columns.setPlainText(conf_cols)
-        self.csv_layout.addWidget(self.csv_columns)
+        self.csv_layout.addWidget(self.csv_columns, 1) # Add stretch factor 1 to expand
         
-        self.csv_layout.addStretch()
         self.tabs.addTab(self.csv_tab, "CSV")
 
         # 2. GUI Tab (UI and Preview settings)
@@ -443,7 +463,8 @@ class PreferencesDialog(QDialog):
             "ffmpeg_path": self.ffmpeg_path.text(),
             "ffprobe_path": self.ffprobe_path.text(),
             "oiiotool_path": self.oiiotool_path.text(),
-            "ocio_config": self.ocio_config.text()
+            "ocio_config": self.ocio_config.text(),
+            "version_collision": "lowest" if self.ver_collision_lowest.isChecked() else "fail"
         }
         new_secrets = {
             "ayon_api_key": self.api_key.text()
