@@ -22,7 +22,7 @@ class ImageScanner(QThread):
                  stills_start_frame=1001, stills_end_frame=1001,
                  video_start_from_tc=False, video_start_frame=1001,
                  ffmpeg_path="ffmpeg.exe", ffprobe_path="ffprobe.exe",
-                 oiiotool_path="oiiotool.exe", ocio_config=""):
+                 oiiotool_path="oiiotool.exe", ocio_config="", stills_thumb_same=True):
         super().__init__()
         self.directory = directory
         self.recursive = recursive
@@ -41,6 +41,7 @@ class ImageScanner(QThread):
         self.ffprobe_path = ffprobe_path
         self.oiiotool_path = oiiotool_path
         self.ocio_config = ocio_config
+        self.stills_thumb_same = stills_thumb_same
         self._is_canceled = False
 
     def cancel(self):

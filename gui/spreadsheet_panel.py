@@ -1,4 +1,6 @@
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QTableView, QCheckBox, QPushButton, QHeaderView, QStyledItemDelegate, QMenu, QLabel, QSpinBox, QSlider
+from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QTableView, QCheckBox, 
+                             QPushButton, QHeaderView, QStyledItemDelegate, QMenu, QLabel, 
+                             QSpinBox, QSlider, QAbstractItemView, QLineEdit)
 from PySide6.QtGui import QAction
 from PySide6.QtCore import Signal, Qt, QSize, QEvent, QModelIndex
 
@@ -23,6 +25,8 @@ class SpreadsheetPanel(QWidget):
     maximize_toggle_requested = Signal()
     label_action_requested = Signal(str, object)
     csv_mode_changed = Signal(bool)
+    selectionChanged = Signal()
+    add_comment_requested = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -33,11 +37,11 @@ class SpreadsheetPanel(QWidget):
         controls_layout = QHBoxLayout()
         self.btn_selected_only = QPushButton("Selected only")
         self.btn_selected_only.setCheckable(True)
-        self.btn_selected_only.toggled.connect(self.update_filtering)
+        self.btn_selected_only.toggled.connect(lambda: self.update_filtering())
         
         self.btn_tagged_only = QPushButton("Tagged only")
         self.btn_tagged_only.setCheckable(True)
-        self.btn_tagged_only.toggled.connect(self.update_filtering)
+        self.btn_tagged_only.toggled.connect(lambda: self.update_filtering())
         self.btn_check_ver = QPushButton("Version check")
         self.btn_check_dup = QPushButton("Check duplicates")
         self.btn_tag_sel = QPushButton("Tag/Untag Selected")
@@ -55,6 +59,12 @@ class SpreadsheetPanel(QWidget):
         self.slider_row_height.setValue(20) # Corresponds to ~40px with quadratic mapping
         self.slider_row_height.setFixedWidth(150)
         self.slider_row_height.valueChanged.connect(self._on_row_height_change)
+        
+        self.comment_field = QLineEdit()
+        self.comment_field.setPlaceholderText("Comment...")
+        self.comment_field.setFixedWidth(150)
+        self.btn_add_comment = QPushButton("Add Comment")
+        self.btn_add_comment.clicked.connect(lambda: self.add_comment_requested.emit(self.comment_field.text()))
 
         controls_layout.addWidget(self.btn_selected_only)
         controls_layout.addWidget(self.btn_tagged_only)
@@ -62,6 +72,9 @@ class SpreadsheetPanel(QWidget):
         controls_layout.addWidget(self.btn_check_dup)
         controls_layout.addWidget(self.btn_tag_sel)
         controls_layout.addWidget(self.btn_csv)
+        controls_layout.addSpacing(10)
+        controls_layout.addWidget(self.comment_field)
+        controls_layout.addWidget(self.btn_add_comment)
         controls_layout.addStretch()
         controls_layout.addWidget(self.lbl_row_height)
         controls_layout.addWidget(self.slider_row_height)
@@ -69,7 +82,6 @@ class SpreadsheetPanel(QWidget):
 
         # Table View
         self.table = QTableView()
-        from PySide6.QtWidgets import QAbstractItemView
         self.table.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.SelectedClicked | QAbstractItemView.AnyKeyPressed)
         self.table.setSelectionBehavior(QTableView.SelectRows)
         self.table.setSelectionMode(QTableView.ExtendedSelection)
@@ -87,9 +99,14 @@ class SpreadsheetPanel(QWidget):
         
         self.table.customContextMenuRequested.connect(self._on_context_menu)
         
+        self.table.installEventFilter(self)
+        self.table.viewport().installEventFilter(self)
+        
         self.standard_model = None
         self.csv_model = None
         self._is_csv_mode = False
+        self._last_age_filter = (False, 0)
+        self._last_search_text = ""
 
     def set_model(self, model):
         self.standard_model = model
@@ -103,7 +120,8 @@ class SpreadsheetPanel(QWidget):
         if not self.standard_model: return
         self.table.setModel(self.standard_model)
         # Selection model might have changed
-        self.table.selectionModel().selectionChanged.connect(self.update_filtering)
+        self.table.selectionModel().selectionChanged.connect(lambda s, d: self.update_filtering())
+        self.table.selectionModel().selectionChanged.connect(lambda s, d: self.selectionChanged.emit())
         # Set row height for thumbnails
         self.table.verticalHeader().setDefaultSectionSize(40)
         
@@ -145,6 +163,8 @@ class SpreadsheetPanel(QWidget):
         # Clear delegate for index 1
         self.table.setItemDelegateForColumn(1, QStyledItemDelegate(self.table))
         
+        self.table.selectionModel().selectionChanged.connect(lambda s, d: self.selectionChanged.emit())
+        
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.Interactive)
         
@@ -168,10 +188,10 @@ class SpreadsheetPanel(QWidget):
         self.btn_selected_only.setEnabled(not checked)
         self.btn_tagged_only.setEnabled(not checked)
         
-        self.csv_mode_changed.emit(checked)
+        # Ensure row hidden states are refreshed
+        self.update_filtering()
         
-        self.table.installEventFilter(self)
-        self.table.viewport().installEventFilter(self)
+        self.csv_mode_changed.emit(checked)
 
     def _on_model_data_changed(self, top_left, bottom_right):
         # If Label column (2) was changed, auto-resize it
@@ -190,33 +210,52 @@ class SpreadsheetPanel(QWidget):
         # Use a slightly wider factor if images are wide, but 1.5x height is safe
         self.table.setColumnWidth(1, int(h * 1.5))
 
-    def update_filtering(self):
+    def update_filtering(self, age_filter=None, search_text=None):
         """Update row visibility based on active filters."""
-        if self._is_csv_mode: return # No filtering in CSV mode, it's already filtered
+        if age_filter is not None:
+            self._last_age_filter = age_filter
+        if search_text is not None:
+            self._last_search_text = search_text
+            
+        if self._is_csv_mode: 
+            for row in range(self.table.model().rowCount()):
+                self.table.setRowHidden(row, False)
+            return
         selected_only = self.btn_selected_only.isChecked()
         tagged_only = self.btn_tagged_only.isChecked()
         
-        if not selected_only and not tagged_only:
+        age_enabled, age_val = self._last_age_filter
+        search_term = self._last_search_text
+        
+        if not selected_only and not tagged_only and not age_enabled and not search_term:
             for row in range(self.table.model().rowCount()):
                 self.table.setRowHidden(row, False)
             return
 
         selection_model = self.table.selectionModel()
         for row in range(self.table.model().rowCount()):
+            item = self.table.model().items[row]
             is_selected = selection_model.isRowSelected(row, QModelIndex())
-            is_tagged = self.table.model().items[row].is_tagged
+            is_tagged = item.is_tagged
+            is_young_enough = not age_enabled or (item.age_minutes <= age_val)
+            matches_search = not search_term or search_term in item.label.lower()
             
             hidden = False
             if selected_only and not is_selected:
                 hidden = True
             if tagged_only and not is_tagged:
                 hidden = True
+            if age_enabled and not is_young_enough:
+                hidden = True
+            if search_term and not matches_search:
+                hidden = True
                 
             self.table.setRowHidden(row, hidden)
 
     def eventFilter(self, source, event):
         if event.type() == QEvent.Enter:
-            self.table.setFocus()
+            if source in (self.table, self.table.viewport()):
+                self.table.setFocus()
             
         if event.type() == QEvent.KeyPress:
             # Handle Ctrl+V Paste
@@ -229,6 +268,10 @@ class SpreadsheetPanel(QWidget):
                 return True
                 
             if event.key() == Qt.Key_Space:
+                # If editing, let the space go to the editor
+                if self.table.state() != QAbstractItemView.NoState:
+                    return False
+                    
                 if self.table.underMouse():
                     self.maximize_toggle_requested.emit()
                     return True

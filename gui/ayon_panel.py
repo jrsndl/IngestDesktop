@@ -19,28 +19,44 @@ class AyonFilterProxy(QSortFilterProxyModel):
             self.invalidateFilter()
 
     def filterAcceptsRow(self, source_row, source_parent):
-        # 1. Base search filter
-        search_ok = super().filterAcceptsRow(source_row, source_parent)
-        
-        # 2. Assigned only filter
-        if not self._assigned_only:
-            return search_ok
+        # 1. Check Assigned Only Filter
+        if self._assigned_only:
+            if not self._isAssignedOrHasAssignedDescendant(source_row, source_parent):
+                return False
 
-        # Check if this row is assigned
+        # 2. Check Search Filter
+        regex = self.filterRegularExpression()
+        if regex.isValid() and regex.pattern():
+            # Show if self matches
+            if super().filterAcceptsRow(source_row, source_parent):
+                return True
+            
+            # Show if any ancestor matches (so tasks of a matched folder are shown)
+            p = source_parent
+            while p.isValid():
+                if super().filterAcceptsRow(p.row(), p.parent()):
+                    return True
+                p = p.parent()
+            
+            return False
+
+        return True
+
+    def _isAssignedOrHasAssignedDescendant(self, source_row, source_parent):
         model = self.sourceModel()
         idx = model.index(source_row, 0, source_parent)
         item = model.itemFromIndex(idx)
-        data = item.data(Qt.UserRole)
+        if not item: return False
         
+        data = item.data(Qt.UserRole)
         if data and "full_ayon_path" in data:
             if data["full_ayon_path"] in self._assigned_paths:
-                return search_ok # If assigned and search matches, show it
+                return True
         
-        # If it's a folder, show it only if it contains assigned tasks that match search
+        # Check children
         for r in range(model.rowCount(idx)):
-            if self.filterAcceptsRow(r, idx):
-                return True # Parent must be shown if child is shown
-                
+            if self._isAssignedOrHasAssignedDescendant(r, idx):
+                return True
         return False
         
 class CheckableComboBox(QComboBox):
@@ -137,6 +153,8 @@ class AyonPanel(QWidget):
         
         self.tree.setModel(self.proxy)
         self.tree.setSortingEnabled(True)
+        self.proxy.setSortCaseSensitivity(Qt.CaseInsensitive)
+        self.tree.sortByColumn(0, Qt.AscendingOrder)
         self.tree.doubleClicked.connect(self._on_double_click)
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._on_context_menu)
@@ -238,6 +256,7 @@ class AyonPanel(QWidget):
         
         self.tree.expandToDepth(2)
         self.tree.resizeColumnToContents(0)
+        self.tree.sortByColumn(0, Qt.AscendingOrder)
 
     def set_connection_status(self, is_connected, server_url=""):
         if is_connected:

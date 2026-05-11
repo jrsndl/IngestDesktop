@@ -57,13 +57,11 @@ QPushButton:pressed, QPushButton:checked {
     color: #000000;
 }
 QPushButton#IngestButton {
-    background-color: #ff9800;
-    color: #000000;
     font-weight: bold;
     font-size: 14px;
 }
 QPushButton#IngestButton:hover {
-    background-color: #ffa726;
+    background-color: #4d4d4d;
 }
 
 /* Inputs */
@@ -117,8 +115,13 @@ QTreeView, QTableView, QListView {
     gridline-color: #333333;
     selection-background-color: #ff9800;
     selection-color: #000000;
+    outline: 0;
 }
-QTableView::item:selected {
+QTreeView::item:selected, QTableView::item:selected {
+    background-color: #ff9800;
+    color: #000000;
+}
+QTreeView::item:selected:!active, QTableView::item:selected:!active {
     background-color: #555555;
     color: #ffffff;
 }

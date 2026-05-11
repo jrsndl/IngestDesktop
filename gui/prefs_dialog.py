@@ -1,10 +1,12 @@
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, 
                              QPushButton, QFormLayout, QSpinBox, QComboBox, QFileDialog, 
                              QTabWidget, QScrollArea, QWidget, QCheckBox, QPlainTextEdit)
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from gui.preset_widget import PresetWidget
 
 class PreferencesDialog(QDialog):
+    applied = Signal(dict)
+    
     def __init__(self, config, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Preferences")
@@ -198,6 +200,12 @@ class PreferencesDialog(QDialog):
             ext_layout.addWidget(ext_field)
             layout.addLayout(ext_layout)
 
+            stills_thumb_cb = None
+            if p_type == "stills":
+                stills_thumb_cb = QCheckBox("Thumbnail same as the file")
+                stills_thumb_cb.setChecked(self.config.get("stills_thumb_same", True))
+                layout.addWidget(stills_thumb_cb)
+
             # Default frames for stills/videos
             start_f = None
             end_f = None
@@ -252,7 +260,7 @@ class PreferencesDialog(QDialog):
             layout.addLayout(btn_row)
             
             self.tabs.addTab(tab, label)
-            self.preset_containers[p_type] = (scroll_layout, [], None, ext_field, start_f, end_f, video_tc_cb) # (layout, widgets, selected_widget, ext_field, start_f, end_f, video_tc_cb)
+            self.preset_containers[p_type] = (scroll_layout, [], None, ext_field, start_f, end_f, video_tc_cb, stills_thumb_cb) # (layout, widgets, selected_widget, ext_field, start_f, end_f, video_tc_cb, stills_thumb_cb)
             
             # Load existing presets
             existing = self.config.get("presets", {}).get(p_type, [])
@@ -269,16 +277,21 @@ class PreferencesDialog(QDialog):
         self.btn_save = QPushButton("Save")
         self.btn_save.setObjectName("IngestButton") # Styled
         self.btn_save.clicked.connect(self.accept)
+        
+        self.btn_apply = QPushButton("Apply")
+        self.btn_apply.clicked.connect(self._on_apply)
+        
         self.btn_cancel = QPushButton("Cancel")
         self.btn_cancel.clicked.connect(self.reject)
         
         self.btn_layout.addStretch()
+        self.btn_layout.addWidget(self.btn_apply)
         self.btn_layout.addWidget(self.btn_save)
         self.btn_layout.addWidget(self.btn_cancel)
         self.layout.addLayout(self.btn_layout)
 
     def add_preset(self, p_type, data=None):
-        scroll_layout, widgets, _, _, _, _, _ = self.preset_containers[p_type]
+        scroll_layout, widgets, _, _, _, _, _, _ = self.preset_containers[p_type]
         pw = PresetWidget(p_type, data)
         pw.clicked.connect(self.select_preset)
         pw.move_up.connect(self.move_preset_up)
@@ -291,7 +304,7 @@ class PreferencesDialog(QDialog):
 
     def select_preset(self, pw):
         p_type = pw.preset_type
-        scroll_layout, widgets, selected, ext_field, start_f, end_f, video_tc_cb = self.preset_containers[p_type]
+        scroll_layout, widgets, selected, ext_field, start_f, end_f, video_tc_cb, stills_thumb_cb = self.preset_containers[p_type]
         
         # Deselect previous
         if selected:
@@ -299,11 +312,11 @@ class PreferencesDialog(QDialog):
             
         # Select new
         pw.set_selected(True)
-        self.preset_containers[p_type] = (scroll_layout, widgets, pw, ext_field, start_f, end_f, video_tc_cb)
+        self.preset_containers[p_type] = (scroll_layout, widgets, pw, ext_field, start_f, end_f, video_tc_cb, stills_thumb_cb)
 
     def move_preset_up(self, pw):
         p_type = pw.preset_type
-        scroll_layout, widgets, selected, ext_field, start_f, end_f, video_tc_cb = self.preset_containers[p_type]
+        scroll_layout, widgets, selected, ext_field, start_f, end_f, video_tc_cb, stills_thumb_cb = self.preset_containers[p_type]
         idx = widgets.index(pw)
         if idx > 0:
             widgets.pop(idx)
@@ -312,7 +325,7 @@ class PreferencesDialog(QDialog):
 
     def move_preset_down(self, pw):
         p_type = pw.preset_type
-        scroll_layout, widgets, selected, ext_field, start_f, end_f, video_tc_cb = self.preset_containers[p_type]
+        scroll_layout, widgets, selected, ext_field, start_f, end_f, video_tc_cb, stills_thumb_cb = self.preset_containers[p_type]
         idx = widgets.index(pw)
         if idx < len(widgets) - 1:
             widgets.pop(idx)
@@ -320,7 +333,7 @@ class PreferencesDialog(QDialog):
             self._rebuild_preset_layout(p_type)
 
     def _rebuild_preset_layout(self, p_type):
-        scroll_layout, widgets, selected, ext_field, start_f, end_f, video_tc_cb = self.preset_containers[p_type]
+        scroll_layout, widgets, selected, ext_field, start_f, end_f, video_tc_cb, stills_thumb_cb = self.preset_containers[p_type]
         # Remove widgets from layout (without deleting them)
         for i in reversed(range(scroll_layout.count())):
             item = scroll_layout.itemAt(i)
@@ -331,7 +344,7 @@ class PreferencesDialog(QDialog):
             scroll_layout.addWidget(w)
 
     def delete_selected_preset(self, p_type):
-        scroll_layout, widgets, selected, ext_field, start_f, end_f, video_tc_cb = self.preset_containers[p_type]
+        scroll_layout, widgets, selected, ext_field, start_f, end_f, video_tc_cb, stills_thumb_cb = self.preset_containers[p_type]
         if not selected:
             return
             
@@ -339,7 +352,7 @@ class PreferencesDialog(QDialog):
             widgets.remove(selected)
             selected.setParent(None)
             selected.deleteLater()
-            self.preset_containers[p_type] = (scroll_layout, widgets, None, ext_field, start_f, end_f, video_tc_cb)
+            self.preset_containers[p_type] = (scroll_layout, widgets, None, ext_field, start_f, end_f, video_tc_cb, stills_thumb_cb)
             
             # Select first available if any
             if widgets:
@@ -363,6 +376,9 @@ class PreferencesDialog(QDialog):
         if dir_path:
             self.default_scan_folder.setText(dir_path)
 
+    def _on_apply(self):
+        self.applied.emit(self.get_settings())
+
     def get_settings(self):
         presets = {}
         extensions = {}
@@ -370,7 +386,8 @@ class PreferencesDialog(QDialog):
         stills_end = 1001
         video_tc = False
         video_start = 1001
-        for p_type, (layout, widgets, selected, ext_field, start_f, end_f, video_tc_cb) in self.preset_containers.items():
+        stills_thumb_same = True
+        for p_type, (layout, widgets, selected, ext_field, start_f, end_f, video_tc_cb, stills_thumb_cb) in self.preset_containers.items():
             p_data = []
             for pw in widgets:
                 data = pw.get_data()
@@ -384,6 +401,9 @@ class PreferencesDialog(QDialog):
             elif p_type == "videos":
                 video_tc = video_tc_cb.isChecked()
                 video_start = start_f.value()
+            
+            if p_type == "stills" and stills_thumb_cb:
+                stills_thumb_same = stills_thumb_cb.isChecked()
 
         return {
             "ayon_server_url": self.server_url.text(),
@@ -409,6 +429,7 @@ class PreferencesDialog(QDialog):
             "stills_end_frame": stills_end,
             "video_start_from_tc": video_tc,
             "video_start_frame": video_start,
+            "stills_thumb_same": stills_thumb_same,
             "ffmpeg_path": self.ffmpeg_path.text(),
             "ffprobe_path": self.ffprobe_path.text(),
             "oiiotool_path": self.oiiotool_path.text(),

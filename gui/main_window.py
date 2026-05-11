@@ -300,6 +300,7 @@ class MainWindow(QMainWindow):
         self.model = ImageTableModel()
         self.model.product_name_template = self.config.get("product_name", "{label}")
         self.model.product_name_camel = self.config.get("product_name_camel", True)
+        self.model.stills_thumb_same = self.config.get("stills_thumb_same", True)
         
         self.csv_preview_model = CSVPreviewModel(self.model, self.config)
         
@@ -311,6 +312,12 @@ class MainWindow(QMainWindow):
         self._is_maximized = False
         self._last_h_state = None
         self._last_v_state = None
+        
+        # Filter State
+        self._age_filter_enabled = False
+        self._age_filter_value = 0
+        self._age_filter_units = "minutes"
+        self._search_filter_text = ""
         self._selection_lock = False
 
         # UI Components
@@ -361,10 +368,11 @@ class MainWindow(QMainWindow):
         self.spreadsheet.maximize_toggle_requested.connect(lambda: self.toggle_maximize("spreadsheet"))
         self.spreadsheet.version_check_clicked.connect(self.perform_version_check)
         self.spreadsheet.label_action_requested.connect(self._on_label_action)
+        self.spreadsheet.add_comment_requested.connect(self._on_add_comment)
         self.v_splitter.addWidget(self.spreadsheet)
         
         # Connect selection after model is set
-        self.spreadsheet.table.selectionModel().selectionChanged.connect(self._sync_selection_to_thumbs)
+        self.spreadsheet.selectionChanged.connect(self._sync_selection_to_thumbs)
         self.thumb_area.scene.selectionChanged.connect(self._sync_selection_to_table)
         
         # Sync visuals
@@ -374,10 +382,9 @@ class MainWindow(QMainWindow):
 
         # 4. Right Panel (Filtering)
         self.filter_panel = FilterPanel(self.model)
-        self.filter_panel.folder_selected.connect(self._on_filter_folder_selected)
         self.filter_panel.age_changed.connect(self._on_age_filter_changed)
         self.filter_panel.search_changed.connect(self._on_filter_search_changed)
-        self.filter_panel.mode_group.buttonClicked.connect(self._on_filter_mode_changed)
+        self.filter_panel.tree.selectionModel().selectionChanged.connect(self._sync_selection_from_filter)
         self.h_splitter.addWidget(self.filter_panel)
 
         self.main_layout.addWidget(self.h_splitter, 1)
@@ -387,11 +394,23 @@ class MainWindow(QMainWindow):
         ingest_row_layout = QHBoxLayout()
         ingest_row_layout.setSpacing(2)
         
-        self.btn_ingest_big = QPushButton("Ingest Tagged to AYON")
-        self.btn_ingest_big.setObjectName("IngestButton")
-        self.btn_ingest_big.setMinimumHeight(50)
-        self.btn_ingest_big.clicked.connect(self.perform_ingest)
-        ingest_row_layout.addWidget(self.btn_ingest_big, 1)
+        self.btn_export_csv = QPushButton("Export CSV")
+        self.btn_export_csv.setObjectName("IngestButton")
+        self.btn_export_csv.setMinimumHeight(50)
+        self.btn_export_csv.clicked.connect(self.perform_export_csv)
+        ingest_row_layout.addWidget(self.btn_export_csv, 1)
+
+        self.btn_publish_local = QPushButton("Publish Ayon Local")
+        self.btn_publish_local.setObjectName("IngestButton")
+        self.btn_publish_local.setMinimumHeight(50)
+        self.btn_publish_local.clicked.connect(self.perform_publish_local)
+        ingest_row_layout.addWidget(self.btn_publish_local, 1)
+
+        self.btn_publish_deadline = QPushButton("Publish Ayon Deadline")
+        self.btn_publish_deadline.setObjectName("IngestButton")
+        self.btn_publish_deadline.setMinimumHeight(50)
+        self.btn_publish_deadline.clicked.connect(self.perform_publish_deadline)
+        ingest_row_layout.addWidget(self.btn_publish_deadline, 1)
         
         self.btn_toggle_log = QPushButton("Log")
         self.btn_toggle_log.setCheckable(True)
@@ -405,13 +424,13 @@ class MainWindow(QMainWindow):
         # 6. Log Console (expandable)
         self.log_console = QPlainTextEdit()
         self.log_console.setReadOnly(True)
-        self.log_console.setMaximumHeight(50)
+        self.log_console.setMaximumHeight(300)
         self.log_console.setStyleSheet("""
             QPlainTextEdit {
                 background-color: #0c0c0c; 
                 color: #cccccc; 
                 font-family: Consolas, monospace; 
-                font-size: 9px;
+                font-size: 27px;
                 border: none;
                 padding: 0px;
             }
@@ -517,7 +536,8 @@ class MainWindow(QMainWindow):
             ffmpeg_path=self.config.get("ffmpeg_path", "ffmpeg.exe"),
             ffprobe_path=self.config.get("ffprobe_path", "ffprobe.exe"),
             oiiotool_path=self.config.get("oiiotool_path", "oiiotool.exe"),
-            ocio_config=self.config.get("ocio_config", "")
+            ocio_config=self.config.get("ocio_config", ""),
+            stills_thumb_same=self.config.get("stills_thumb_same", True)
         )
         self.scanner.finished.connect(lambda items: self.log_message(f"Scan complete. Found {len(items)} items. Fetching metadata in background...", "success"))
         self.scanner.finished.connect(self.model.add_items)
@@ -527,6 +547,12 @@ class MainWindow(QMainWindow):
         # Update config
         self.config["last_source_folder"] = directory
         self.save_config()
+        
+        # Apply current age filter after scan starts/completes
+        # (Though items are added asynchronously, we want the state set)
+        self._update_ages()
+        self.spreadsheet.update_filtering(age_filter=(self._age_filter_enabled, self._age_filter_value))
+        self.thumb_area.rearrange_items(age_filter=(self._age_filter_enabled, self._age_filter_value))
 
     def rescan_current(self):
         """Scan for new files in the current directory without clearing existing data."""
@@ -556,7 +582,8 @@ class MainWindow(QMainWindow):
             ffmpeg_path=self.config.get("ffmpeg_path", "ffmpeg.exe"),
             ffprobe_path=self.config.get("ffprobe_path", "ffprobe.exe"),
             oiiotool_path=self.config.get("oiiotool_path", "oiiotool.exe"),
-            ocio_config=self.config.get("ocio_config", "")
+            ocio_config=self.config.get("ocio_config", ""),
+            stills_thumb_same=self.config.get("stills_thumb_same", True)
         )
         self.scanner.finished.connect(self._on_rescan_finished)
         self.scanner.item_updated.connect(self.model.update_item)
@@ -605,7 +632,14 @@ class MainWindow(QMainWindow):
             elif p_type == "other": active_map["Other"] = active_name
             
         self.model.set_presets(active_map)
+        self.model.stills_thumb_same = self.config.get("stills_thumb_same", True)
         
+        # Default frame settings from config
+        stills_start = self.config.get("stills_start_frame", 1001)
+        stills_end = self.config.get("stills_end_frame", 1001)
+        video_start = self.config.get("video_start_frame", 1001)
+        video_tc = self.config.get("video_start_from_tc", False)
+
         # Re-evaluate every item in the model
         for item in self.model.items:
             cat = item.category
@@ -615,13 +649,37 @@ class MainWindow(QMainWindow):
             elif cat == "Video": p_type = "videos"
             
             matched_p = evaluate_preset(item.file_path, presets, p_type, label=item.label)
-            item.preset_name = matched_p.get("Name") if matched_p else None
-            item.variant = matched_p.get("Variant") if matched_p else None
-            item.product_type = matched_p.get("Product Type") if matched_p else None
-            item.camel_case = matched_p.get("CamelCase", True) if matched_p else True
-            item.representation = matched_p.get("Representation", "{extension}") if matched_p else "{extension}"
-            item.colorspace = matched_p.get("Colorspace", "sRGB") if matched_p else "sRGB"
-            item.rep_tags = matched_p.get("Tags", "passing") if matched_p else "passing"
+            if matched_p:
+                item.preset_name = matched_p.get("Name")
+                item.variant = matched_p.get("Variant")
+                item.product_type = matched_p.get("Product Type")
+                item.camel_case = matched_p.get("CamelCase", True)
+                item.representation = matched_p.get("Representation", "{extension}")
+                item.colorspace = matched_p.get("Colorspace", "sRGB")
+                item.rep_tags = matched_p.get("Tags", "passing")
+                item.preset_data = matched_p
+            else:
+                item.preset_name = None
+                item.variant = None
+                item.product_type = None
+                item.camel_case = True
+                item.representation = "{extension}"
+                item.colorspace = "sRGB"
+                item.rep_tags = "passing"
+                item.preset_data = {}
+
+            # Refresh frames for non-sequences
+            if cat == "Still":
+                item.frame_start = stills_start
+                item.frame_end = stills_end
+            elif cat == "Video":
+                # Start from TC if enabled and available in metadata
+                if video_tc and item.metadata.get("start_from_tc") is not None:
+                    item.frame_start = item.metadata["start_from_tc"]
+                    item.frame_end = item.metadata["start_from_tc"]
+                else:
+                    item.frame_start = video_start
+                    item.frame_end = video_start
             
         self.model.layoutChanged.emit()
 
@@ -712,46 +770,72 @@ class MainWindow(QMainWindow):
         old_exts = json.dumps(self.config.get("extensions", {}), sort_keys=True)
 
         dialog = PreferencesDialog(self.config, self)
+        
+        # Connect Apply button signal
+        dialog.applied.connect(lambda settings: self._apply_preferences(settings, old_detect, old_thumb, old_regex, old_exts, show_message=False))
+        
         if dialog.exec():
             new_settings = dialog.get_settings()
-            self.config.update(new_settings)
-            self.thumb_area.slider_cols.setValue(self.config.get("default_columns", 12))
-            
-            # Apply label regex update
-            label_regex = self.config.get("label_allowed_chars", "^[a-zA-Z0-9_\\-\\.\\s]*$")
-            self.model.label_allowed_regex = label_regex
-            self.thumb_area.update_label_validator(label_regex)
-            
-            self.save_config()
-            self._update_model_presets()
-            
-            # Check if scan-related settings changed
-            new_exts = json.dumps(self.config.get("extensions", {}), sort_keys=True)
-            scan_affected = (
-                old_detect != self.config.get("detect_sequences") or
-                old_thumb != self.config.get("seq_thumb_frame") or
-                old_regex != self.config.get("version_regex") or
-                old_exts != new_exts
-            )
-            self.model.product_name_template = self.config.get("product_name", "{label}")
-            self.model.product_name_camel = self.config.get("product_name_camel", True)
-            
-            self.csv_preview_model.refresh_config(self.config)
-            
-            if scan_affected and self.config.get("last_source_folder"):
-                self.start_scan(self.config["last_source_folder"])
+            self._apply_preferences(new_settings, old_detect, old_thumb, old_regex, old_exts, show_message=True)
 
-            # Refresh AYON asynchronously
-            self.refresh_ayon_async(reconnect=True)
-            
+    def _apply_preferences(self, new_settings, old_detect, old_thumb, old_regex, old_exts, show_message=True):
+        self.config.update(new_settings)
+        self.thumb_area.slider_cols.setValue(self.config.get("default_columns", 12))
+        
+        # Apply label regex update
+        label_regex = self.config.get("label_allowed_chars", "^[a-zA-Z0-9_\\-\\.\\s]*$")
+        self.model.label_allowed_regex = label_regex
+        self.thumb_area.update_label_validator(label_regex)
+        
+        self.save_config()
+        self._update_model_presets()
+        
+        # Update model properties that affect string expansion
+        self.model.product_name_template = self.config.get("product_name", "{label}")
+        self.model.product_name_camel = self.config.get("product_name_camel", True)
+        self.model.stills_thumb_same = self.config.get("stills_thumb_same", True)
+        
+        self.csv_preview_model.refresh_config(self.config)
+        
+        # Check if scan-related settings changed
+        new_exts = json.dumps(self.config.get("extensions", {}), sort_keys=True)
+        scan_affected = (
+            old_detect != self.config.get("detect_sequences") or
+            old_thumb != self.config.get("seq_thumb_frame") or
+            old_regex != self.config.get("version_regex") or
+            old_exts != new_exts
+        )
+        
+        if scan_affected and self.config.get("last_source_folder"):
+            self.start_scan(self.config["last_source_folder"])
+
+        # Refresh AYON asynchronously
+        self.refresh_ayon_async(reconnect=True)
+        
+        if show_message:
             QMessageBox.information(self, "Preferences", "Settings saved. View has been refreshed to reflect scanner changes.")
 
     def _on_cols_changed(self, value):
         self.config["default_columns"] = value
         self.save_config()
 
-    def _on_age_filter_changed(self, value, units):
+    def _on_age_filter_changed(self, value, units, enabled):
+        self._age_filter_enabled = enabled
+        self._age_filter_units = units
+        
+        # Convert to minutes for internal comparison
+        # We add 1 to the value to include the full period (e.g. 0 days = < 1 day)
+        minutes = (value + 1)
+        if units == "hours": minutes *= 60
+        elif units == "days": minutes *= 1440
+        self._age_filter_value = minutes
+        
         self.model.set_age_unit(units)
+        
+        # Re-calculate ages and refresh filtering
+        self._update_ages()
+        self.spreadsheet.update_filtering(age_filter=(self._age_filter_enabled, self._age_filter_value))
+        self.thumb_area.rearrange_items(age_filter=(self._age_filter_enabled, self._age_filter_value))
 
     def _update_ages(self):
         import time
@@ -773,11 +857,81 @@ class MainWindow(QMainWindow):
         with open("config.json", "w") as f:
             json.dump(self.config, f, indent=4)
 
-    def perform_ingest(self):
+    def perform_export_csv(self):
+        tagged_items = self._get_tagged_for_ingest()
+        if not tagged_items: return
+        
+        source_folder = self.config.get("last_source_folder")
+        if not source_folder or not os.path.exists(source_folder):
+            QMessageBox.warning(self, "Export CSV", "No valid source folder scanned.")
+            return
+
+        # Name the CSV after the last folder in the path
+        folder_name = os.path.basename(os.path.abspath(source_folder))
+        if not folder_name: folder_name = "export"
+        csv_path = os.path.join(source_folder, f"{folder_name}.csv")
+        
+        # Use formatting from CSVPreviewModel
+        column_defs = self.csv_preview_model.column_defs
+        delimiter = self.config.get("csv_delimiter", ",")
+        quotechar = self.config.get("csv_quotechar", '"')
+        
+        import csv
+        try:
+            with open(csv_path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f, delimiter=delimiter, quotechar=quotechar, quoting=csv.QUOTE_MINIMAL)
+                # Header
+                writer.writerow([h for h, t in column_defs])
+                # Rows
+                for item in tagged_items:
+                    row_data = []
+                    for h, template in column_defs:
+                        val = self.model._expand_string(template, item, use_global_camel=True)
+                        row_data.append(val)
+                    writer.writerow(row_data)
+            
+            self.log_message(f"Exported {len(tagged_items)} items to CSV: {csv_path}", "success")
+            QMessageBox.information(self, "Export CSV", f"CSV exported successfully to:\n{csv_path}")
+        except Exception as e:
+            self.log_message(f"Failed to export CSV: {e}", "error")
+            QMessageBox.critical(self, "Export CSV", f"Failed to export CSV: {e}")
+
+    def perform_publish_local(self):
+        tagged_items = self._get_tagged_for_ingest()
+        if not tagged_items: return
+        
+        project = self.top_bar.combo_project.currentText()
+        import tempfile
+        csv_path = os.path.join(tempfile.gettempdir(), "ayon_ingest.csv")
+        self._write_ingest_csv(tagged_items, project, csv_path)
+        
+        tray_path = self.config.get("traypublisher_path", "ayon_console.exe")
+        cmd = [
+            tray_path, "addon", "traypublisher", "ingestcsv",
+            "--filepath", csv_path,
+            "--project", project
+        ]
+        
+        try:
+            import subprocess
+            subprocess.Popen(cmd)
+            self.log_message(f"Ingest CSV created and TrayPublisher started locally.", "success")
+        except Exception as e:
+            self.log_message(f"Failed to start TrayPublisher: {e}", "error")
+
+    def perform_publish_deadline(self):
+        tagged_items = self._get_tagged_for_ingest()
+        if not tagged_items: return
+        
+        # Placeholder for deadline submission
+        self.log_message("Publish to Deadline is currently a placeholder. No job submitted.", "warning")
+        QMessageBox.information(self, "Deadline", "Deadline submission logic is not yet implemented.")
+
+    def _get_tagged_for_ingest(self):
         tagged_items = [item for item in self.model.items if item.is_tagged]
         if not tagged_items:
             QMessageBox.warning(self, "Ingest", "No images tagged for ingest.")
-            return
+            return None
 
         # 1. Check for duplicates (same label and AYON path)
         seen = set()
@@ -790,63 +944,27 @@ class MainWindow(QMainWindow):
         
         if duplicates:
             QMessageBox.critical(self, "Ingest", f"Found {len(duplicates)} duplicate entries. Ingest stopped.")
-            return
+            return None
+        return tagged_items
 
-        # 2. Check versions (AYON API check)
-        project = self.top_bar.combo_project.currentText()
-        for item in tagged_items:
-            if not item.ayon_path: continue
-            
-            # expected path: folder/task
-            parts = item.ayon_path.split("/")
-            if len(parts) >= 1:
-                folder_path = parts[0]
-                # Assuming product name is same as label for now, or derived from it
-                # In a real tool this would be more complex
-                last_v = self.ayon.get_last_version(project, folder_path, item.label)
-                if last_v is not None:
-                    item.last_ayon_version = last_v
-        
-        self.model.dataChanged.emit(self.model.index(0, 4), self.model.index(len(self.model.items)-1, 4))
-
-        # 3. Create CSV
-        csv_path = os.path.join(tempfile.gettempdir(), "ayon_ingest.csv")
+    def _write_ingest_csv(self, items, project, csv_path):
+        import csv
         try:
             with open(csv_path, "w", newline="") as f:
                 writer = csv.writer(f)
                 # Header
                 writer.writerow(["File Path", "Folder Path", "Task Name", "Variant", "Version"])
-                for item in tagged_items:
-                    # Parse ayon_path (expected: /project/folder/task)
-                    # Simplified for now
+                for item in items:
                     writer.writerow([
                         item.file_path, 
                         item.ayon_path, 
-                        "GenericTask", # Placeholder
+                        "GenericTask", 
                         item.label, 
                         item.version
                     ])
         except Exception as e:
-            QMessageBox.critical(self, "Ingest", f"Failed to create CSV: {e}")
-            return
-
-        # 4. Call external process
-        tray_path = self.config.get("traypublisher_path", "ayon_console.exe")
-        project = self.top_bar.combo_project.currentText()
-        
-        cmd = [
-            tray_path, "addon", "traypublisher", "ingestcsv",
-            "--filepath", csv_path,
-            "--project", project
-        ]
-
-        try:
-            subprocess.Popen(cmd)
-            self.log_message(f"Ingest CSV created and TrayPublisher started.", "success")
-            self.log_message(f"CSV Path: {csv_path}")
-        except Exception as e:
-            self.log_message(f"Failed to start TrayPublisher: {e}", "error")
-            QMessageBox.critical(self, "Ingest", f"Failed to start TrayPublisher: {e}")
+            self.log_message(f"Failed to write CSV: {e}", "error")
+            QMessageBox.critical(self, "CSV Error", f"Failed to write CSV: {e}")
 
     def _on_selection_changed(self, selected, deselected):
         pass # Handle via sync methods now
@@ -858,15 +976,26 @@ class MainWindow(QMainWindow):
         self._selection_lock = True
         try:
             self.thumb_area.scene.clearSelection()
-            selected_rows = [idx.row() for idx in self.spreadsheet.table.selectionModel().selectedRows()]
+            
+            # Identify which model is active in the spreadsheet
+            is_csv = self.spreadsheet._is_csv_mode
+            table_selection = self.spreadsheet.table.selectionModel().selectedRows()
             
             selected_paths = []
-            for row in selected_rows:
-                if row < len(self.model.items):
-                    item_data = self.model.items[row]
-                    if item_data in self.thumb_area.item_to_thumb:
-                        self.thumb_area.item_to_thumb[item_data].setSelected(True)
-                        selected_paths.append(item_data.file_path)
+            for idx in table_selection:
+                row = idx.row()
+                if is_csv:
+                    if row < len(self.csv_preview_model.tagged_items):
+                        item_data = self.csv_preview_model.tagged_items[row]
+                    else: continue
+                else:
+                    if row < len(self.model.items):
+                        item_data = self.model.items[row]
+                    else: continue
+                
+                if item_data in self.thumb_area.item_to_thumb:
+                    self.thumb_area.item_to_thumb[item_data].setSelected(True)
+                    selected_paths.append(os.path.normpath(os.path.abspath(item_data.file_path)))
             
             # Sync to FilterPanel
             self.filter_panel.select_paths(selected_paths)
@@ -881,6 +1010,7 @@ class MainWindow(QMainWindow):
         try:
             self.spreadsheet.table.selectionModel().clearSelection()
             
+            is_csv = self.spreadsheet._is_csv_mode
             selection = QItemSelection()
             selected_paths = []
             first_idx = None
@@ -888,18 +1018,24 @@ class MainWindow(QMainWindow):
             selected_items = self.thumb_area.scene.selectedItems()
             
             for item in selected_items:
-                # Find the current row for this data object
                 try:
-                    row = self.model.items.index(item.data)
-                    idx = self.model.index(row, 0)
+                    if is_csv:
+                        # Only items that are in tagged_items exist in CSV mode
+                        row = self.csv_preview_model.tagged_items.index(item.data)
+                        idx = self.csv_preview_model.index(row, 0)
+                        model = self.csv_preview_model
+                    else:
+                        row = self.model.items.index(item.data)
+                        idx = self.model.index(row, 0)
+                        model = self.model
+                        
                     if first_idx is None or idx.row() < first_idx.row():
                         first_idx = idx
                         
-                    # Select the full row for robust F2 operation
-                    tl = self.model.index(row, 0)
-                    br = self.model.index(row, self.model.columnCount() - 1)
+                    tl = model.index(row, 0)
+                    br = model.index(row, model.columnCount() - 1)
                     selection.select(tl, br)
-                    selected_paths.append(item.data.file_path)
+                    selected_paths.append(os.path.normpath(os.path.abspath(item.data.file_path)))
                 except (ValueError, AttributeError):
                     continue
             
@@ -910,6 +1046,67 @@ class MainWindow(QMainWindow):
             
             # Sync to FilterPanel
             self.filter_panel.select_paths(selected_paths)
+        finally:
+            self._selection_lock = False
+
+    def _sync_selection_from_filter(self, selected=None, deselected=None):
+        """Sync selection from FilterPanel tree to Thumbs and Table."""
+        if self._selection_lock: return
+        
+        # Get selected paths from tree
+        selected_indexes = self.filter_panel.tree.selectionModel().selectedIndexes()
+        paths = set()
+        for idx in selected_indexes:
+            if idx.column() == 0:
+                source_idx = self.filter_panel.proxy.mapToSource(idx)
+                path = self.filter_panel.fs_model.filePath(source_idx)
+                if path:
+                    paths.add(os.path.normpath(os.path.abspath(path)))
+        
+        if not paths: return
+        
+
+        self._selection_lock = True
+        try:
+            # 1. Sync to Table
+            is_csv = self.spreadsheet._is_csv_mode
+            self.spreadsheet.table.selectionModel().clearSelection()
+            
+            selection = QItemSelection()
+            first_idx = None
+            
+            # 2. Sync to Thumbs
+            self.thumb_area.scene.clearSelection()
+            
+            # We need to find which items in our model match these paths
+            target_model = self.csv_preview_model if is_csv else self.model
+            items_list = self.csv_preview_model.tagged_items if is_csv else self.model.items
+            
+            for i, item in enumerate(items_list):
+                item_abs = os.path.normpath(os.path.abspath(item.file_path))
+                is_selected = False
+                for p in paths:
+                    if item_abs == p or item_abs.startswith(p + os.sep):
+                        is_selected = True
+                        break
+                
+                if is_selected:
+                    # Select in table
+                    idx = target_model.index(i, 0)
+                    tl = target_model.index(i, 0)
+                    br = target_model.index(i, target_model.columnCount() - 1)
+                    selection.select(tl, br)
+                    if first_idx is None: first_idx = idx
+                    
+                    # Select in thumbs
+                    if item in self.thumb_area.item_to_thumb:
+                        self.thumb_area.item_to_thumb[item].setSelected(True)
+            
+            if not selection.isEmpty():
+                self.spreadsheet.table.selectionModel().select(selection, QItemSelectionModel.Select)
+                if first_idx:
+                    self.spreadsheet.table.scrollTo(first_idx)
+                    
         finally:
             self._selection_lock = False
 
@@ -960,68 +1157,50 @@ class MainWindow(QMainWindow):
         # Trigger the rename action with the specific row index
         self._on_label_action("rename", (row, item_data))
 
-    def _on_filter_search_changed(self, text):
-        if self._selection_lock: return
-        self._selection_lock = True
+    def _on_add_comment(self, comment):
+        if not comment: return
         
         selection_model = self.spreadsheet.table.selectionModel()
-        selection_model.clearSelection()
+        selected_indexes = selection_model.selectedRows()
         
-        if not text:
-            self._selection_lock = False
+        if not selected_indexes:
+            self.log_message("No items selected to add comment to.", "warning")
             return
+            
+        is_csv = self.spreadsheet._is_csv_mode
+        count = 0
+        for idx in selected_indexes:
+            row = idx.row()
+            if is_csv:
+                if row < len(self.csv_preview_model.tagged_items):
+                    item = self.csv_preview_model.tagged_items[row]
+                    item.comment = comment
+                    count += 1
+            else:
+                if row < len(self.model.items):
+                    item = self.model.items[row]
+                    item.comment = comment
+                    count += 1
+            
+        # Refresh views
+        self.csv_preview_model.layoutChanged.emit()
+        self.log_message(f"Added comment to {count} items.", "success")
 
-        # Select items that contain the search text (case-insensitive)
-        selection = QItemSelection()
-        first_idx = None
+    def _on_filter_search_changed(self, text):
+        if self._selection_lock: return
+        self._search_filter_text = text.lower()
         
-        search_term = text.lower()
-        for i, item in enumerate(self.model.items):
-            if search_term in item.label.lower():
-                idx = self.model.index(i, 0)
-                selection.select(idx, idx)
-                if first_idx is None: first_idx = idx
-        
-        selection_model.select(selection, QItemSelectionModel.Select | QItemSelectionModel.Rows)
-        self._selection_lock = False
-        
-        if first_idx:
-            self.spreadsheet.table.scrollTo(first_idx)
+        # Trigger re-filtering in both views
+        self.spreadsheet.update_filtering(
+            age_filter=(self._age_filter_enabled, self._age_filter_value),
+            search_text=self._search_filter_text
+        )
+        self.thumb_area.rearrange_items(
+            age_filter=(self._age_filter_enabled, self._age_filter_value),
+            search_text=self._search_filter_text
+        )
 
-    def _on_filter_mode_changed(self, button):
-        if button == self.filter_panel.btn_select:
-            # Clear thumbnail filtering when switching back to select mode
-            self.thumb_area.set_path_filter("")
             
-    def _on_filter_folder_selected(self, path):
-        # Determine mode from filter panel
-        is_select_mode = self.filter_panel.btn_select.isChecked()
-        
-        if is_select_mode:
-            # Select items that are in this folder
-            selection_model = self.spreadsheet.table.selectionModel()
-            selection_model.clearSelection()
-            
-            selection = QItemSelection()
-            first_idx = None
-            
-            for i, item in enumerate(self.model.items):
-                # Check if item file path starts with filter path
-                # Use normpath for reliable comparison
-                item_abs = os.path.normpath(os.path.abspath(item.file_path))
-                filter_abs = os.path.normpath(os.path.abspath(path))
-                
-                if item_abs == filter_abs or item_abs.startswith(filter_abs + os.sep):
-                    idx = self.model.index(i, 0)
-                    selection.select(idx, idx)
-                    if first_idx is None: first_idx = idx
-            
-            selection_model.select(selection, QItemSelectionModel.Select | QItemSelectionModel.Rows)
-            if first_idx:
-                self.spreadsheet.table.scrollTo(first_idx)
-        else:
-            # 'Show' mode - Filter the thumbnails
-            self.thumb_area.set_path_filter(path)
 
     def _on_label_action(self, action, data):
         if action == "tag":
@@ -1126,7 +1305,9 @@ class MainWindow(QMainWindow):
             self.ayon_panel.hide()
             self.filter_panel.hide()
             self.top_bar.hide()
-            self.btn_ingest_big.hide()
+            self.btn_export_csv.hide()
+            self.btn_publish_local.hide()
+            self.btn_publish_deadline.hide()
             
             if source == "thumbs":
                 self.spreadsheet.hide()
@@ -1143,7 +1324,9 @@ class MainWindow(QMainWindow):
             self.spreadsheet.show()
             self.thumb_area.show()
             self.top_bar.show()
-            self.btn_ingest_big.show()
+            self.btn_export_csv.show()
+            self.btn_publish_local.show()
+            self.btn_publish_deadline.show()
             
             self.thumb_area.btn_maximize.setText("Maximize")
             self.thumb_area.btn_maximize.setChecked(False)
@@ -1214,6 +1397,10 @@ class MainWindow(QMainWindow):
 
     def _on_ayon_select_assigned(self, ayon_path):
         """Select all items that have this AYON path."""
+        is_csv = self.spreadsheet._is_csv_mode
+        target_model = self.csv_preview_model if is_csv else self.model
+        items_list = self.csv_preview_model.tagged_items if is_csv else self.model.items
+        
         selection_model = self.spreadsheet.table.selectionModel()
         selection_model.clearSelection()
         
@@ -1221,12 +1408,12 @@ class MainWindow(QMainWindow):
         first_idx = None
         count = 0
         
-        for i, item in enumerate(self.model.items):
+        for i, item in enumerate(items_list):
             if item.ayon_path == ayon_path:
-                idx = self.model.index(i, 0)
+                idx = target_model.index(i, 0)
                 # Select the full row
-                tl = self.model.index(i, 0)
-                br = self.model.index(i, self.model.columnCount() - 1)
+                tl = target_model.index(i, 0)
+                br = target_model.index(i, target_model.columnCount() - 1)
                 selection.select(tl, br)
                 if first_idx is None: first_idx = idx
                 count += 1
@@ -1236,6 +1423,9 @@ class MainWindow(QMainWindow):
             if first_idx:
                 self.spreadsheet.table.scrollTo(first_idx)
             self.log_message(f"Selected {count} items assigned to '{ayon_path}'.")
+            
+            # Sync to Thumbs and Filter Panel
+            self._sync_selection_to_thumbs()
         else:
             self.log_message(f"No items assigned to '{ayon_path}' found.", "warning")
 

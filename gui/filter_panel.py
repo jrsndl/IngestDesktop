@@ -1,6 +1,7 @@
 import os
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QPushButton, QLineEdit, 
-                             QHBoxLayout, QLabel, QSpinBox, QTreeView, QFileSystemModel, QButtonGroup, QComboBox)
+                             QHBoxLayout, QLabel, QSpinBox, QTreeView, QFileSystemModel, 
+                             QButtonGroup, QComboBox, QAbstractItemView, QCheckBox)
 from PySide6.QtCore import Signal, Qt, QDir, QSortFilterProxyModel, QItemSelectionModel
 from PySide6.QtGui import QColor
 
@@ -8,18 +9,30 @@ class TagColorProxyModel(QSortFilterProxyModel):
     def __init__(self, main_model, parent=None):
         super().__init__(parent)
         self.main_model = main_model
-        # Fast lookup set: normalized_abs_path for UNTAGGED items
-        self._untagged_paths = set()
+        
+        # Current filter state for coloring
+        self._search_text = ""
+        self._age_limit = 0
+        self._age_enabled = False
+        
+        # Fast lookup: normalized_abs_path -> (is_tagged, age_minutes, label)
+        self._path_info = {}
         self._rebuild_cache()
+        
         self.main_model.dataChanged.connect(self._on_model_data_changed)
         self.main_model.modelReset.connect(self._rebuild_cache)
 
+    def set_filters(self, search_text, age_limit, age_enabled):
+        self._search_text = search_text.lower()
+        self._age_limit = age_limit
+        self._age_enabled = age_enabled
+        self.invalidateFilter() # Triggers data redraw
+
     def _rebuild_cache(self):
-        self._untagged_paths = set()
+        self._path_info = {}
         for item in self.main_model.items:
-            if not item.is_tagged:
-                abs_path = os.path.normpath(os.path.abspath(item.file_path))
-                self._untagged_paths.add(abs_path)
+            abs_path = os.path.normpath(os.path.abspath(item.file_path))
+            self._path_info[abs_path] = (item.is_tagged, item.age_minutes, item.label)
         self.invalidateFilter()
 
     def _on_model_data_changed(self, tl, br):
@@ -30,10 +43,8 @@ class TagColorProxyModel(QSortFilterProxyModel):
         idx = source_model.index(source_row, 0, source_parent)
         file_name = source_model.fileName(idx)
         
-        # Completely hide generated thumbnails
         if file_name.lower().endswith("_thumbnail.png"):
             return False
-            
         return super().filterAcceptsRow(source_row, source_parent)
 
     def data(self, index, role=Qt.DisplayRole):
@@ -42,14 +53,33 @@ class TagColorProxyModel(QSortFilterProxyModel):
             file_path = self.sourceModel().filePath(source_index)
             abs_path = os.path.normpath(os.path.abspath(file_path))
             
-            if abs_path in self._untagged_paths:
-                return QColor("#ff4444")
+            if abs_path in self._path_info:
+                is_tagged, age_min, label = self._path_info[abs_path]
+                
+                # Check filter match
+                matches_search = not self._search_text or self._search_text in label.lower()
+                matches_age = not self._age_enabled or (age_min <= self._age_limit)
+                matches_filters = matches_search and matches_age
+                
+                if matches_filters:
+                    if is_tagged:
+                        return QColor("#ffffff") # White
+                    else:
+                        return QColor("#ff4444") # Red
+                else:
+                    if is_tagged:
+                        return QColor("#888888") # Gray
+                    else:
+                        return QColor("#800000") # Dark Red
+            else:
+                # Default for folders or items not in model
+                return QColor("#aaaaaa")
         
         return super().data(index, role)
 
 class FilterPanel(QWidget):
     search_changed = Signal(str)
-    age_changed = Signal(int, str) # value, units
+    age_changed = Signal(int, str, bool) # value, units, enabled
     folder_selected = Signal(str)
 
     def __init__(self, main_model, parent=None):
@@ -58,35 +88,27 @@ class FilterPanel(QWidget):
         self.layout = QVBoxLayout(self)
         self.layout.setContentsMargins(0, 0, 0, 0)
 
-        # Mode Buttons
-        btn_layout = QHBoxLayout()
-        self.mode_group = QButtonGroup(self)
-        self.mode_group.setExclusive(True)
+        # Search Filter
+        search_layout = QHBoxLayout()
+        self.chk_search = QCheckBox("Search:")
+        self.chk_search.setChecked(True)
+        self.chk_search.toggled.connect(self._on_search_change)
+        search_layout.addWidget(self.chk_search)
         
-        self.btn_select = QPushButton("Select")
-        self.btn_select.setCheckable(True)
-        self.btn_select.setChecked(True)
-        
-        self.btn_show = QPushButton("Show")
-        self.btn_show.setCheckable(True)
-        
-        self.mode_group.addButton(self.btn_select)
-        self.mode_group.addButton(self.btn_show)
-        
-        btn_layout.addWidget(self.btn_select)
-        btn_layout.addWidget(self.btn_show)
-        self.layout.addLayout(btn_layout)
-
-        # Search Bar
         self.search_bar = QLineEdit()
-        self.search_bar.setPlaceholderText("Search images (*)...")
+        self.search_bar.setPlaceholderText("filter by file name")
         self.search_bar.setMaxLength(20)
-        self.search_bar.textChanged.connect(self.search_changed.emit)
-        self.layout.addWidget(self.search_bar)
+        self.search_bar.textChanged.connect(self._on_search_change)
+        search_layout.addWidget(self.search_bar)
+        self.layout.addLayout(search_layout)
 
         # Age Filter
         age_layout = QHBoxLayout()
-        age_layout.addWidget(QLabel("Age:"))
+        self.chk_age = QCheckBox("Age:")
+        self.chk_age.setChecked(False)
+        self.chk_age.toggled.connect(self._on_age_change)
+        age_layout.addWidget(self.chk_age)
+        
         self.spin_age = QSpinBox()
         self.spin_age.setRange(0, 1000)
         self.spin_age.valueChanged.connect(self._on_age_change)
@@ -110,21 +132,18 @@ class FilterPanel(QWidget):
         self.tree.setHeaderHidden(True)
         for i in range(1, self.fs_model.columnCount()):
             self.tree.hideColumn(i)
+        self.tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.tree.clicked.connect(self._on_folder_click)
         self.layout.addWidget(self.tree)
 
     def set_root_folder(self, path):
         self.fs_model.setRootPath(path)
-        # Set root index to parent of path to show the root folder itself
-        parent_path = os.path.dirname(path)
-        source_idx = self.fs_model.index(parent_path)
+        source_idx = self.fs_model.index(path)
         proxy_idx = self.proxy.mapFromSource(source_idx)
         self.tree.setRootIndex(proxy_idx)
         
-        # Expand to showing the root path
+        # Expand the root folder contents
         self.tree.expand(proxy_idx)
-        path_idx = self.fs_model.index(path)
-        self.tree.expand(self.proxy.mapFromSource(path_idx))
 
     def select_paths(self, paths):
         """Programmatically select multiple files in the tree."""
@@ -139,13 +158,21 @@ class FilterPanel(QWidget):
         
         first_idx = None
         for p in paths:
-            source_idx = self.fs_model.index(p)
+            norm_p = os.path.normpath(os.path.abspath(p))
+            source_idx = self.fs_model.index(norm_p)
             if source_idx.isValid():
                 proxy_idx = self.proxy.mapFromSource(source_idx)
                 tree_selection.select(proxy_idx, proxy_idx)
                 if first_idx is None: first_idx = proxy_idx
+                
+                # Ensure parent is expanded so item is "loaded" in view
+                p_idx = proxy_idx.parent()
+                while p_idx.isValid():
+                    self.tree.expand(p_idx)
+                    p_idx = p_idx.parent()
         
-        selection.select(tree_selection, QItemSelectionModel.Select | QItemSelectionModel.Rows)
+        if not tree_selection.isEmpty():
+            selection.select(tree_selection, QItemSelectionModel.Select | QItemSelectionModel.Rows)
         
         if first_idx:
             self.tree.scrollTo(first_idx)
@@ -155,7 +182,28 @@ class FilterPanel(QWidget):
         path = self.fs_model.filePath(source_index)
         self.folder_selected.emit(path)
 
+    def _on_search_change(self, _=None):
+        text = self.search_bar.text() if self.chk_search.isChecked() else ""
+        self.search_changed.emit(text)
+        self._update_proxy_filters()
+
     def _on_age_change(self, _=None):
         val = self.spin_age.value()
         units = self.combo_units.currentText()
-        self.age_changed.emit(val, units)
+        enabled = self.chk_age.isChecked()
+        self.age_changed.emit(val, units, enabled)
+        self._update_proxy_filters()
+
+    def _update_proxy_filters(self):
+        search_text = self.search_bar.text() if self.chk_search.isChecked() else ""
+        
+        # Calculate age limit in minutes
+        val = self.spin_age.value()
+        units = self.combo_units.currentText()
+        enabled = self.chk_age.isChecked()
+        
+        minutes = (val + 1)
+        if units == "hours": minutes *= 60
+        elif units == "days": minutes *= 1440
+        
+        self.proxy.set_filters(search_text, minutes, enabled)

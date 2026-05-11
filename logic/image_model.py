@@ -7,7 +7,7 @@ class ImageItem:
     def __init__(self, file_path, label=None, version=1, category="Other", 
                  preset_name=None, variant=None, product_type=None, camel_case=True,
                  representation=None, colorspace=None, rep_tags=None, is_sequence=False,
-                 preset_data=None, frame_start=None, frame_end=None, metadata=None):
+                 preset_data=None, frame_start=None, frame_end=None, metadata=None, comment=""):
         self.file_path = file_path
         self.filename = os.path.basename(file_path)
         self.label = label or os.path.splitext(self.filename)[0]
@@ -36,13 +36,14 @@ class ImageItem:
         self.frame_start = frame_start
         self.frame_end = frame_end
         self.metadata = metadata or {}
+        self.comment = comment
 
 class ImageTableModel(QAbstractTableModel):
     data_changed = Signal()
 
     COLUMNS = [
         "Tag", "Thumbnail", "Label", "Variant", "Product Name", "Category", "Preset", "Version", 
-        "Last Version", "Age", "AYON Path"
+        "Last Version", "Age", "AYON Path", "Key Value Pairs"
     ]
 
     def __init__(self, parent=None):
@@ -53,6 +54,7 @@ class ImageTableModel(QAbstractTableModel):
         self.label_allowed_regex = "^[a-zA-Z0-9_\\-\\.\\s]*$"
         self.product_name_template = "{label}"
         self.product_name_camel = True
+        self.stills_thumb_same = True
 
     def set_presets(self, presets):
         self.presets = presets
@@ -117,6 +119,8 @@ class ImageTableModel(QAbstractTableModel):
                     if m < 1440: return f"{m//60}h"
                     return f"{m//1440}d"
                 if col == 10: return item.ayon_path
+                if col == 11: # Key Value Pairs
+                    return self._get_all_tokens_string(item)
             else:
                 # For EditRole in non-label/version columns
                 return None
@@ -257,25 +261,17 @@ class ImageTableModel(QAbstractTableModel):
         self.items.sort(key=get_value, reverse=reverse)
         self.layoutChanged.emit()
 
-    def _expand_string(self, text, item, use_global_camel=False):
-        if not text:
-            return ""
-            
-        # Parse AYON path
-        # Example: /Project/FolderA/FolderB/Task
+    def _get_replacements(self, item, text="", use_global_camel=False):
+        """Build the dictionary of token replacements for an item."""
         ayon_parts = [p for p in item.ayon_path.split("/") if p]
-        
         task_name = ""
         folder_name = ""
-        parent_folder = ""
-        
         if ayon_parts:
             task_name = ayon_parts[-1]
             if len(ayon_parts) > 1:
                 folder_name = ayon_parts[-2]
-            if len(ayon_parts) > 2:
-                parent_folder = ayon_parts[-3]
         
+        parent_folder = os.path.basename(os.path.dirname(item.file_path))
         ayon_folder_path = "/".join(item.ayon_path.split("/")[:-1])
         
         # Filename with hashes for sequences
@@ -305,23 +301,65 @@ class ImageTableModel(QAbstractTableModel):
             "{file_name}": os.path.splitext(os.path.basename(item.file_path))[0],
             "{extension}": os.path.splitext(item.file_path)[1].replace(".", "").lower(),
             "{repre}": p_data.get("Representation", ""),
+            "{REPRE}": p_data.get("Representation", ""),
             "{head}": str(p_data.get("Handle Start", "0")),
+            "{HEAD}": str(p_data.get("Handle Start", "0")),
             "{tail}": str(p_data.get("Handle End", "0")),
+            "{TAIL}": str(p_data.get("Handle End", "0")),
             "{slate_exists}": "True" if p_data.get("Slate Exists") else "False",
+            "{SLATE_EXISTS}": "True" if p_data.get("Slate Exists") else "False",
             "{fps}": str(p_data.get("FPS", "")),
+            "{FPS}": str(p_data.get("FPS", "")),
             "{repre_color}": p_data.get("Colorspace", ""),
+            "{REPRE_COLOR}": p_data.get("Colorspace", ""),
             "{repre_tags}": p_data.get("Tags", ""),
+            "{REPRE_TAGS}": p_data.get("Tags", ""),
             "{version}": str(item.version),
+            "{VERSION}": str(item.version),
             "{frame_start}": str(item.frame_start) if item.frame_start is not None else "",
+            "{FRAME_START}": str(item.frame_start) if item.frame_start is not None else "",
             "{frame_end}": str(item.frame_end) if item.frame_end is not None else "",
+            "{FRAME_END}": str(item.frame_end) if item.frame_end is not None else "",
+            "{comment}": item.comment or "",
+            "{COMMENT}": item.comment or "",
+            "{thumb_path}": filename_val if (item.category == "Still" and getattr(self, "stills_thumb_same", True)) else "",
+            "{THUMB_PATH}": filename_val if (item.category == "Still" and getattr(self, "stills_thumb_same", True)) else "",
         }
+        return replacements
+
+    def _get_all_tokens_string(self, item):
+        """Returns a string listing all key=value pairs for the item."""
+        replacements = self._get_replacements(item)
+        # Sort keys to be consistent
+        sorted_keys = sorted([k for k in replacements.keys() if k.islower()])
+        pairs = []
+        for k in sorted_keys:
+            val = replacements[k]
+            pairs.append(f"{k}={val}")
+        
+        # Add metadata tokens too
+        for mk, mv in item.metadata.items():
+            pairs.append(f"{{metadata.{mk}}}={mv}")
+            
+        return "  ".join(pairs)
+
+    def _expand_string(self, text, item, use_global_camel=False):
+        if not text:
+            return ""
+            
+        replacements = self._get_replacements(item, text, use_global_camel)
         
         import re
-        pattern = "|".join(re.escape(k) for k in replacements.keys())
+        # Sort keys by length (descending) to avoid partial matches (e.g., {repre} matching inside {repre_color})
+        sorted_keys = sorted(replacements.keys(), key=len, reverse=True)
+        pattern = "|".join(re.escape(k) for k in sorted_keys)
         
         def replacer(match):
             key = match.group(0)
-            val = replacements.get(key, key)
+            val = replacements.get(key)
+            if val is None:
+                # Try case-insensitive lookup
+                val = replacements.get(key.lower(), replacements.get(key.upper(), key))
             # CamelCase logic
             camel = self.product_name_camel if use_global_camel else item.camel_case
             
@@ -329,7 +367,7 @@ class ImageTableModel(QAbstractTableModel):
                 val = val[0].upper() + val[1:]
             return val
 
-        res = re.sub(pattern, replacer, text)
+        res = re.sub(pattern, replacer, text, flags=re.IGNORECASE)
         
         # Meta data tokens (e.g. {metadata.width})
         def metadata_replacer(match):

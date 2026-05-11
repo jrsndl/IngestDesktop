@@ -163,3 +163,22 @@ Clicking the "Ingest" button will:
 - The CSV is used by TrayPublisher to ingest the files into AYON - calling external process
 - After TrayPublisher finishes, app will use AYON API to check if the files are in AYON and set the colors of the spreadsheet rows to bright green (ingested) or red (error) and show message to the user.
 
+
+
+
+* Make sure all changes in Preferences are reflected on Spreadsheet view
+* In preferences dialog, add Apply button next to Save, to apply the changes (and refresh the views), but NOT close the Preferences dialog
+
+The Category fields have to be reflected in Spreadsheet:
+default start frame: {frame_start}
+default end frame: {frame_end}
+
+The Category profiles fields have to be reflected in Spreadsheet:
+{product_type}
+Variant: {variant}
+FPS: {fps}
+Handles Start: {head}
+Handles End: {tail}
+Slate Exists: {slate_exists}
+Colorspace: {repre_color}
+Rep. Tags {repre_tags}

@@ -218,7 +218,9 @@ class ThumbnailArea(QWidget):
         self.gl_widget = QOpenGLWidget()
         self.view.setViewport(self.gl_widget)
         
-        self.view.setViewportUpdateMode(QGraphicsView.SmartViewportUpdate)
+        self.view.setViewportUpdateMode(QGraphicsView.FullViewportUpdate)
+        self.view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.scene = QGraphicsScene(self)
         self.scene.setItemIndexMethod(QGraphicsScene.BspTreeIndex)
         self.view.setScene(self.scene)
@@ -229,11 +231,6 @@ class ThumbnailArea(QWidget):
         self.view.setResizeAnchor(QGraphicsView.AnchorUnderMouse)
         self.view.viewport().installEventFilter(self)
         self.view.installEventFilter(self) # For key logic
-        
-        # Override viewport events for panning
-        self.view.viewport().mousePressEvent = self._on_viewport_mouse_press
-        self.view.viewport().mouseMoveEvent = self._on_viewport_mouse_move
-        self.view.viewport().mouseReleaseEvent = self._on_viewport_mouse_release
         
         self._is_panning = False
         self._last_pan_pos = None
@@ -272,6 +269,8 @@ class ThumbnailArea(QWidget):
         self.thread_pool.setMaxThreadCount(4)
         self._has_selection = False
         self._path_filter = ""
+        self._last_age_filter = (False, 0)
+        self._last_search_text = ""
 
     def _on_scene_selection_changed(self):
         self._has_selection = bool(self.scene.selectedItems())
@@ -330,10 +329,18 @@ class ThumbnailArea(QWidget):
                     thumb.cached_label = ""
                     thumb.update()
 
-    def rearrange_items(self):
+    def rearrange_items(self, age_filter=None, search_text=None):
         if not self.item_to_thumb or not self.model: return
         
+        if age_filter is not None:
+            self._last_age_filter = age_filter
+        if search_text is not None:
+            self._last_search_text = search_text
+            
         cols = self.slider_cols.value()
+        
+        age_enabled, age_val = self._last_age_filter
+        search_term = self._last_search_text
 
         # Variables for folder-based layout
         current_folder = None
@@ -358,7 +365,10 @@ class ThumbnailArea(QWidget):
             if self._tag_filter_state == "tagged": show_by_tag = is_tagged
             elif self._tag_filter_state == "untagged": show_by_tag = not is_tagged
             
-            if not (show_by_tag and in_path):
+            is_young_enough = not age_enabled or (item_data.age_minutes <= age_val)
+            matches_search = not search_term or search_term in item_data.label.lower()
+            
+            if not (show_by_tag and in_path and is_young_enough and matches_search):
                 item.hide()
                 continue
             
@@ -415,10 +425,6 @@ class ThumbnailArea(QWidget):
             item.update()
 
     def _on_spinner_changed(self, value):
-        if self.btn_auto_cols.isChecked():
-            self.btn_auto_cols.blockSignals(True)
-            self.btn_auto_cols.setChecked(False)
-            self.btn_auto_cols.blockSignals(False)
         self.rearrange_items()
 
     def frame_all(self):
@@ -442,11 +448,45 @@ class ThumbnailArea(QWidget):
     def eventFilter(self, source, event):
         if event.type() == QEvent.Enter:
             self.view.setFocus()
+            
+        if event.type() == QEvent.Wheel:
+            if source in (self.view, self.view.viewport()):
+                angle = event.angleDelta().y()
+                factor = 1.15 if angle > 0 else 1 / 1.15
+                self.view.scale(factor, factor)
+                self.update_zoom_indicator()
+                return True # Prevent default scrolling/panning
         
         if event.type() == QEvent.MouseButtonPress:
             if source is self.view.viewport():
+                is_middle = event.button() == Qt.MiddleButton
+                is_ctrl_left = event.button() == Qt.LeftButton and (event.modifiers() & Qt.ControlModifier)
+                
+                if is_middle or is_ctrl_left:
+                    self._is_panning = True
+                    self._last_pan_pos = event.pos()
+                    self.view.viewport().setCursor(Qt.ClosedHandCursor)
+                    return True
+                    
                 if not self.view.itemAt(event.pos()):
                     self.scene.clearSelection()
+
+        if event.type() == QEvent.MouseMove:
+            if self._is_panning:
+                delta = event.pos() - self._last_pan_pos
+                self._last_pan_pos = event.pos()
+                
+                # Use translate instead of scrollbars for "infinite" panning
+                # We need to account for current scale
+                factor = self.view.transform().m11()
+                self.view.translate(delta.x() / factor, delta.y() / factor)
+                return True
+
+        if event.type() == QEvent.MouseButtonRelease:
+            if self._is_panning:
+                self._is_panning = False
+                self.view.viewport().setCursor(Qt.ArrowCursor)
+                return True
         
         if event.type() == QEvent.MouseButtonDblClick:
             if source is self.view.viewport():
@@ -584,37 +624,6 @@ class ThumbnailArea(QWidget):
                 current_col = 0
                 current_row += 1
 
-    def _on_viewport_mouse_press(self, event):
-        item = self.view.itemAt(event.pos())
-        if not item and event.button() == Qt.LeftButton and (event.modifiers() & Qt.ControlModifier):
-            self._is_panning = True
-            self._last_pan_pos = event.pos()
-            self.view.viewport().setCursor(Qt.ClosedHandCursor)
-            event.accept()
-            return
-        self._is_panning = False
-        QWidget.mousePressEvent(self.view.viewport(), event)
-
-    def _on_viewport_mouse_move(self, event):
-        if self._is_panning:
-            delta = event.pos() - self._last_pan_pos
-            self._last_pan_pos = event.pos()
-            h_bar = self.view.horizontalScrollBar()
-            v_bar = self.view.verticalScrollBar()
-            h_bar.setValue(h_bar.value() - delta.x())
-            v_bar.setValue(v_bar.value() - delta.y())
-            event.accept()
-            return
-        QWidget.mouseMoveEvent(self.view.viewport(), event)
-
-    def _on_viewport_mouse_release(self, event):
-        if self._is_panning:
-            self._is_panning = False
-            self.view.viewport().setCursor(Qt.ArrowCursor)
-            event.accept()
-            return
-        QWidget.mouseReleaseEvent(self.view.viewport(), event)
-
     def contextMenuEvent(self, event):
         menu = QMenu(self)
         tag_action = QAction("Tag/Untag Selected", self)
@@ -637,14 +646,8 @@ class ThumbnailArea(QWidget):
         menu.exec(event.globalPos())
 
     def wheelEvent(self, event):
-        if self.view.underMouse():
-            angle = event.angleDelta().y()
-            factor = 1.15 if angle > 0 else 1 / 1.15
-            self.view.scale(factor, factor)
-            self.update_zoom_indicator()
-            event.accept()
-        else:
-            super().wheelEvent(event)
+        # Base wheel events for the widget itself (if any)
+        super().wheelEvent(event)
 
     def load_high_res(self, graph_item):
         item_data = graph_item.data
