@@ -21,7 +21,7 @@ class ScalingDelegate(QStyledItemDelegate):
 
 class SpreadsheetPanel(QWidget):
     check_duplicates_clicked = Signal()
-    version_check_clicked = Signal()
+    version_collision_check_clicked = Signal()
     maximize_toggle_requested = Signal()
     label_action_requested = Signal(str, object)
     csv_mode_changed = Signal(bool)
@@ -50,7 +50,7 @@ class SpreadsheetPanel(QWidget):
         self.btn_csv.setCheckable(True)
         self.btn_csv.toggled.connect(self._on_csv_toggled)
         
-        self.btn_check_ver.clicked.connect(self.version_check_clicked.emit)
+        self.btn_check_ver.clicked.connect(self.version_collision_check_clicked.emit)
         self.btn_check_dup.clicked.connect(self.check_duplicates_clicked.emit)
         
         self.lbl_row_height = QLabel("Row Height:")

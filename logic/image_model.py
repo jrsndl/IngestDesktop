@@ -36,6 +36,7 @@ class ImageItem:
         self.frame_start = frame_start
         self.frame_end = frame_end
         self.metadata = metadata or {}
+        self.is_duplicate = False
         self.comment = comment
 
 class ImageTableModel(QAbstractTableModel):
@@ -322,6 +323,8 @@ class ImageTableModel(QAbstractTableModel):
             "{FRAME_END}": str(item.frame_end) if item.frame_end is not None else "",
             "{comment}": item.comment or "",
             "{COMMENT}": item.comment or "",
+            "{is_duplicate}": "True" if getattr(item, "is_duplicate", False) else "False",
+            "{IS_DUPLICATE}": "True" if getattr(item, "is_duplicate", False) else "False",
             "{thumb_path}": filename_val if (item.category == "Still" and getattr(self, "stills_thumb_same", True)) else "",
             "{THUMB_PATH}": filename_val if (item.category == "Still" and getattr(self, "stills_thumb_same", True)) else "",
         }

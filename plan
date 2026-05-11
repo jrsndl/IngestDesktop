@@ -182,3 +182,28 @@ Handles End: {tail}
 Slate Exists: {slate_exists}
 Colorspace: {repre_color}
 Rep. Tags {repre_tags}
+
+
+Make function to check duplicates:
+* only execute for items with AYON path set
+* only execute for items that have tag on
+* only consider items that fit the right filter panel (if some filtering is set there)
+* for all items (that meet conditions above), construct the string that consists of {ayon_path}{product_name}{version}. chack that for each item the string is unique. If string is not unique (ie some other item has identical string), items that share the same string have to set key {is_duplicate} to true; items with unique string have {is_duplicate} = false
+* make sure to add {is_duplicate} to the Key Values Pairs column
+
+Make function to check AYON version collision:
+* only execute for items with AYON path set
+* only execute for items that have tag on
+* only consider items that fit the right filter panel (if some filtering is set there)
+* 
+* for all items that meet conditions above:
+- check if product name already exists in AYON database, if yes, find highest version available in AYON. Fill the "Last Version" column of the spreadsheet view.
+
+
+In preferences - general, add radio button option: "Version Collision: fail on existing  /  set to lowest available"
+
+Preferences: CSV: make sure the CSV columns text box expands to all available height of the Preferences window
+
+Left AYON view:
+* with AYON path (and task) selected, the bottomm part shows product names and their versions
+* with item(s) selected (in thumb / spreadsheet / filter panel), double clicking the product name will set not only the AYON path (as by double clicking the task name), but also the label of all the selected items to the variant = double clicked product name with left-stripped product type. For example doubleclicking the imagemain (product=image) will set the AYON path (the selected path) AND the label (in this case: "main") of all the selected items.

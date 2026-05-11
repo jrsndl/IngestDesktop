@@ -293,8 +293,16 @@ class MainWindow(QMainWindow):
         self.resize(1200, 800)
         self.setAcceptDrops(True)
 
-        # Load Config
+        # Load Config and Secrets
         self.config = self.load_config()
+        self.secrets = self.load_secrets()
+
+        # Migration: Move API key to secrets if found in config but not in secrets
+        if "ayon_api_key" in self.config:
+            if "ayon_api_key" not in self.secrets or not self.secrets["ayon_api_key"]:
+                self.secrets["ayon_api_key"] = self.config["ayon_api_key"]
+                self.save_secrets()
+            # We'll remove it from config upon the next save_config call
 
         # Logic
         self.model = ImageTableModel()
@@ -304,9 +312,11 @@ class MainWindow(QMainWindow):
         
         self.csv_preview_model = CSVPreviewModel(self.model, self.config)
         
-        # Clean credentials
+        # Clean credentials - prioritize secrets
         server_url = self.config.get("ayon_server_url", "").strip()
-        api_key = self.config.get("ayon_api_key", "").strip()
+        api_key = self.secrets.get("ayon_api_key", "").strip()
+        if not api_key: # Fallback to config during transition
+            api_key = self.config.get("ayon_api_key", "").strip()
         
         self.ayon = AyonClient(server_url, api_key)
         self._is_maximized = False
@@ -366,9 +376,10 @@ class MainWindow(QMainWindow):
         self.spreadsheet.set_csv_model(self.csv_preview_model)
         self.spreadsheet.btn_tag_sel.clicked.connect(self._on_tag_selection)
         self.spreadsheet.maximize_toggle_requested.connect(lambda: self.toggle_maximize("spreadsheet"))
-        self.spreadsheet.version_check_clicked.connect(self.perform_version_check)
+        self.spreadsheet.version_collision_check_clicked.connect(self.perform_version_collision_check)
         self.spreadsheet.label_action_requested.connect(self._on_label_action)
         self.spreadsheet.add_comment_requested.connect(self._on_add_comment)
+        self.spreadsheet.check_duplicates_clicked.connect(self.perform_duplicate_check)
         self.v_splitter.addWidget(self.spreadsheet)
         
         # Connect selection after model is set
@@ -467,10 +478,21 @@ class MainWindow(QMainWindow):
 
     def load_config(self):
         try:
-            with open("config.json", "r") as f:
-                return json.load(f)
-        except:
-            return {}
+            if os.path.exists("config.json"):
+                with open("config.json", "r") as f:
+                    return json.load(f)
+        except Exception as e:
+            print(f"Error loading config: {e}")
+        return {}
+
+    def load_secrets(self):
+        try:
+            if os.path.exists("secrets.json"):
+                with open("secrets.json", "r") as f:
+                    return json.load(f)
+        except Exception as e:
+            print(f"Error loading secrets: {e}")
+        return {}
 
     def load_initial_data(self):
         # Apply label regex
@@ -708,7 +730,9 @@ class MainWindow(QMainWindow):
                 self.finished.emit(self.ayon.is_connected, projects)
 
         server_url = self.config.get("ayon_server_url", "").strip()
-        api_key = self.config.get("ayon_api_key", "").strip()
+        api_key = self.secrets.get("ayon_api_key", "").strip()
+        if not api_key: # Fallback
+            api_key = self.config.get("ayon_api_key", "").strip()
         
         self._conn_thread = ConnectionThread(self.ayon, server_url, api_key, reconnect)
         self._conn_thread.finished.connect(self._on_ayon_refreshed)
@@ -769,17 +793,18 @@ class MainWindow(QMainWindow):
         old_regex = self.config.get("version_regex", r"([._]v|v)(\d+)")
         old_exts = json.dumps(self.config.get("extensions", {}), sort_keys=True)
 
-        dialog = PreferencesDialog(self.config, self)
+        dialog = PreferencesDialog(self.config, self.secrets, self)
         
         # Connect Apply button signal
-        dialog.applied.connect(lambda settings: self._apply_preferences(settings, old_detect, old_thumb, old_regex, old_exts, show_message=False))
+        dialog.applied.connect(lambda data: self._apply_preferences(data[0], data[1], old_detect, old_thumb, old_regex, old_exts, show_message=False))
         
         if dialog.exec():
-            new_settings = dialog.get_settings()
-            self._apply_preferences(new_settings, old_detect, old_thumb, old_regex, old_exts, show_message=True)
+            new_config, new_secrets = dialog.get_settings()
+            self._apply_preferences(new_config, new_secrets, old_detect, old_thumb, old_regex, old_exts, show_message=True)
 
-    def _apply_preferences(self, new_settings, old_detect, old_thumb, old_regex, old_exts, show_message=True):
-        self.config.update(new_settings)
+    def _apply_preferences(self, new_config, new_secrets, old_detect, old_thumb, old_regex, old_exts, show_message=True):
+        self.config.update(new_config)
+        self.secrets.update(new_secrets)
         self.thumb_area.slider_cols.setValue(self.config.get("default_columns", 12))
         
         # Apply label regex update
@@ -788,6 +813,7 @@ class MainWindow(QMainWindow):
         self.thumb_area.update_label_validator(label_regex)
         
         self.save_config()
+        self.save_secrets()
         self._update_model_presets()
         
         # Update model properties that affect string expansion
@@ -854,8 +880,17 @@ class MainWindow(QMainWindow):
             )
 
     def save_config(self):
+        # Sensitive data should not be in config.json
+        clean_config = self.config.copy()
+        if "ayon_api_key" in clean_config:
+            del clean_config["ayon_api_key"]
+            
         with open("config.json", "w") as f:
-            json.dump(self.config, f, indent=4)
+            json.dump(clean_config, f, indent=4)
+
+    def save_secrets(self):
+        with open("secrets.json", "w") as f:
+            json.dump(self.secrets, f, indent=4)
 
     def perform_export_csv(self):
         tagged_items = self._get_tagged_for_ingest()
@@ -1465,21 +1500,94 @@ class MainWindow(QMainWindow):
         self._prod_thread.finished.connect(self.ayon_panel.set_products)
         self._prod_thread.start()
 
-    def perform_version_check(self):
-        """Batch check current versions in AYON for tagged items."""
+    def perform_duplicate_check(self):
+        """Identify items sharing same {ayon_path}{product_name}{version} strings."""
+        self.log_message("Starting duplicate check...")
+        
+        # 1. Gather candidate items based on criteria
+        # - tagged on
+        # - valid AYON path assigned
+        # - visible according to current UI filters
+        candidates = []
+        for item in self.model.items:
+            item.is_duplicate = False # Reset status for all
+            
+            if not (item.is_tagged and item.ayon_path):
+                continue
+            
+            # Check if fits the right filter panel
+            age_min = item.age_minutes
+            label = item.label
+            matches_search = not self._search_filter_text or self._search_filter_text in label.lower()
+            matches_age = not self._age_filter_enabled or (age_min <= self._age_filter_value)
+            
+            if matches_search and matches_age:
+                candidates.append(item)
+
+        if not candidates:
+            self.log_message("No candidate items (tagged, assigned, and filtered) for duplicate check.", "warning")
+            self.model.layoutChanged.emit()
+            return
+
+        # 2. Group by identity string: {ayon_path}{product_name}{version}
+        identity_map = {}
+        for item in candidates:
+            # Product name expanded from template
+            prod_name = self.model._expand_string(self.model.product_name_template, item, use_global_camel=True)
+            identity = f"{item.ayon_path}{prod_name}{item.version}"
+            
+            if identity not in identity_map:
+                identity_map[identity] = []
+            identity_map[identity].append(item)
+
+        # 3. Mark items in groups with more than one item as duplicates
+        duplicate_items_count = 0
+        for identity, items in identity_map.items():
+            if len(items) > 1:
+                for item in items:
+                    item.is_duplicate = True
+                duplicate_items_count += len(items)
+
+        # 4. Refresh view to show updated {is_duplicate} in Key Value Pairs column
+        self.model.layoutChanged.emit()
+        
+        if duplicate_items_count > 0:
+            self.log_message(f"Duplicate check complete: Found {duplicate_items_count} items sharing {len([k for k,v in identity_map.items() if len(v)>1])} unique identities.", "warning")
+        else:
+            self.log_message("Duplicate check complete: No duplicates found among candidate items.", "success")
+
+    def perform_version_collision_check(self):
+        """Batch check current versions in AYON for tagged and filtered items."""
         project = self.top_bar.combo_project.currentText()
         if not project: return
         
-        tagged_items = [item for item in self.model.items if item.is_tagged and item.ayon_path]
-        if not tagged_items: 
-            self.log_message("No tagged items with AYON paths to check.", "warning")
+        # 1. Gather candidate items based on criteria
+        # - tagged on
+        # - valid AYON path assigned
+        # - visible according to current UI filters
+        candidates = []
+        for item in self.model.items:
+            if not (item.is_tagged and item.ayon_path):
+                continue
+            
+            # Check if fits the right filter panel
+            age_min = item.age_minutes
+            label = item.label
+            matches_search = not self._search_filter_text or self._search_filter_text in label.lower()
+            matches_age = not self._age_filter_enabled or (age_min <= self._age_filter_value)
+            
+            if matches_search and matches_age:
+                candidates.append(item)
+
+        if not candidates:
+            self.log_message("No candidate items (tagged, assigned, and filtered) for version collision check.", "warning")
             return
         
         path_map = self.ayon_panel.get_path_to_id_map()
         folder_ids = set()
         items_to_check = []
         
-        for item in tagged_items:
+        for item in candidates:
             # ayon_path is /Project/Folder/Task - we need the folder path
             folder_path = "/".join(item.ayon_path.split("/")[:-1])
             f_id = path_map.get(folder_path)
@@ -1492,7 +1600,7 @@ class MainWindow(QMainWindow):
             self.log_message("Could not resolve AYON folder IDs for selected paths.", "error")
             return
             
-        self.log_message(f"Checking AYON versions for {len(tagged_items)} items...")
+        self.log_message(f"Checking AYON versions for {len(candidates)} items...")
         
         if hasattr(self, "_ver_thread") and self._ver_thread.isRunning():
             self._ver_thread.terminate()

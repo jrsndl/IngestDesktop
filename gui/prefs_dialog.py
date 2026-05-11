@@ -5,13 +5,14 @@ from PySide6.QtCore import Qt, Signal
 from gui.preset_widget import PresetWidget
 
 class PreferencesDialog(QDialog):
-    applied = Signal(dict)
+    applied = Signal(object)
     
-    def __init__(self, config, parent=None):
+    def __init__(self, config, secrets, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Preferences")
         self.resize(600, 600)
         self.config = config
+        self.secrets = secrets
         
         self.layout = QVBoxLayout(self)
         
@@ -25,8 +26,6 @@ class PreferencesDialog(QDialog):
         
         # AYON Settings
         self.server_url = QLineEdit(self.config.get("ayon_server_url", ""))
-        self.api_key = QLineEdit(self.config.get("ayon_api_key", ""))
-        self.api_key.setEchoMode(QLineEdit.Password)
         
         # Scanner Settings
         self.version_regex = QLineEdit(self.config.get("version_regex", r"([._]v|v)(\d+)"))
@@ -59,7 +58,6 @@ class PreferencesDialog(QDialog):
         self.scan_folder_layout.addWidget(self.btn_browse_scan)
 
         self.form.addRow("AYON Server URL:", self.server_url)
-        self.form.addRow("AYON API Key:", self.api_key)
         self.form.addRow("Default Scan Folder:", self.scan_folder_layout)
         self.form.addRow("Version Regex:", self.version_regex)
         self.form.addRow("Product Name Template:", self.product_name)
@@ -270,6 +268,19 @@ class PreferencesDialog(QDialog):
                 for data in existing:
                     self.add_preset(p_type, data)
 
+        # Secrets Tab
+        self.secrets_tab = QWidget()
+        self.secrets_layout = QVBoxLayout(self.secrets_tab)
+        self.secrets_form = QFormLayout()
+        
+        self.api_key = QLineEdit(self.secrets.get("ayon_api_key", ""))
+        self.api_key.setEchoMode(QLineEdit.Password)
+        self.secrets_form.addRow("AYON API Key:", self.api_key)
+        
+        self.secrets_layout.addLayout(self.secrets_form)
+        self.secrets_layout.addStretch()
+        self.tabs.addTab(self.secrets_tab, "Secrets")
+
         self.layout.addWidget(self.tabs)
         
         # Buttons
@@ -405,9 +416,8 @@ class PreferencesDialog(QDialog):
             if p_type == "stills" and stills_thumb_cb:
                 stills_thumb_same = stills_thumb_cb.isChecked()
 
-        return {
+        new_config = {
             "ayon_server_url": self.server_url.text(),
-            "ayon_api_key": self.api_key.text(),
             "version_regex": self.version_regex.text(),
             "default_columns": self.default_cols.value(),
             "age_source": self.age_source.currentText(),
@@ -435,3 +445,7 @@ class PreferencesDialog(QDialog):
             "oiiotool_path": self.oiiotool_path.text(),
             "ocio_config": self.ocio_config.text()
         }
+        new_secrets = {
+            "ayon_api_key": self.api_key.text()
+        }
+        return new_config, new_secrets
