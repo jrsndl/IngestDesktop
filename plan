@@ -208,3 +208,15 @@ Left AYON view:
 * with item(s) selected (in thumb / spreadsheet / filter panel), double clicking the product name will set not only the AYON path (as by double clicking the task name), but also the label of all the selected items to the variant = double clicked product name with left-stripped product type. For example doubleclicking the imagemain (product=image) will set the AYON path (the selected path) AND the label (in this case: "main") of all the selected items.
 
 Spreadsheet view: by default, turn off visibility of the "Key Value Pairs" column.
+
+
+Preferences:
+* add "Auto-Assign" tab;
+- to "Auto-Assign" tab, add checkbox: "Assign first match if more than one leaf folder name matches"
+- to "Auto-Assign" tab, add checkbox: "Assign first task if folder match is found, but task match is not"
+
+Left AYON panel: 
+* remove "Assign Mode" button
+* make the refresh button label "Refresh Ayon"
+* make the "assign ayon path by regex" widget
+- single line text box for regex, followed by mini-dropdown for regex presets, followed by button with label "Assign 0 matches"

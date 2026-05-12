@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (QGraphicsView, QGraphicsScene, QGraphicsItem, QGr
                              QSpinBox, QLabel, QLineEdit, QSlider, QFrame)
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtCore import Qt, QRectF, QPointF, Signal, QSize, QEvent, QTimer, QRegularExpression, QRunnable, QThreadPool, QObject
-from PySide6.QtGui import QPainter, QPen, QColor, QAction, QPixmap, QFontMetrics, QRegularExpressionValidator, QImage
+from PySide6.QtGui import QPainter, QPen, QColor, QAction, QPixmap, QFontMetrics, QRegularExpressionValidator, QImage, QFont, QTextOption
 from utils import generate_thumbnail
 
 class ThumbnailItem(QGraphicsObject):
@@ -25,7 +25,11 @@ class ThumbnailItem(QGraphicsObject):
         self.setCacheMode(QGraphicsItem.NoCache)
 
     def boundingRect(self):
-        return QRectF(0, 0, self.size + 20, self.size + 40)
+        # Dynamic height based on font size (approx 3.5 lines for label)
+        font_size = getattr(self, 'font_size', 10)
+        line_height = font_size * 1.5
+        label_area = line_height * 3.5
+        return QRectF(0, 0, self.size + 20, self.size + 20 + label_area)
 
     def paint(self, painter, option, widget):
         painter.save()
@@ -44,8 +48,8 @@ class ThumbnailItem(QGraphicsObject):
             painter.restore()
             return
 
-        # Simple thumb_rect calculation
-        rect = self.boundingRect().adjusted(5, 5, -5, -25)
+        # thumb_rect calculation - fixed area at top, label area below
+        rect = QRectF(5, 5, self.boundingRect().width() - 10, self.size + 10)
         scaled = pixmap.size()
         scaled.scale(rect.size().toSize(), Qt.KeepAspectRatio)
         
@@ -93,13 +97,21 @@ class ThumbnailItem(QGraphicsObject):
             font.setPointSize(getattr(self, 'font_size', 10))
             painter.setFont(font)
             
-            label_rect = QRectF(self.boundingRect().left(), thumb_rect.bottom() + 5, self.boundingRect().width(), 20)
+            fm = QFontMetrics(font)
+            line_height = fm.lineSpacing()
+            label_height = line_height * 3.2 # Room for 3 lines + small overflow
+            
+            # Align label area with the base thumbnail size (centered horizontally)
+            label_w = self.size
+            label_x = (self.boundingRect().width() - label_w) / 2
+            label_rect = QRectF(label_x, thumb_rect.bottom() + 5, label_w, label_height)
             
             if not self.cached_label:
-                fm = QFontMetrics(font)
-                self.cached_label = fm.elidedText(f"{self.data.label} (v{self.data.version})", Qt.ElideRight, int(label_rect.width()))
+                self.cached_label = f"{self.data.label} (v{self.data.version})"
             
-            painter.drawText(label_rect, Qt.AlignCenter, self.cached_label)
+            t_opt = QTextOption(Qt.AlignLeft | Qt.AlignTop)
+            t_opt.setWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
+            painter.drawText(label_rect, self.cached_label, t_opt)
         
         painter.restore()
 
@@ -114,6 +126,18 @@ class ThumbnailItem(QGraphicsObject):
     def on_high_res_ready(self):
         self.update()
 
+    def get_label_top(self):
+        # Calculate the top of the label area (matches paint logic)
+        rect = QRectF(5, 5, self.boundingRect().width() - 10, self.size + 10)
+        pixmap = self.data.thumbnail
+        if pixmap:
+            scaled = pixmap.size()
+            scaled.scale(rect.size().toSize(), Qt.KeepAspectRatio)
+            thumb_rect = QRectF(0, 0, scaled.width(), scaled.height())
+            thumb_rect.moveCenter(rect.center())
+            return thumb_rect.bottom() + 5
+        return rect.bottom() + 5
+
     def set_editing(self, editing):
         self.is_editing = editing
         self.cached_label = "" # Reset in case version changed
@@ -121,15 +145,21 @@ class ThumbnailItem(QGraphicsObject):
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.ItemPositionChange and self.scene():
-            # If item moves, notify area to hide editor
-            for view in self.scene().views():
-                if hasattr(view.parent(), 'inline_editor'):
-                    view.parent().inline_editor.hide()
-            
             # If moved by user (interaction)
             if self.scene().mouseGrabberItem() == self:
-                self.is_manually_moved = True
+                # Only hide editor if this is a real drag, not a tiny wiggle during dblclick
                 new_pos = value.toPointF() if hasattr(value, 'toPointF') else value
+                if (new_pos - self.pos()).manhattanLength() > 2:
+                    for view in self.scene().views():
+                        area = view.parent()
+                        if hasattr(area, 'inline_editor') and area.inline_editor.isVisible():
+                            # Use the proper finish method if possible
+                            if hasattr(area, '_on_inline_editing_finished'):
+                                area._on_inline_editing_finished()
+                            else:
+                                area.inline_editor.hide()
+
+                self.is_manually_moved = True
                 self.data.position = (new_pos.x(), new_pos.y())
 
         return super().itemChange(change, value)
@@ -176,10 +206,16 @@ class ThumbnailArea(QWidget):
         self.slider_cols.valueChanged.connect(self._on_spinner_changed)
 
         self.slider_text_size = QSlider(Qt.Horizontal)
-        self.slider_text_size.setRange(6, 24)
+        self.slider_text_size.setRange(4, 64)
         self.slider_text_size.setValue(10)
         self.slider_text_size.setFixedWidth(100)
         self.slider_text_size.valueChanged.connect(self.update_font_size)
+
+        self.slider_thumb_size = QSlider(Qt.Horizontal)
+        self.slider_thumb_size.setRange(20, 1024)
+        self.slider_thumb_size.setValue(150)
+        self.slider_thumb_size.setFixedWidth(100)
+        self.slider_thumb_size.valueChanged.connect(self.update_thumb_size)
 
         self.btn_tag_filter = QPushButton("Filter: All")
         self.btn_tag_filter.clicked.connect(self._cycle_tag_filter)
@@ -204,6 +240,8 @@ class ThumbnailArea(QWidget):
         add_v_line(self.controls_layout)
         self.controls_layout.addWidget(QLabel("Text:"))
         self.controls_layout.addWidget(self.slider_text_size)
+        self.controls_layout.addWidget(QLabel("Thumb:"))
+        self.controls_layout.addWidget(self.slider_thumb_size)
         self.controls_layout.addStretch()
         self.controls_layout.addWidget(self.btn_tag_filter)
         self.controls_layout.addWidget(self.btn_maximize)
@@ -347,7 +385,15 @@ class ThumbnailArea(QWidget):
         current_row = 0
         current_col = 0
         y_offset = 0
-        thumb_h = 200
+        # Dynamic spacing based on current sizes
+        font_size = self.slider_text_size.value()
+        thumb_size = self.slider_thumb_size.value()
+        line_height = font_size * 1.5
+        # thumb area + margins + label
+        thumb_h = int(thumb_size + 25 + (line_height * 3.5))
+        thumb_h = max(100, thumb_h)
+        
+        spacing_x = thumb_size + 50
         gap = int(thumb_h * 0.5 * 0.33)
         
         # Follow the order defined in the model
@@ -384,7 +430,7 @@ class ThumbnailArea(QWidget):
                 current_col = 0
             
             # Snap to grid
-            new_x = current_col * 240
+            new_x = current_col * spacing_x
             new_y = (current_row * thumb_h) + y_offset
             
             if item.pos() != QPointF(new_x, new_y):
@@ -396,8 +442,6 @@ class ThumbnailArea(QWidget):
             if current_col >= cols:
                 current_col = 0
                 current_row += 1
-        
-        self.frame_all()
 
     def set_path_filter(self, path):
         self._path_filter = path
@@ -420,9 +464,19 @@ class ThumbnailArea(QWidget):
     def update_font_size(self):
         font_size = self.slider_text_size.value()
         for item in self.item_to_thumb.values():
+            item.prepareGeometryChange()
             item.font_size = font_size
             item.cached_label = ""
             item.update()
+        self.rearrange_items()
+
+    def update_thumb_size(self):
+        new_size = self.slider_thumb_size.value()
+        for item in self.item_to_thumb.values():
+            item.prepareGeometryChange()
+            item.size = new_size
+            item.update()
+        self.rearrange_items()
 
     def _on_spinner_changed(self, value):
         self.rearrange_items()
@@ -492,7 +546,8 @@ class ThumbnailArea(QWidget):
             if source is self.view.viewport():
                 item = self.view.itemAt(event.pos())
                 if item:
-                    QTimer.singleShot(10, lambda: self._start_inline_rename(item))
+                    # Slightly longer delay to ensure the dblclick sequence is fully processed
+                    QTimer.singleShot(50, lambda: self._start_inline_rename(item))
                     return True
                 else:
                     self.frame_all()
@@ -541,12 +596,33 @@ class ThumbnailArea(QWidget):
 
     def _start_inline_rename(self, item):
         self._editing_item = item
-        rect = self.view.mapFromScene(item.sceneBoundingRect()).boundingRect()
+        
+        # Calculate scene position of the first line
+        label_top_scene = item.get_label_top()
+        # Map center of the first line to view
+        scene_pt = item.mapToScene(QPointF(item.boundingRect().width() / 2, label_top_scene))
+        view_pt = self.view.mapFromScene(scene_pt)
         
         self.inline_editor.setText(item.data.label)
-        self.inline_editor.setFixedWidth(min(300, rect.width()))
-        self.inline_editor.move(rect.center().x() - self.inline_editor.width() // 2, 
-                               rect.bottom() - 15)
+        
+        # Match font size (slightly bigger for clarity)
+        font = self.inline_editor.font()
+        target_size = item.font_size + 1
+        font.setPointSize(target_size)
+        self.inline_editor.setFont(font)
+        
+        # Calculate width to fit text
+        fm = QFontMetrics(font)
+        text_w = fm.horizontalAdvance(item.data.label) + 24
+        editor_w = max(item.size, text_w)
+        # Cap at viewport width
+        editor_w = min(self.view.viewport().width() - 40, editor_w)
+        self.inline_editor.setFixedWidth(editor_w)
+        
+        # Position: centered horizontally, top aligned with first line
+        # Offset Y slightly for padding alignment
+        self.inline_editor.move(view_pt.x() - editor_w // 2, view_pt.y() - 4)
+        
         self.inline_editor.show()
         self.inline_editor.setFocus()
         self.inline_editor.selectAll()
@@ -608,6 +684,14 @@ class ThumbnailArea(QWidget):
         self.slider_cols.setValue(cols)
         self.slider_cols.blockSignals(False)
         
+        font_size = self.slider_text_size.value()
+        thumb_size = self.slider_thumb_size.value()
+        line_height = font_size * 1.5
+        thumb_h = int(thumb_size + 25 + (line_height * 3.5))
+        thumb_h = max(100, thumb_h)
+        
+        spacing_x = thumb_size + 50
+        
         current_row = 0
         current_col = 0
         for item_data in self.model.items:
@@ -615,7 +699,7 @@ class ThumbnailArea(QWidget):
             if not item: continue
             
             if not item.is_manually_moved:
-                new_x, new_y = current_col * 240, current_row * 200
+                new_x, new_y = current_col * spacing_x, current_row * thumb_h
                 item.setPos(new_x, new_y)
                 item_data.position = (new_x, new_y)
                 

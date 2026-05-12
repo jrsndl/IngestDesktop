@@ -12,9 +12,9 @@
     "column_distance": 10,
     "folder_spacing": 30,
     "geometry": "01d9d0cb00030000fffff600fffffff8ffffffff0000059ffffff86600000075ffffff020000059e00000001020000000a00fffff60000000017ffffffff0000059f",
-    "h_splitter": "000000ff0000000100000003000001cb0000047f0000012f01ffffffff010000000100",
+    "h_splitter": "000000ff0000000100000003000001f3000006ca0000012f01ffffffff010000000100",
     "v_splitter": "000000ff0000000100000002000002d30000017901ffffffff010000000200",
-    "default_columns": 5,
+    "default_columns": 10,
     "age_source": "Modification Date",
     "label_allowed_chars": "^[a-zA-Z_-0-9]$",
     "presets": {
