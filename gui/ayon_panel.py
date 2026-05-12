@@ -99,6 +99,7 @@ class AyonPanel(QWidget):
     select_assigned_requested = Signal(str) # full_ayon_path
     clear_all_requested = Signal()
     info_requested = Signal(str) # folder_id
+    product_double_clicked = Signal(str, str, str, str) # (folder_path, task_name, task_type, variant)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -209,6 +210,7 @@ class AyonPanel(QWidget):
         self.product_view.setModel(self.product_model)
         self.product_view.setHeaderHidden(False)
         self.product_view.setEditTriggers(QTreeView.NoEditTriggers)
+        self.product_view.doubleClicked.connect(self._on_product_double_click)
         self.product_layout.addWidget(self.product_view)
         
         self.splitter.addWidget(self.product_container)
@@ -347,6 +349,40 @@ class AyonPanel(QWidget):
             task_name = data.get('name')
             task_type = data.get('type')
             self.task_selected.emit(folder_path, task_name, task_type)
+
+    def _on_product_double_click(self, index):
+        """Calculate variant and emit product_double_clicked signal."""
+        # Map if we ever add proxy to product view, but currently it's direct
+        row = index.row()
+        name_item = self.product_model.item(row, 0)
+        type_item = self.product_model.item(row, 1)
+        if not name_item or not type_item:
+            return
+            
+        name = name_item.text()
+        product_type = type_item.text()
+        
+        # Calculate variant: left-strip product type from name
+        variant = name
+        if name.startswith(product_type):
+            variant = name[len(product_type):]
+            
+        # Get currently selected task from the tree
+        tree_selection = self.tree.selectionModel().selectedIndexes()
+        if not tree_selection:
+            return
+            
+        source_idx = self.proxy.mapToSource(tree_selection[0])
+        first_col_index = self.model.index(source_idx.row(), 0, source_idx.parent())
+        item = self.model.itemFromIndex(first_col_index)
+        data = item.data(Qt.UserRole)
+        
+        # Ensure it's a task
+        if data and 'folderId' in data and 'folder_path' in data:
+            folder_path = data.get('folder_path')
+            task_name = data.get('name')
+            task_type = data.get('type')
+            self.product_double_clicked.emit(folder_path, task_name, task_type, variant)
 
     def _on_selection_changed(self, selected, deselected):
         indexes = self.tree.selectionModel().selectedIndexes()

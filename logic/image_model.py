@@ -37,6 +37,7 @@ class ImageItem:
         self.frame_end = frame_end
         self.metadata = metadata or {}
         self.is_duplicate = False
+        self.version_collision = None
         self.comment = comment
 
 class ImageTableModel(QAbstractTableModel):
@@ -135,6 +136,10 @@ class ImageTableModel(QAbstractTableModel):
         elif role == Qt.BackgroundRole:
             if item.is_selected:
                 return None # Handled by selection model usually
+            
+            if col == 0 and (getattr(item, "version_collision", False) or getattr(item, "is_duplicate", False)):
+                return QColor("#ff8c00")
+                
             if not item.is_tagged:
                 return None # Or a dim color?
 
@@ -159,7 +164,7 @@ class ImageTableModel(QAbstractTableModel):
                 # if not re.match(self.label_allowed_regex, value):
                 #     return False
                 item.label = value
-            elif col == 5: # Version
+            elif col == 7: # Version
                 try:
                     item.version = int(value)
                 except ValueError:
@@ -325,6 +330,8 @@ class ImageTableModel(QAbstractTableModel):
             "{COMMENT}": item.comment or "",
             "{is_duplicate}": "True" if getattr(item, "is_duplicate", False) else "False",
             "{IS_DUPLICATE}": "True" if getattr(item, "is_duplicate", False) else "False",
+            "{version_collision}": str(getattr(item, "version_collision", "None")),
+            "{VERSION_COLLISION}": str(getattr(item, "version_collision", "None")),
             "{thumb_path}": filename_val if (item.category == "Still" and getattr(self, "stills_thumb_same", True)) else "",
             "{THUMB_PATH}": filename_val if (item.category == "Still" and getattr(self, "stills_thumb_same", True)) else "",
         }

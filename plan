@@ -195,9 +195,8 @@ Make function to check AYON version collision:
 * only execute for items with AYON path set
 * only execute for items that have tag on
 * only consider items that fit the right filter panel (if some filtering is set there)
-* 
 * for all items that meet conditions above:
-- check if product name already exists in AYON database, if yes, find highest version available in AYON. Fill the "Last Version" column of the spreadsheet view.
+- check if product name already exists in AYON database, if yes, find highest version available in AYON. Fill the "Last Version" column of the spreadsheet view for checked row items. If version is coliding, set {version_colision} to true, if version is NOT coliding, set {version_colision} to false, otherwise set {version_colision} to None
 
 
 In preferences - general, add radio button option: "Version Collision: fail on existing  /  set to lowest available"

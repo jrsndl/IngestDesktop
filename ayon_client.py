@@ -89,13 +89,19 @@ class AyonClient:
         if not self.is_connected or not folder_ids: return {}
         try:
             products = list(ayon_api.get_products(project_name, folder_ids=folder_ids))
+            self.log.info(f"Found {len(products)} products in folders {folder_ids}")
             res = {}
             for prod in products:
                 # Get last version
                 last_v = ayon_api.get_last_version_by_product_id(project_name, prod["id"])
                 v_num = last_v["version"] if last_v else 0
                 f_id = str(prod["folderId"])
-                res[(f_id, prod["name"], prod.get("productType"))] = v_num
+                p_name = prod["name"]
+                p_type = prod.get("productType") or prod.get("type")
+                
+                self.log.info(f"AYON Product: {p_name} ({p_type}) in folder {f_id} -> v{v_num}")
+                # Use string key to avoid PySide/Shiboken tuple conversion issues
+                res[f"{f_id}|{p_name}|{p_type}"] = v_num
             return res
         except Exception as e:
             self.log.error(f"Error fetching versions for folders {folder_ids}: {e}")
@@ -105,6 +111,7 @@ class AyonClient:
         """Get all products and their latest versions for a folder."""
         versions = self.get_last_versions(project_name, [folder_id])
         res = []
-        for (f_id, name, p_type), v in versions.items():
+        for key, v in versions.items():
+            f_id, name, p_type = key.split("|")
             res.append({"name": name, "type": p_type, "version": v})
         return res

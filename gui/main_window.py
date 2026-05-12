@@ -3,6 +3,7 @@ import json
 import csv
 import tempfile
 import subprocess
+import logging
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QSplitter, 
                              QPushButton, QMessageBox, QInputDialog, QApplication,
                              QDialog, QLineEdit, QLabel, QHBoxLayout, QPlainTextEdit, QFormLayout, QScrollArea)
@@ -287,6 +288,8 @@ class SearchReplaceDialog(QDialog):
         return self.search_edit.text(), self.replace_edit.text()
 
 class MainWindow(QMainWindow):
+    log_signal = Signal(str, str) # (message, level)
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("IngestDesktop - AYON Pipeline Tool")
@@ -319,6 +322,26 @@ class MainWindow(QMainWindow):
             api_key = self.config.get("ayon_api_key", "").strip()
         
         self.ayon = AyonClient(server_url, api_key)
+        
+        # Configure logging to console
+        self.log_signal.connect(self.log_message)
+        
+        class ConsoleLogHandler(logging.Handler):
+            def __init__(self, signal):
+                super().__init__()
+                self.signal = signal
+            def emit(self, record):
+                msg = self.format(record)
+                level = "info"
+                if record.levelno >= logging.ERROR: level = "error"
+                elif record.levelno >= logging.WARNING: level = "warning"
+                self.signal.emit(msg, level)
+
+        self.console_handler = ConsoleLogHandler(self.log_signal)
+        self.console_handler.setFormatter(logging.Formatter('%(name)s: %(message)s'))
+        logging.getLogger().addHandler(self.console_handler)
+        logging.getLogger().setLevel(logging.INFO)
+
         self._is_maximized = False
         self._last_h_state = None
         self._last_v_state = None
@@ -354,6 +377,7 @@ class MainWindow(QMainWindow):
         # 2. Left Panel (AYON)
         self.ayon_panel = AyonPanel()
         self.ayon_panel.task_selected.connect(self._on_ayon_task_selected)
+        self.ayon_panel.product_double_clicked.connect(self._on_ayon_product_selected)
         self.ayon_panel.unassign_requested.connect(self._on_ayon_unassign)
         self.ayon_panel.select_assigned_requested.connect(self._on_ayon_select_assigned)
         self.ayon_panel.clear_all_requested.connect(self._on_ayon_clear_all)
@@ -764,7 +788,7 @@ class MainWindow(QMainWindow):
             self._hier_thread.terminate() # Kill old fetch if switching fast
             
         class HierarchyThread(QThread):
-            finished = Signal(list)
+            finished = Signal(object)
             def __init__(self, ayon, project):
                 super().__init__()
                 self.ayon = ayon
@@ -1412,6 +1436,43 @@ class MainWindow(QMainWindow):
         # Feedback
         self.log_message(f"Assigned '{ayon_path}' to {len(selected_rows)} items.")
 
+    def _on_ayon_product_selected(self, folder_path, task_name, task_type, variant):
+        """Assign AYON path AND update label to variant for selected items."""
+        # 1. Set the AYON path (reuse existing logic)
+        self._on_ayon_task_selected(folder_path, task_name, task_type)
+        
+        # 2. Update the labels for the same selected items
+        # Re-fetching selection to be safe, though _on_ayon_task_selected doesn't clear it
+        selection_model = self.spreadsheet.table.selectionModel()
+        selected_indexes = selection_model.selectedIndexes()
+        selected_rows = sorted(list(set(idx.row() for idx in selected_indexes)))
+        
+        # Fallback to thumbs selection
+        if not selected_rows:
+            selected_thumbs = self.thumb_area.scene.selectedItems()
+            if selected_thumbs:
+                for thumb in selected_thumbs:
+                    try:
+                        row = self.model.items.index(thumb.data)
+                        selected_rows.append(row)
+                    except ValueError: continue
+                selected_rows = sorted(list(set(selected_rows)))
+                
+        if not selected_rows:
+            return
+            
+        for row in selected_rows:
+            item = self.model.items[row]
+            item.label = variant
+            
+        # Notify model that Label column (2) has changed
+        start_idx = self.model.index(min(selected_rows), 2)
+        end_idx = self.model.index(max(selected_rows), 2)
+        self.model.dataChanged.emit(start_idx, end_idx)
+        
+        # Feedback
+        self.log_message(f"Updated labels to '{variant}' for {len(selected_rows)} items.", "success")
+
     def _update_ayon_visuals(self):
         """Highlight assigned tasks in the AYON panel."""
         assigned_paths = set(item.ayon_path for item in self.model.items if item.ayon_path)
@@ -1486,7 +1547,7 @@ class MainWindow(QMainWindow):
             self._prod_thread.terminate()
 
         class ProductThread(QThread):
-            finished = Signal(list)
+            finished = Signal(object)
             def __init__(self, ayon, project, f_id):
                 super().__init__()
                 self.ayon = ayon
@@ -1559,12 +1620,11 @@ class MainWindow(QMainWindow):
     def perform_version_collision_check(self):
         """Batch check current versions in AYON for tagged and filtered items."""
         project = self.top_bar.combo_project.currentText()
-        if not project: return
+        if not project: 
+            self.log_message("No project selected for version check.", "warning")
+            return
         
         # 1. Gather candidate items based on criteria
-        # - tagged on
-        # - valid AYON path assigned
-        # - visible according to current UI filters
         candidates = []
         for item in self.model.items:
             if not (item.is_tagged and item.ayon_path):
@@ -1579,6 +1639,8 @@ class MainWindow(QMainWindow):
             if matches_search and matches_age:
                 candidates.append(item)
 
+        self.log_message(f"Version Check: Found {len(candidates)} candidate items.")
+
         if not candidates:
             self.log_message("No candidate items (tagged, assigned, and filtered) for version collision check.", "warning")
             return
@@ -1591,22 +1653,29 @@ class MainWindow(QMainWindow):
             # ayon_path is /Project/Folder/Task - we need the folder path
             folder_path = "/".join(item.ayon_path.split("/")[:-1])
             f_id = path_map.get(folder_path)
+            
+            variant = self.model._expand_string(item.variant, item)
+            prod_name = self.model._expand_string(self.model.product_name_template, item, use_global_camel=True)
+            
+            self.log_message(f"Debug Item: {item.filename} | Variant: {variant} | Product: {prod_name}", "info")
+            
             if f_id:
                 folder_ids.add(f_id)
-                prod_name = self.model._expand_string(self.model.product_name_template, item, use_global_camel=True)
                 items_to_check.append((item, f_id, prod_name))
+            else:
+                self.log_message(f"Debug: Could not find folder ID for path '{folder_path}' in path_map", "warning")
 
         if not folder_ids:
-            self.log_message("Could not resolve AYON folder IDs for selected paths.", "error")
+            self.log_message(f"Could not resolve any AYON folder IDs. Path map size: {len(path_map)}", "error")
             return
             
-        self.log_message(f"Checking AYON versions for {len(candidates)} items...")
+        self.log_message(f"Checking AYON versions for {len(candidates)} items across {len(folder_ids)} folders...")
         
         if hasattr(self, "_ver_thread") and self._ver_thread.isRunning():
             self._ver_thread.terminate()
 
         class VersionThread(QThread):
-            finished = Signal(dict)
+            finished = Signal(object)
             def __init__(self, ayon, project, f_ids):
                 super().__init__()
                 self.ayon = ayon
@@ -1624,26 +1693,35 @@ class MainWindow(QMainWindow):
         updated = 0
         collision_mode = self.config.get("version_collision", "fail")
         
+        self.log_message(f"Debug: Received {len(v_map)} product versions from AYON.")
+        
         for item, f_id, prod_name in items_to_check:
-            # Key is (f_id, prod_name, prod_type)
-            last_v = v_map.get((f_id, prod_name, item.product_type))
+            # Key is f"{f_id}|{prod_name}|{prod_type}"
+            key = f"{f_id}|{prod_name}|{item.product_type}"
+            last_v = v_map.get(key)
+            
             if last_v is not None:
                 item.last_ayon_version = last_v
+                item.version_collision = (last_v >= item.version)
                 
-                # Auto-bump logic if requested
                 if collision_mode == "lowest":
                     item.version = last_v + 1
+                    item.version_collision = (last_v >= item.version)
                     
                 updated += 1
             else:
-                item.last_ayon_version = 0 # Not found
+                # Debug log for missing product
+                if len(v_map) > 0:
+                    self.log_message(f"Debug: No match for {prod_name} ({item.product_type}) in folder {f_id}", "info")
+                item.last_ayon_version = 0 
+                item.version_collision = None 
         
-        # Refresh Last Version (8) and Version (7) columns
+        # Refresh Version (7), Last Version (8), and Key Value Pairs (11) columns
         self.model.dataChanged.emit(
             self.model.index(0, 7), 
-            self.model.index(len(self.model.items)-1, 8)
+            self.model.index(len(self.model.items)-1, 11)
         )
-        self.log_message(f"Version check complete. Updated {updated} items.")
+        self.log_message(f"Version check complete. Updated {updated} items.", "success")
 
     def log_message(self, message, level="info"):
         """Log a message to both status bar and console."""

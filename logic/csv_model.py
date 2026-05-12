@@ -38,7 +38,8 @@ class CSVPreviewModel(QAbstractTableModel):
         return len(self.tagged_items)
 
     def columnCount(self, parent=QModelIndex()):
-        return len(self.column_defs) + 1
+        # Checks (0), Thumbnail (1), + CSV Columns
+        return len(self.column_defs) + 2
 
     def data(self, index, role=Qt.DisplayRole):
         if not index.isValid(): return None
@@ -46,16 +47,41 @@ class CSVPreviewModel(QAbstractTableModel):
         row = index.row()
         item = self.tagged_items[row]
 
+        is_colliding = getattr(item, "version_collision", False)
+        is_duplicate = getattr(item, "is_duplicate", False)
+
+        if role == Qt.ForegroundRole:
+            if is_colliding:
+                csv_col = col - 2 # Offset by 2 for Checks and Thumbnail
+                if csv_col >= 0 and csv_col < len(self.column_defs):
+                    header, template = self.column_defs[csv_col]
+                    if "{version}" in template.lower():
+                        from PySide6.QtGui import QColor
+                        return QColor("#ff8c00")
+            return None
+
+        if role == Qt.BackgroundRole:
+            if col == 0 and (is_colliding or is_duplicate):
+                from PySide6.QtGui import QColor
+                return QColor("#ff8c00")
+            return None
+
         if role == Qt.DecorationRole:
-            if col == 0:
+            if col == 1:
                 return item.thumbnail
             return None
 
         if role == Qt.DisplayRole:
             if col == 0:
+                msgs = []
+                if is_colliding: msgs.append("version_collision")
+                if is_duplicate: msgs.append("duplicate")
+                return " & ".join(msgs)
+            
+            if col == 1:
                 return None
             
-            csv_col = col - 1
+            csv_col = col - 2
             if csv_col < len(self.column_defs):
                 header, template = self.column_defs[csv_col]
                 return self.source_model._expand_string(template, item, use_global_camel=True)
@@ -65,8 +91,10 @@ class CSVPreviewModel(QAbstractTableModel):
     def headerData(self, section, orientation, role=Qt.DisplayRole):
         if orientation == Qt.Horizontal and role == Qt.DisplayRole:
             if section == 0:
+                return "Checks"
+            if section == 1:
                 return "Thumbnail"
-            csv_col = section - 1
+            csv_col = section - 2
             if csv_col < len(self.column_defs):
                 return self.column_defs[csv_col][0]
         return None
