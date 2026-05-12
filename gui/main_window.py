@@ -1281,6 +1281,24 @@ class MainWindow(QMainWindow):
                     self.log_message(f"Replaced '{search_str}' with '{replace_str}' in selected labels.", "success")
             return
 
+        if action in ["trim_length", "trim_right", "trim_left"]:
+            titles = {
+                "trim_length": "Trim to Length",
+                "trim_right": "Trim from Right",
+                "trim_left": "Trim from Left"
+            }
+            labels = {
+                "trim_length": "Keep first N characters:",
+                "trim_right": "Remove N characters from right:",
+                "trim_left": "Remove N characters from left:"
+            }
+            
+            n, ok = QInputDialog.getInt(self, titles[action], labels[action], 1, 1, 1000)
+            if ok:
+                self.model.modify_labels(self.spreadsheet.table.selectionModel(), action, n)
+                self.log_message(f"Applied {titles[action]} ({n}) to selected labels.", "success")
+            return
+
         if action in ["prefix", "suffix", "rename"]:
             initial_text = ""
             if action == "rename":

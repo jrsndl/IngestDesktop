@@ -324,6 +324,20 @@ class SpreadsheetPanel(QWidget):
         search_replace_action.triggered.connect(lambda: self.label_action_requested.emit("search_replace", None))
         menu.addAction(search_replace_action)
         
+        menu.addSeparator()
+        
+        trim_len_action = QAction("Trim to Length...", self)
+        trim_len_action.triggered.connect(lambda: self.label_action_requested.emit("trim_length", None))
+        menu.addAction(trim_len_action)
+        
+        trim_right_action = QAction("Trim Right...", self)
+        trim_right_action.triggered.connect(lambda: self.label_action_requested.emit("trim_right", None))
+        menu.addAction(trim_right_action)
+        
+        trim_left_action = QAction("Trim Left...", self)
+        trim_left_action.triggered.connect(lambda: self.label_action_requested.emit("trim_left", None))
+        menu.addAction(trim_left_action)
+        
         menu.exec(self.table.viewport().mapToGlobal(pos))
 
     def _on_header_context_menu(self, pos):

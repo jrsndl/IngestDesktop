@@ -240,6 +240,29 @@ class ImageTableModel(QAbstractTableModel):
             elif action == "search_replace":
                 search_str, replace_str = data
                 item.label = item.label.replace(search_str, replace_str)
+            elif action == "trim_length":
+                # Only keep first N characters
+                try:
+                    n = int(data)
+                    item.label = item.label[:n]
+                except (ValueError, TypeError):
+                    pass
+            elif action == "trim_right":
+                # Remove N characters from right
+                try:
+                    n = int(data)
+                    if n > 0:
+                        item.label = item.label[:-n] if n < len(item.label) else ""
+                except (ValueError, TypeError):
+                    pass
+            elif action == "trim_left":
+                # Remove N characters from left
+                try:
+                    n = int(data)
+                    if n > 0:
+                        item.label = item.label[n:] if n < len(item.label) else ""
+                except (ValueError, TypeError):
+                    pass
         
         # Notify views that Label column (2) changed
         self.dataChanged.emit(self.index(min(rows), 2), self.index(max(rows), 2))
