@@ -29,7 +29,6 @@ class PreferencesDialog(QDialog):
         self.server_url = QLineEdit(self.config.get("ayon_server_url", ""))
         
         # Scanner Settings
-        self.version_regex = QLineEdit(self.config.get("version_regex", r"([._]v|v)(\d+)"))
         self.product_name = QLineEdit(self.config.get("product_name", "{label}"))
         self.product_name_camel = QCheckBox("camelCase")
         self.product_name_camel.setChecked(self.config.get("product_name_camel", True))
@@ -60,7 +59,6 @@ class PreferencesDialog(QDialog):
 
         self.form.addRow("AYON Server URL:", self.server_url)
         self.form.addRow("Default Scan Folder:", self.scan_folder_layout)
-        self.form.addRow("Version Regex:", self.version_regex)
         self.form.addRow("Product Name Template:", self.product_name)
         self.form.addRow("Product Name camelCase:", self.product_name_camel)
         self.form.addRow("Age Calculation Source:", self.age_source)
@@ -124,6 +122,37 @@ class PreferencesDialog(QDialog):
         self.general_layout.addStretch()
         self.tabs.addTab(self.general_tab, "General")
 
+        # 1.5 Auto-Assign Tab (Moved next to General)
+        self.auto_assign_tab = QWidget()
+        self.auto_assign_layout = QVBoxLayout(self.auto_assign_tab)
+        self.auto_assign_form = QFormLayout()
+
+        self.auto_assign_multi_match = QCheckBox("Assign first match if more than one leaf folder name matches")
+        self.auto_assign_multi_match.setChecked(self.config.get("auto_assign_multi_match", False))
+
+        self.auto_assign_fallback_task = QCheckBox("Assign first task if folder match is found, but task match is not")
+        self.auto_assign_fallback_task.setChecked(self.config.get("auto_assign_fallback_task", False))
+
+        # Regex fields
+        self.version_regex = QLineEdit(self.config.get("version_regex", r"([._]v|v)(\d+)"))
+        self.folder_regex = QLineEdit(self.config.get("folder_regex", r"^([^_]*_[^_]*)_.*$"))
+        self.task_regex = QLineEdit(self.config.get("task_regex", r"^[^_]*_[^_]*_([^_]*).*$"))
+        self.sequence_regex = QLineEdit(self.config.get("sequence_regex", r"^[^_]*_([^_]*)_[^_]*.*$"))
+        self.episode_regex = QLineEdit(self.config.get("episode_regex", r"^[^_]*_([^_]*)_[^_]*.*$"))
+
+        self.auto_assign_form.addRow("Version Regex:", self.version_regex)
+        self.auto_assign_form.addRow("Folder Regex {folder_name}:", self.folder_regex)
+        self.auto_assign_form.addRow("Task Regex {task_name}:", self.task_regex)
+        self.auto_assign_form.addRow("Sequence Regex {sequence}:", self.sequence_regex)
+        self.auto_assign_form.addRow("Episode Regex {episode}:", self.episode_regex)
+        
+        self.auto_assign_form.addRow(self.auto_assign_multi_match)
+        self.auto_assign_form.addRow(self.auto_assign_fallback_task)
+
+        self.auto_assign_layout.addLayout(self.auto_assign_form)
+        self.auto_assign_layout.addStretch()
+        self.tabs.addTab(self.auto_assign_tab, "Auto-Assign")
+
         # 1.5 CSV Tab (Metadata output settings)
         self.csv_tab = QWidget()
         self.csv_layout = QVBoxLayout(self.csv_tab)
@@ -160,8 +189,17 @@ class PreferencesDialog(QDialog):
         self.gui_form = QFormLayout()
 
         self.default_cols = QSpinBox()
-        self.default_cols.setRange(5, 50)
+        self.default_cols.setRange(5, 100)
         self.default_cols.setValue(self.config.get("default_columns", 12))
+
+        self.default_text_size = QSpinBox()
+        self.default_text_size.setRange(4, 64)
+        self.default_text_size.setValue(self.config.get("default_text_size", 10))
+
+        self.default_thumb_size = QSpinBox()
+        self.default_thumb_size.setRange(20, 1024)
+        self.default_thumb_size.setSuffix(" px")
+        self.default_thumb_size.setValue(self.config.get("default_thumb_size", 150))
 
         self.label_regex = QLineEdit(self.config.get("label_allowed_chars", "^[a-zA-Z0-9_\\-\\.\\s]*$"))
         
@@ -180,6 +218,8 @@ class PreferencesDialog(QDialog):
         self.high_res_size.setValue(self.config.get("high_res_size", 512))
 
         self.gui_form.addRow("Default Columns:", self.default_cols)
+        self.gui_form.addRow("Default Text Size:", self.default_text_size)
+        self.gui_form.addRow("Default Thumbnail Size:", self.default_thumb_size)
         self.gui_form.addRow("Allowed Label Characters:", self.label_regex)
         self.gui_form.addRow("Sequence Thumbnail Frame:", self.seq_thumb_frame)
         self.gui_form.addRow("Low-Res Thumbnail Size:", self.low_res_size)
@@ -300,6 +340,7 @@ class PreferencesDialog(QDialog):
         self.secrets_layout.addLayout(self.secrets_form)
         self.secrets_layout.addStretch()
         self.tabs.addTab(self.secrets_tab, "Secrets")
+
 
         self.layout.addWidget(self.tabs)
         
@@ -440,6 +481,8 @@ class PreferencesDialog(QDialog):
             "ayon_server_url": self.server_url.text(),
             "version_regex": self.version_regex.text(),
             "default_columns": self.default_cols.value(),
+            "default_text_size": self.default_text_size.value(),
+            "default_thumb_size": self.default_thumb_size.value(),
             "age_source": self.age_source.currentText(),
             "label_allowed_chars": self.label_regex.text(),
             "detect_sequences": self.detect_sequences.isChecked(),
@@ -464,7 +507,13 @@ class PreferencesDialog(QDialog):
             "ffprobe_path": self.ffprobe_path.text(),
             "oiiotool_path": self.oiiotool_path.text(),
             "ocio_config": self.ocio_config.text(),
-            "version_collision": "lowest" if self.ver_collision_lowest.isChecked() else "fail"
+            "version_collision": "lowest" if self.ver_collision_lowest.isChecked() else "fail",
+            "auto_assign_multi_match": self.auto_assign_multi_match.isChecked(),
+            "auto_assign_fallback_task": self.auto_assign_fallback_task.isChecked(),
+            "folder_regex": self.folder_regex.text(),
+            "task_regex": self.task_regex.text(),
+            "sequence_regex": self.sequence_regex.text(),
+            "episode_regex": self.episode_regex.text()
         }
         new_secrets = {
             "ayon_api_key": self.api_key.text()

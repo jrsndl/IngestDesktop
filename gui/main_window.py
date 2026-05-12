@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import csv
 import tempfile
@@ -381,6 +382,7 @@ class MainWindow(QMainWindow):
         self.ayon_panel.unassign_requested.connect(self._on_ayon_unassign)
         self.ayon_panel.select_assigned_requested.connect(self._on_ayon_select_assigned)
         self.ayon_panel.clear_all_requested.connect(self._on_ayon_clear_all)
+        self.ayon_panel.auto_assign_requested.connect(self.perform_auto_assign)
         self.ayon_panel.btn_refresh.clicked.connect(self.refresh_ayon)
         self.ayon_panel.info_requested.connect(self._on_ayon_info_requested)
         self.h_splitter.addWidget(self.ayon_panel)
@@ -531,7 +533,12 @@ class MainWindow(QMainWindow):
         
         # Initial UI states
         self.thumb_area.slider_cols.setValue(self.config.get("default_columns", 12))
+        self.thumb_area.slider_text_size.setValue(self.config.get("default_text_size", 10))
+        self.thumb_area.slider_thumb_size.setValue(self.config.get("default_thumb_size", 150))
+        
         self.thumb_area.slider_cols.valueChanged.connect(self._on_cols_changed)
+        self.thumb_area.slider_text_size.valueChanged.connect(self._on_text_size_changed)
+        self.thumb_area.slider_thumb_size.valueChanged.connect(self._on_thumb_size_changed)
 
         # Update model presets mapping
         self._update_model_presets()
@@ -586,7 +593,7 @@ class MainWindow(QMainWindow):
             stills_thumb_same=self.config.get("stills_thumb_same", True)
         )
         self.scanner.finished.connect(lambda items: self.log_message(f"Scan complete. Found {len(items)} items. Fetching metadata in background...", "success"))
-        self.scanner.finished.connect(self.model.add_items)
+        self.scanner.finished.connect(self._on_scan_finished)
         self.scanner.item_updated.connect(self.model.update_item)
         self.scanner.start()
         
@@ -599,6 +606,14 @@ class MainWindow(QMainWindow):
         self._update_ages()
         self.spreadsheet.update_filtering(age_filter=(self._age_filter_enabled, self._age_filter_value))
         self.thumb_area.rearrange_items(age_filter=(self._age_filter_enabled, self._age_filter_value))
+
+    def _on_scan_finished(self, new_items):
+        """Parse tags for all new items before adding them to the model."""
+        for item in new_items:
+            self._parse_item_tags(item)
+        self.model.add_items(new_items)
+        self.thumb_area.frame_all()
+
 
     def rescan_current(self):
         """Scan for new files in the current directory without clearing existing data."""
@@ -641,6 +656,8 @@ class MainWindow(QMainWindow):
         new_items = [it for it in items if it.file_path not in existing_paths]
         
         if new_items:
+            for item in new_items:
+                self._parse_item_tags(item)
             self.model.add_items(new_items)
             self.log_message(f"Rescan complete. Added {len(new_items)} new items.", "success")
         else:
@@ -829,7 +846,10 @@ class MainWindow(QMainWindow):
     def _apply_preferences(self, new_config, new_secrets, old_detect, old_thumb, old_regex, old_exts, show_message=True):
         self.config.update(new_config)
         self.secrets.update(new_secrets)
+        
         self.thumb_area.slider_cols.setValue(self.config.get("default_columns", 12))
+        self.thumb_area.slider_text_size.setValue(self.config.get("default_text_size", 10))
+        self.thumb_area.slider_thumb_size.setValue(self.config.get("default_thumb_size", 150))
         
         # Apply label regex update
         label_regex = self.config.get("label_allowed_chars", "^[a-zA-Z0-9_\\-\\.\\s]*$")
@@ -867,6 +887,16 @@ class MainWindow(QMainWindow):
 
     def _on_cols_changed(self, value):
         self.config["default_columns"] = value
+        self.save_config()
+
+    def _on_text_size_changed(self, value):
+        self.config["default_text_size"] = value
+        self.save_config()
+
+    def _on_thumb_size_changed(self, value):
+        self.config["default_thumb_size"] = value
+        # Sync with scanner size so new items match current UI
+        self.config["thumbnail_size"] = value
         self.save_config()
 
     def _on_age_filter_changed(self, value, units, enabled):
@@ -908,6 +938,10 @@ class MainWindow(QMainWindow):
         clean_config = self.config.copy()
         if "ayon_api_key" in clean_config:
             del clean_config["ayon_api_key"]
+            
+        # Remove redundant keys
+        if "thumbnails_per_row" in clean_config:
+            del clean_config["thumbnails_per_row"]
             
         with open("config.json", "w") as f:
             json.dump(clean_config, f, indent=4)
@@ -1578,6 +1612,111 @@ class MainWindow(QMainWindow):
         self._prod_thread = ProductThread(self.ayon, project, folder_id)
         self._prod_thread.finished.connect(self.ayon_panel.set_products)
         self._prod_thread.start()
+
+    def _parse_item_tags(self, item):
+        """Parse filename using regexes and store in item.metadata."""
+        filename = os.path.splitext(os.path.basename(item.file_path))[0]
+        
+        # Version
+        v_regex = self.config.get("version_regex", r"([._]v|v)(\d+)")
+        if v_regex:
+            v_match = re.search(v_regex, filename)
+            if v_match:
+                try:
+                    groups = v_match.groups()
+                    if len(groups) >= 2:
+                        item.version = int(groups[1])
+                    elif len(groups) == 1:
+                        item.version = int(groups[0])
+                except (ValueError, IndexError):
+                    pass
+        
+        # New Tags
+        tag_regexes = {
+            "folder_name": self.config.get("folder_regex"),
+            "task_name": self.config.get("task_regex"),
+            "sequence": self.config.get("sequence_regex"),
+            "episode": self.config.get("episode_regex")
+        }
+        
+        for tag, pattern in tag_regexes.items():
+            if not pattern: continue
+            try:
+                match = re.search(pattern, filename)
+                if match and match.groups():
+                    val = match.group(1)
+                    item.metadata[tag] = val
+                    logging.info(f"Parsed tag {tag}={val} from {filename}")
+                else:
+                    logging.debug(f"Regex {tag} did not match {filename} with pattern {pattern}")
+            except re.error as e:
+                logging.error(f"Regex error for {tag}: {e}")
+                continue
+
+    def perform_auto_assign(self):
+        """Automatically match scanned items to AYON paths based on leaf folder names."""
+        if not self.ayon.is_connected:
+            self.log_message("AYON is not connected. Cannot auto-assign.", "error")
+            return
+            
+        # 1. Get items to process (selection or all)
+        items_to_process = []
+        selected_thumbs = self.thumb_area.scene.selectedItems()
+        if selected_thumbs:
+            items_to_process = [thumb.data for thumb in selected_thumbs]
+        else:
+            # Check table selection
+            selection_model = self.spreadsheet.table.selectionModel()
+            selected_indexes = selection_model.selectedRows()
+            if selected_indexes:
+                items_to_process = [self.model.items[idx.row()] for idx in selected_indexes]
+            else:
+                # Process all items
+                items_to_process = self.model.items
+        
+        if not items_to_process:
+            self.log_message("No items to auto-assign.", "warning")
+            return
+            
+        multi_match = self.config.get("auto_assign_multi_match", False)
+        fallback_task = self.config.get("auto_assign_fallback_task", False)
+        
+        count = 0
+        for item in items_to_process:
+            # 1. Parse tags from filename
+            self._parse_item_tags(item)
+            
+            # 2. Get names for matching
+            folder_name = item.metadata.get("folder_name")
+            if not folder_name:
+                # Fallback to leaf folder name of the local path
+                folder_name = os.path.basename(os.path.dirname(item.file_path))
+            
+            if not folder_name:
+                continue
+                
+            task_name = item.metadata.get("task_name")
+                
+            match = self.ayon_panel.find_best_match(
+                folder_name, 
+                task_name=task_name,
+                multi_match=multi_match, 
+                fallback_task=fallback_task
+            )
+            
+            if match:
+                ayon_path = f"{match['folder_path']}/{match['task_name']}"
+                if item.ayon_path != ayon_path:
+                    item.ayon_path = ayon_path
+                    count += 1
+        
+        if count:
+            # Column 10 is AYON Path
+            self.model.dataChanged.emit(self.model.index(0, 10), self.model.index(len(self.model.items)-1, 10))
+            self.log_message(f"Auto-assigned {count} items based on folder name matches.", "success")
+            self._update_ayon_visuals()
+        else:
+            self.log_message("No automatic matches found.")
 
     def perform_duplicate_check(self):
         """Identify items sharing same {ayon_path}{product_name}{version} strings."""

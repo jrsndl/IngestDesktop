@@ -100,6 +100,7 @@ class AyonPanel(QWidget):
     clear_all_requested = Signal()
     info_requested = Signal(str) # folder_id
     product_double_clicked = Signal(str, str, str, str) # (folder_path, task_name, task_type, variant)
+    auto_assign_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -109,11 +110,12 @@ class AyonPanel(QWidget):
         # Buttons
         btn_layout = QHBoxLayout()
         self.btn_refresh = QPushButton("Refresh")
-        self.btn_mode = QPushButton("Assign Mode")
-        self.btn_mode.setCheckable(True)
-        self.btn_mode.setChecked(True) # Assign mode is default
+        self.btn_auto = QPushButton("Auto-Assign")
+        self.btn_auto.setObjectName("IngestButton")
+        self.btn_auto.clicked.connect(self.auto_assign_requested.emit)
+        
         btn_layout.addWidget(self.btn_refresh)
-        btn_layout.addWidget(self.btn_mode)
+        btn_layout.addWidget(self.btn_auto)
 
         # Search Controls
         search_layout = QHBoxLayout()
@@ -328,10 +330,69 @@ class AyonPanel(QWidget):
         for child in folder.get('children', []):
             self._add_folder_to_tree(child, name_item)
 
-    def _on_double_click(self, index):
-        if not self.btn_mode.isChecked(): # Select mode
-            return
+    def find_best_match(self, folder_name, task_name=None, multi_match=False, fallback_task=False):
+        """
+        Search the tree for a matching folder/task.
+        folder_name: The leaf folder name to match.
+        task_name: Optional task name to match within the folder.
+        """
+        matches = []
+        
+        def _recurse(parent_item):
+            for r in range(parent_item.rowCount()):
+                item = parent_item.child(r, 0)
+                if not item: continue
+                data = item.data(Qt.UserRole)
+                if data and "type" in data and data["type"] != "Task":
+                    # Check if leaf name matches exactly
+                    name = (data.get("name") or "").lower()
+                    label = (data.get("label") or "").lower()
+                    search_key = (folder_name or "").lower()
+                    
+                    if search_key == name or search_key == label:
+                        matches.append(item)
+                _recurse(item)
+        
+        _recurse(self.model.invisibleRootItem())
+        
+        if not matches:
+            return None
             
+        if len(matches) > 1 and not multi_match:
+            return None # Ambiguous
+            
+        # Use first match
+        folder_item = matches[0]
+        folder_data = folder_item.data(Qt.UserRole)
+        folder_path = folder_data.get("path")
+        
+        # Look for task
+        tasks = folder_data.get("tasks", [])
+        if not tasks:
+            return None
+            
+        target_task = None
+        if task_name:
+            for t in tasks:
+                if t.get("name", "").lower() == task_name.lower():
+                    target_task = t
+                    break
+                    
+        if not target_task and fallback_task and tasks:
+            target_task = tasks[0]
+            
+        if target_task:
+            return {
+                "folder_path": folder_path,
+                "task_name": target_task.get("name"),
+                "task_type": target_task.get("type")
+            }
+            
+        return None
+
+    def _on_double_click(self, index):
+        # We always assign on double click now
+        data = index.data(Qt.UserRole)
         # Map from proxy to source
         source_index = self.proxy.mapToSource(index)
         

@@ -211,7 +211,7 @@ Spreadsheet view: by default, turn off visibility of the "Key Value Pairs" colum
 
 
 Preferences:
-* add "Auto-Assign" tab;
+* add "Auto-Assign" tab
 - to "Auto-Assign" tab, add checkbox: "Assign first match if more than one leaf folder name matches"
 - to "Auto-Assign" tab, add checkbox: "Assign first task if folder match is found, but task match is not"
 
@@ -220,3 +220,11 @@ Left AYON panel:
 * make the refresh button label "Refresh Ayon"
 * make the "assign ayon path by regex" widget
 - single line text box for regex, followed by mini-dropdown for regex presets, followed by button with label "Assign 0 matches"
+
+
+Preferences: GUI: default columns: apply to thumbnail Cols spinner.
+
+- Folder Regex: {folder_name} default: "^([^_]*_[^_]*)_.*$"
+- Task Regex: {task_name} default: "^[^_]*_[^_]*_([^_]*).*$"
+- Sequence Regex: {sequence} default: "^[^_]*_([^_]*)_[^_]*.*$"
+- Episode Regex: {episode} default: "^[^_]*_([^_]*)_[^_]*.*$"

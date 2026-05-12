@@ -239,7 +239,10 @@ class ImageTableModel(QAbstractTableModel):
                 item.label = f"{item.label}{data}"
             elif action == "search_replace":
                 search_str, replace_str = data
-                item.label = item.label.replace(search_str, replace_str)
+                if search_str in ["", "*"]:
+                    item.label = replace_str
+                else:
+                    item.label = item.label.replace(search_str, replace_str)
             elif action == "trim_length":
                 # Only keep first N characters
                 try:
@@ -293,11 +296,16 @@ class ImageTableModel(QAbstractTableModel):
     def _get_replacements(self, item, text="", use_global_camel=False):
         """Build the dictionary of token replacements for an item."""
         ayon_parts = [p for p in item.ayon_path.split("/") if p]
-        task_name = ""
-        folder_name = ""
+        task_name = item.metadata.get("task_name", "")
+        folder_name = item.metadata.get("folder_name", "")
+        
         if ayon_parts:
-            task_name = ayon_parts[-1]
-            if len(ayon_parts) > 1:
+            # If assigned, prefer the AYON names unless metadata explicitly overrides?
+            # Actually, usually AYON is the source of truth for these tokens once assigned.
+            # But let's allow metadata to provide them if AYON is empty.
+            if not task_name:
+                task_name = ayon_parts[-1]
+            if not folder_name and len(ayon_parts) > 1:
                 folder_name = ayon_parts[-2]
         
         parent_folder = os.path.basename(os.path.dirname(item.file_path))
@@ -322,6 +330,8 @@ class ImageTableModel(QAbstractTableModel):
             "{product_type}": item.product_type or "",
             "{task_name}": task_name,
             "{folder_name}": folder_name,
+            "{sequence}": item.metadata.get("sequence", ""),
+            "{episode}": item.metadata.get("episode", ""),
             "{parent_folder}": parent_folder,
             "{ayon_folder_path}": ayon_folder_path,
             "{label}": item.label or "",
@@ -363,16 +373,19 @@ class ImageTableModel(QAbstractTableModel):
     def _get_all_tokens_string(self, item):
         """Returns a string listing all key=value pairs for the item."""
         replacements = self._get_replacements(item)
-        # Sort keys to be consistent
+        # Sort keys to be consistent, show only lowercase/primary tokens to avoid cluttering with CAPS duplicates
         sorted_keys = sorted([k for k in replacements.keys() if k.islower()])
         pairs = []
         for k in sorted_keys:
             val = replacements[k]
-            pairs.append(f"{k}={val}")
+            if val:
+                pairs.append(f"{k}={val}")
         
-        # Add metadata tokens too
+        # Add metadata tokens EXCEPT the ones we already show as primary tokens
+        primary_names = ["folder_name", "task_name", "sequence", "episode"]
         for mk, mv in item.metadata.items():
-            pairs.append(f"{{metadata.{mk}}}={mv}")
+            if mk not in primary_names:
+                pairs.append(f"{{metadata.{mk}}}={mv}")
             
         return "  ".join(pairs)
 
