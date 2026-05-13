@@ -270,8 +270,31 @@ class PreferencesDialog(QDialog):
 
         self.thumbs_layout.addLayout(self.thumbs_form)
         self.thumbs_layout.addStretch()
-        self.tabs.addTab(self.thumbs_tab, "Thumbs")
+        self.tabs.addTab(self.thumbs_tab, "Conversions")
         self._on_thumb_location_changed(self.thumb_location.currentText())
+
+        # 1.7 Clipboard Tab
+        self.clipboard_tab = QWidget()
+        self.clipboard_layout = QVBoxLayout(self.clipboard_tab)
+        self.clipboard_form = QFormLayout()
+        
+        import os
+        default_root = os.path.join(os.environ.get("USERPROFILE", os.path.expanduser("~")), "Downloads")
+        self.clip_temp_root = QLineEdit(self.config.get("clip_temp_root", default_root))
+        self.clip_folder_template = QLineEdit(self.config.get("clip_folder_template", "IngestDesktop_{yy}{mm}{dd}"))
+        self.clip_file_prefix = QLineEdit(self.config.get("clip_file_prefix", "clipboard"))
+        self.clip_file_counter = QSpinBox()
+        self.clip_file_counter.setRange(1, 10)
+        self.clip_file_counter.setValue(self.config.get("clip_file_counter", 3))
+        
+        self.clipboard_form.addRow("Default Temp Root:", self.clip_temp_root)
+        self.clipboard_form.addRow("Folder Template:", self.clip_folder_template)
+        self.clipboard_form.addRow("File Prefix:", self.clip_file_prefix)
+        self.clipboard_form.addRow("Counter Padding:", self.clip_file_counter)
+        
+        self.clipboard_layout.addLayout(self.clipboard_form)
+        self.clipboard_layout.addStretch()
+        self.tabs.addTab(self.clipboard_tab, "Clipboard")
 
         # 2. GUI Tab (UI and Preview settings)
         self.gui_tab = QWidget()
@@ -627,7 +650,11 @@ class PreferencesDialog(QDialog):
             "ayon_csv_ingest_folder": self.csv_ingest_folder.text(),
             "ayon_csv_ingest_task": self.csv_ingest_task.text(),
             "ayon_csv_preset": self.csv_preset.text(),
-            "ayon_ignore_validators": self.ignore_validators.isChecked()
+            "ayon_ignore_validators": self.ignore_validators.isChecked(),
+            "clip_temp_root": self.clip_temp_root.text(),
+            "clip_folder_template": self.clip_folder_template.text(),
+            "clip_file_prefix": self.clip_file_prefix.text(),
+            "clip_file_counter": self.clip_file_counter.value()
         }
         new_secrets = {
             "ayon_api_key": self.api_key.text(),

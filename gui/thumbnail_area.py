@@ -192,6 +192,7 @@ class ThumbnailArea(QWidget):
     tag_toggle_requested = Signal()
     label_action_requested = Signal(str, object)
     maximize_toggle_requested = Signal()
+    paste_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -230,6 +231,9 @@ class ThumbnailArea(QWidget):
         self.btn_tag_filter.clicked.connect(self._cycle_tag_filter)
         self._tag_filter_state = "all" # all, tagged, untagged
 
+        self.btn_paste = QPushButton("Paste Image")
+        self.btn_paste.clicked.connect(self.paste_requested.emit)
+
         self.btn_maximize = QPushButton("Maximize")
         self.btn_maximize.setCheckable(True)
         self.btn_maximize.clicked.connect(self.maximize_toggle_requested.emit)
@@ -252,10 +256,16 @@ class ThumbnailArea(QWidget):
         self.controls_layout.addWidget(QLabel("Thumb:"))
         self.controls_layout.addWidget(self.slider_thumb_size)
         self.controls_layout.addStretch()
+        self.controls_layout.addWidget(self.btn_paste)
         self.controls_layout.addWidget(self.btn_tag_filter)
         self.controls_layout.addWidget(self.btn_maximize)
         
         self.layout.addWidget(self.controls)
+        
+        # Clipboard polling timer
+        self._clip_timer = QTimer(self)
+        self._clip_timer.timeout.connect(self._update_paste_button_state)
+        self._clip_timer.start(1000)
 
         # Graphics View
         self.view = QGraphicsView()
@@ -283,6 +293,7 @@ class ThumbnailArea(QWidget):
         self._last_pan_pos = None
         
         self.inline_editor = QLineEdit(self.view.viewport())
+        self.inline_editor.setAlignment(Qt.AlignCenter)
         self.inline_editor.hide()
         
         # Add character validation: A-Z, a-z, 0-9, -, _, ., space
@@ -413,7 +424,7 @@ class ThumbnailArea(QWidget):
         thumb_h = int(thumb_size + 25 + (line_height * 3.5))
         thumb_h = max(100, thumb_h)
         
-        spacing_x = thumb_size + 50
+        spacing_x = int(thumb_size * 1.2)
         gap = int(thumb_h * 0.5 * 0.33)
         
         # Follow the order defined in the model
@@ -497,6 +508,18 @@ class ThumbnailArea(QWidget):
             item.size = new_size
             item.update()
         self.rearrange_items()
+
+    def _update_paste_button_state(self):
+        from PySide6.QtWidgets import QApplication
+        clipboard = QApplication.clipboard()
+        # QMimeData check is faster than converting to QImage
+        has_image = clipboard.mimeData().hasImage()
+        if has_image:
+            self.btn_paste.setStyleSheet("color: white; font-weight: bold;")
+            self.btn_paste.setEnabled(True)
+        else:
+            self.btn_paste.setStyleSheet("color: #666666;")
+            self.btn_paste.setEnabled(False)
 
     def _on_spinner_changed(self, value):
         self.rearrange_items()
@@ -634,7 +657,7 @@ class ThumbnailArea(QWidget):
         # Calculate width to fit text
         fm = QFontMetrics(font)
         text_w = fm.horizontalAdvance(item.data.label) + 24
-        editor_w = max(item.size, text_w)
+        editor_w = int(max(item.size, text_w) * 0.8)
         # Cap at viewport width
         editor_w = min(self.view.viewport().width() - 40, editor_w)
         self.inline_editor.setFixedWidth(editor_w)

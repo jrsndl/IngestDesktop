@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QSplitter,
                              QPushButton, QMessageBox, QInputDialog, QApplication,
                              QDialog, QLineEdit, QLabel, QHBoxLayout, QPlainTextEdit, QFormLayout, QScrollArea)
 from PySide6.QtCore import Qt, QTimer, QItemSelectionModel, QItemSelection, QThread, Signal, QRect
-from PySide6.QtGui import QKeySequence, QCursor, QShortcut, QPainter, QColor
+from PySide6.QtGui import QKeySequence, QCursor, QShortcut, QPainter, QColor, QImage
 
 from gui.top_bar import TopBar
 from gui.ayon_panel import AyonPanel
@@ -249,7 +249,7 @@ class HelpOverlay(QWidget):
 
     def mousePressEvent(self, event):
         # Only hide if clicked on the darkened background, not the box
-        if event.pos() in self.box.geometry():
+        if self.box.geometry().contains(event.pos()):
             return
         self.hide_help()
 
@@ -395,6 +395,7 @@ class MainWindow(QMainWindow):
         self.thumb_area.tag_toggle_requested.connect(self._on_tag_selection)
         self.thumb_area.label_action_requested.connect(self._on_label_action)
         self.thumb_area.maximize_toggle_requested.connect(lambda: self.toggle_maximize("thumbs"))
+        self.thumb_area.paste_requested.connect(self.perform_paste_image)
         self.v_splitter.addWidget(self.thumb_area)
         
         self.spreadsheet = SpreadsheetPanel()
@@ -837,6 +838,11 @@ class MainWindow(QMainWindow):
 
         dialog = PreferencesDialog(self.config, self.secrets, self)
         
+        # Set size to 80% of main window
+        new_w = int(self.width() * 0.8)
+        new_h = int(self.height() * 0.8)
+        dialog.resize(new_w, new_h)
+        
         # Connect Apply button signal
         dialog.applied.connect(lambda data: self._apply_preferences(data[0], data[1], old_detect, old_thumb, old_regex, old_exts, show_message=False))
         
@@ -1141,6 +1147,78 @@ class MainWindow(QMainWindow):
             self.log_message(f"Ingest CSV created and TrayPublisher started locally.", "success")
         except Exception as e:
             self.log_message(f"Failed to start TrayPublisher: {e}", "error")
+
+    def perform_paste_image(self):
+        from PySide6.QtWidgets import QApplication
+        clipboard = QApplication.clipboard()
+        image = clipboard.image()
+        if image.isNull():
+            self.log_message("No image found in clipboard.", "warning")
+            return
+
+        # 1. Resolve path from Preferences
+        import datetime
+        now = datetime.datetime.now()
+        yy = now.strftime("%y")
+        mm = now.strftime("%m")
+        dd = now.strftime("%d")
+        
+        default_root = os.path.join(os.environ.get("USERPROFILE", os.path.expanduser("~")), "Downloads")
+        root = self.config.get("clip_temp_root", default_root)
+        folder_tpl = self.config.get("clip_folder_template", "IngestDesktop_{yy}{mm}{dd}")
+        folder_name = folder_tpl.replace("{yy}", yy).replace("{mm}", mm).replace("{dd}", dd)
+        
+        target_dir = os.path.normpath(os.path.join(root, folder_name))
+        try:
+            if not os.path.exists(target_dir):
+                os.makedirs(target_dir)
+        except Exception as e:
+            self.log_message(f"Failed to create temp directory: {e}", "error")
+            return
+            
+        # 2. Resolve filename
+        prefix = self.config.get("clip_file_prefix", "clipboard")
+        padding = self.config.get("clip_file_counter", 3)
+        
+        # Find next counter
+        try:
+            existing = [f for f in os.listdir(target_dir) if f.startswith(prefix) and f.endswith(".png")]
+        except:
+            existing = []
+            
+        next_num = 1
+        if existing:
+            import re
+            nums = []
+            safe_prefix = re.escape(prefix)
+            # Match prefix, then underscore, then digits, then .png
+            pattern = rf"^{safe_prefix}_(\d+)\.png$"
+            for f in existing:
+                match = re.search(pattern, f)
+                if match:
+                    nums.append(int(match.group(1)))
+            if nums:
+                next_num = max(nums) + 1
+        
+        file_name = f"{prefix}_{str(next_num).zfill(padding)}.png"
+        file_path = os.path.join(target_dir, file_name)
+        
+        # 3. Save as 24-bit PNG
+        try:
+            # Convert to RGB888 for 24bit
+            image_24 = image.convertToFormat(QImage.Format_RGB888)
+            if image_24.save(file_path, "PNG"):
+                self.log_message(f"Clipboard image saved: {file_path}", "success")
+            else:
+                self.log_message(f"Failed to save image to {file_path}", "error")
+                return
+        except Exception as e:
+            self.log_message(f"Error saving clipboard image: {e}", "error")
+            return
+        
+        # 4. Set source folder and rescan
+        self.top_bar.set_path(target_dir)
+        self.start_scan(target_dir)
 
     def perform_publish_deadline(self):
         tagged_items = self._get_tagged_for_ingest()
