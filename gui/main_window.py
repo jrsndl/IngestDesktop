@@ -1143,8 +1143,43 @@ class MainWindow(QMainWindow):
             if ftrack_user: env["FTRACK_API_USER"] = ftrack_user
             if ftrack_key: env["FTRACK_API_KEY"] = ftrack_key
             
-            subprocess.Popen(cmd, env=env)
-            self.log_message(f"Ingest CSV created and TrayPublisher started locally.", "success")
+            # Show log console and inform user
+            self.log_console.show()
+            self.btn_toggle_log.setChecked(True)
+            self.btn_toggle_log.setText("Hide Log")
+            self.log_message("Starting Ayon Publish process...", "info")
+
+            class PublishWorker(QThread):
+                line_received = Signal(str)
+                finished = Signal()
+                
+                def __init__(self, cmd, env):
+                    super().__init__()
+                    self.cmd = cmd
+                    self.env = env
+                    
+                def run(self):
+                    # CREATE_NO_WINDOW = 0x08000000
+                    process = subprocess.Popen(
+                        self.cmd, 
+                        env=self.env, 
+                        stdout=subprocess.PIPE, 
+                        stderr=subprocess.STDOUT, 
+                        text=True,
+                        bufsize=1,
+                        creationflags=0x08000000
+                    )
+                    for line in process.stdout:
+                        self.line_received.emit(line.strip())
+                    process.wait()
+                    self.finished.emit()
+
+            self._publish_worker = PublishWorker(cmd, env)
+            self._publish_worker.line_received.connect(lambda line: self.log_message(f"[TrayPublisher] {line}"))
+            self._publish_worker.finished.connect(lambda: self.log_message("Publish process finished.", "success"))
+            self._publish_worker.finished.connect(self.refresh_ayon)
+            self._publish_worker.start()
+
         except Exception as e:
             self.log_message(f"Failed to start TrayPublisher: {e}", "error")
 
