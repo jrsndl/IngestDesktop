@@ -65,8 +65,8 @@ QPushButton#IngestButton:hover {
 }
 
 /* Inputs */
-QLineEdit, QComboBox, QSpinBox {
-    background-color: #1e1e1e;
+QLineEdit, QComboBox, QSpinBox, QPlainTextEdit {
+    background-color: #121212;
     border: 1px solid #4d4d4d;
     padding: 3px;
     selection-background-color: #ff9800;

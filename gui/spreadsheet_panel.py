@@ -9,15 +9,32 @@ class ScalingDelegate(QStyledItemDelegate):
         pixmap = index.data(Qt.DecorationRole)
         if pixmap:
             # Scale to row height minus some padding
-            size = option.rect.size()
+            margin = 2
+            rect = option.rect.adjusted(margin, margin, -margin, -margin)
+            size = rect.size()
             scaled_pixmap = pixmap.scaled(size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             
             # Center in rect
-            x = option.rect.x() + (option.rect.width() - scaled_pixmap.width()) // 2
-            y = option.rect.y() + (option.rect.height() - scaled_pixmap.height()) // 2
+            x = rect.x() + (rect.width() - scaled_pixmap.width()) // 2
+            y = rect.y() + (rect.height() - scaled_pixmap.height()) // 2
             painter.drawPixmap(x, y, scaled_pixmap)
         else:
             super().paint(painter, option, index)
+
+    def sizeHint(self, option, index):
+        pixmap = index.data(Qt.DecorationRole)
+        if pixmap:
+            # We want the width to be proportional to the current row height
+            from PySide6.QtWidgets import QTableView
+            h = 40 # Default
+            if isinstance(option.widget, QTableView):
+                h = option.widget.rowHeight(index.row())
+            
+            if h > 0 and pixmap.height() > 0:
+                aspect = pixmap.width() / pixmap.height()
+                return QSize(int(h * aspect) + 4, h) # +4 for margin padding
+            return pixmap.size()
+        return super().sizeHint(option, index)
 
 class SpreadsheetPanel(QWidget):
     check_duplicates_clicked = Signal()
@@ -143,7 +160,7 @@ class SpreadsheetPanel(QWidget):
         
         # Initial fit
         self.table.setColumnWidth(0, 40)
-        self.table.setColumnWidth(1, 60) # Thumbnail
+        self.table.resizeColumnToContents(1) # Thumbnail
         # self.table.setColumnHidden(11, True) # Show Key Value Pairs by default now
         self.table.resizeColumnToContents(2)
         self.table.resizeColumnToContents(3)
@@ -159,10 +176,10 @@ class SpreadsheetPanel(QWidget):
         if not self.csv_model: return
         self.table.setModel(self.csv_model)
         self.table.verticalHeader().setDefaultSectionSize(40)
-        # Set delegate for thumbnail column (index 0 in CSV mode)
-        self.table.setItemDelegateForColumn(0, ScalingDelegate(self.table))
-        # Clear delegate for index 1
-        self.table.setItemDelegateForColumn(1, QStyledItemDelegate(self.table))
+        # Set delegate for thumbnail column (index 1 in CSV mode)
+        self.table.setItemDelegateForColumn(1, ScalingDelegate(self.table))
+        # Clear delegate for index 0
+        self.table.setItemDelegateForColumn(0, QStyledItemDelegate(self.table))
         
         self.table.selectionModel().selectionChanged.connect(lambda s, d: self.selectionChanged.emit())
         
@@ -170,7 +187,7 @@ class SpreadsheetPanel(QWidget):
         header.setSectionResizeMode(QHeaderView.Interactive)
         
         # Initial fit
-        self.table.setColumnWidth(0, 60)
+        self.table.resizeColumnToContents(1)
         # Auto resize all CSV columns
         for col in range(1, self.csv_model.columnCount()):
             self.table.resizeColumnToContents(col)
@@ -208,8 +225,7 @@ class SpreadsheetPanel(QWidget):
         h = int(20 + (v * v) * (400 - 20))
         self.table.verticalHeader().setDefaultSectionSize(h)
         # Also adjust thumbnail column width (index 1)
-        # Use a slightly wider factor if images are wide, but 1.5x height is safe
-        self.table.setColumnWidth(1, int(h * 1.5))
+        self.table.resizeColumnToContents(1)
 
     def update_filtering(self, age_filter=None, search_text=None):
         """Update row visibility based on active filters."""

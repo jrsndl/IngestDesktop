@@ -228,3 +228,24 @@ Preferences: GUI: default columns: apply to thumbnail Cols spinner.
 - Task Regex: {task_name} default: "^[^_]*_[^_]*_([^_]*).*$"
 - Sequence Regex: {sequence} default: "^[^_]*_([^_]*)_[^_]*.*$"
 - Episode Regex: {episode} default: "^[^_]*_([^_]*)_[^_]*.*$"
+
+
+Preferences:
+* Add Thumbs tab right next to CSV tab.
+* Move "Sequence Thumbnail Frame" from GUI tab to Thumbs tab.
+* Move "High-Res Thumbnail Size" from GUI tab to Thumbs tab.
+* Add new preference to Thumbs tab: "Thumbnail Location", dropdown with three options: ["Same as File", "Relative to Source Folder", "Custom"], followed with text b ox for path - options 2 and 3. Dropdown default: "Relative to Source Folder", text default: "_thumbs". Store the full path for each item to key {thumb_path}
+* Add new preference to Thumbs tab: "Thumbnail Suffix", with text box, default "_thumbnail"  Store the value to key {thumb_suffix}
+* Add new preference to Thumbs tab: "Thumbnail File Format", drop down [".jpg", ".png"] Store the value to key {thumb_format}
+* Add new preference to Thumbs tab: "Thumbnail File Format Quality", slider 0 to 100, default 80. Store the value to key {thumb_quality}
+* Add new preference to Thumbs tab: "Stills: Thumbnail Command" with two line text box.
+* Add new preference to Thumbs tab: "Videos: Thumbnail Command" with two line text box.
+* Add new preference to Thumbs tab: "Sequences: Thumbnail Command" with two line text box.
+
+When exporting CSV file, first run duplicity test and version collision test.
+Do not export lines with failed duplicity test, or with versions collision. Skip those lines. Mention how many rows were skipped and why in popup dialog box.
+
+
+
+Implement AYON local publish.
+

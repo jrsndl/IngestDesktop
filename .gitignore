@@ -12,3 +12,7 @@ wheels/
 # Local config
 secrets.json
 .gemini/
+
+ffmpeg/ffmpeg.exe
+
+ffmpeg/ffprobe.exe

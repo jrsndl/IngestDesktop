@@ -91,15 +91,25 @@ class ThumbnailItem(QGraphicsObject):
         painter.drawPixmap(thumb_rect, pixmap, QRectF(pixmap.rect()))
         
         # Label - Only if zoomed in and NOT editing
-        if lod > 0.2 and not self.is_editing:
+        if lod > 0.05 and not self.is_editing:
             painter.setPen(QColor("#e0e0e0"))
             font = painter.font()
-            font.setPointSize(getattr(self, 'font_size', 10))
+            
+            base_size = getattr(self, 'font_size', 10)
+            # Dynamically grow text size when zooming out to keep it readable
+            # We use a power function to grow logical size faster than we zoom out
+            # but not so fast that it stays perfectly constant (to avoid total overlap)
+            scale_factor = 1.0
+            if lod < 0.9:
+                scale_factor = 1.0 / (lod ** 0.6)
+                scale_factor = min(scale_factor, 5.0) # Cap growth at 5x
+            
+            font.setPointSizeF(base_size * scale_factor)
             painter.setFont(font)
             
             fm = QFontMetrics(font)
             line_height = fm.lineSpacing()
-            label_height = line_height * 3.2 # Room for 3 lines + small overflow
+            label_height = line_height * 3.5 # Allow a bit more height for scaled text
             
             # Align label area with the base thumbnail size (centered horizontally)
             label_w = self.size
@@ -210,7 +220,6 @@ class ThumbnailArea(QWidget):
         self.slider_text_size.setValue(10)
         self.slider_text_size.setFixedWidth(100)
         self.slider_text_size.valueChanged.connect(self.update_font_size)
-
         self.slider_thumb_size = QSlider(Qt.Horizontal)
         self.slider_thumb_size.setRange(20, 1024)
         self.slider_thumb_size.setValue(150)
@@ -331,8 +340,14 @@ class ThumbnailArea(QWidget):
             
         if not items: return
 
+        # Cache current sizes to apply to new items
+        font_size = self.slider_text_size.value()
+        thumb_size = self.slider_thumb_size.value()
+
         for item_data in items:
             thumb = ThumbnailItem(item_data)
+            thumb.size = thumb_size
+            thumb.font_size = font_size
             self.scene.addItem(thumb)
             self.item_to_thumb[item_data] = thumb
             
@@ -340,10 +355,15 @@ class ThumbnailArea(QWidget):
         self.frame_all()
 
     def _on_rows_inserted(self, parent, first, last):
+        font_size = self.slider_text_size.value()
+        thumb_size = self.slider_thumb_size.value()
+        
         for row in range(first, last + 1):
             item_data = self.model.items[row]
             if item_data not in self.item_to_thumb:
                 thumb = ThumbnailItem(item_data)
+                thumb.size = thumb_size
+                thumb.font_size = font_size
                 self.scene.addItem(thumb)
                 self.item_to_thumb[item_data] = thumb
         self.rearrange_items()
@@ -751,7 +771,8 @@ class ThumbnailArea(QWidget):
         if item_data.is_high_res_loading or item_data.high_res_thumbnail:
             return
         item_data.is_high_res_loading = True
-        worker = ThumbnailWorker(item_data, size=512)
+        h_size = getattr(self, "high_res_size", 512)
+        worker = ThumbnailWorker(item_data, size=h_size)
         worker.signals.finished.connect(self._on_high_res_loaded)
         self.thread_pool.start(worker)
 

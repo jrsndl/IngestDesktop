@@ -57,13 +57,9 @@ class PreferencesDialog(QDialog):
         self.scan_folder_layout.addWidget(self.default_scan_folder)
         self.scan_folder_layout.addWidget(self.btn_browse_scan)
 
-        self.form.addRow("AYON Server URL:", self.server_url)
         self.form.addRow("Default Scan Folder:", self.scan_folder_layout)
-        self.form.addRow("Product Name Template:", self.product_name)
-        self.form.addRow("Product Name camelCase:", self.product_name_camel)
         self.form.addRow("Age Calculation Source:", self.age_source)
         self.form.addRow("Sequence Detection:", self.detect_sequences)
-        self.form.addRow("AYON Console Path:", self.console_layout)
         
         # Tool Paths
         self.ffmpeg_path = QLineEdit(self.config.get("ffmpeg_path", "ffmpeg.exe"))
@@ -121,6 +117,35 @@ class PreferencesDialog(QDialog):
         self.general_layout.addLayout(self.form)
         self.general_layout.addStretch()
         self.tabs.addTab(self.general_tab, "General")
+
+        # 1.2 AYON Tab (New)
+        self.ayon_tab = QWidget()
+        self.ayon_layout = QVBoxLayout(self.ayon_tab)
+        self.ayon_form = QFormLayout()
+
+        # Moved from General
+        self.ayon_form.addRow("AYON Server URL:", self.server_url)
+        self.ayon_form.addRow("AYON Console Path:", self.console_layout)
+        self.ayon_form.addRow("Product Name Template:", self.product_name)
+        self.ayon_form.addRow("Product Name camelCase:", self.product_name_camel)
+
+        # New AYON settings
+        self.ayon_project_name = QLineEdit(self.config.get("ayon_project_name", ""))
+        self.csv_ingest_folder = QLineEdit(self.config.get("ayon_csv_ingest_folder", "/edit/csvingest"))
+        self.csv_ingest_task = QLineEdit(self.config.get("ayon_csv_ingest_task", "csvingest"))
+        self.csv_preset = QLineEdit(self.config.get("ayon_csv_preset", "Default"))
+        self.ignore_validators = QCheckBox("Ignore Validators")
+        self.ignore_validators.setChecked(self.config.get("ayon_ignore_validators", True))
+
+        self.ayon_form.addRow("Project {ayon_project_name}:", self.ayon_project_name)
+        self.ayon_form.addRow("CSV Ingest Folder:", self.csv_ingest_folder)
+        self.ayon_form.addRow("CSV Ingest Task:", self.csv_ingest_task)
+        self.ayon_form.addRow("CSV Preset:", self.csv_preset)
+        self.ayon_form.addRow(self.ignore_validators)
+
+        self.ayon_layout.addLayout(self.ayon_form)
+        self.ayon_layout.addStretch()
+        self.tabs.addTab(self.ayon_tab, "AYON")
 
         # 1.5 Auto-Assign Tab (Moved next to General)
         self.auto_assign_tab = QWidget()
@@ -183,6 +208,71 @@ class PreferencesDialog(QDialog):
         
         self.tabs.addTab(self.csv_tab, "CSV")
 
+        # 1.6 Thumbs Tab (New)
+        self.thumbs_tab = QWidget()
+        self.thumbs_layout = QVBoxLayout(self.thumbs_tab)
+        self.thumbs_form = QFormLayout()
+
+        # Moved from GUI tab
+        self.seq_thumb_frame = QComboBox()
+        self.seq_thumb_frame.addItems(["First", "Second", "Middle"])
+        self.seq_thumb_frame.setCurrentText(self.config.get("seq_thumb_frame", "Middle"))
+
+        self.high_res_size = QSpinBox()
+        self.high_res_size.setRange(128, 2048)
+        self.high_res_size.setSuffix(" px")
+        # Try thumb_size first, then high_res_size as fallback
+        val = self.config.get("thumb_size", self.config.get("high_res_size", 512))
+        self.high_res_size.setValue(val)
+
+        # New Thumbnail settings
+        self.thumb_location = QComboBox()
+        self.thumb_location.addItems(["Same as File", "Relative to Source Folder", "Custom"])
+        self.thumb_location.setCurrentText(self.config.get("thumb_location", "Relative to Source Folder"))
+
+        self.thumb_location_path = QLineEdit(self.config.get("thumb_location_path", "_thumbs"))
+        self.thumb_location.currentTextChanged.connect(self._on_thumb_location_changed)
+
+        self.thumb_suffix = QLineEdit(self.config.get("thumb_suffix", "_thumbnail"))
+        
+        self.thumb_format = QComboBox()
+        self.thumb_format.addItems([".jpg", ".png"])
+        self.thumb_format.setCurrentText(self.config.get("thumb_format", ".jpg"))
+
+        from PySide6.QtWidgets import QSlider
+        self.thumb_quality = QSlider(Qt.Horizontal)
+        self.thumb_quality.setRange(0, 100)
+        self.thumb_quality.setValue(self.config.get("thumb_quality", 80))
+        self.thumb_quality_lbl = QLabel(f"{self.thumb_quality.value()}")
+        self.thumb_quality.valueChanged.connect(lambda v: self.thumb_quality_lbl.setText(str(v)))
+
+        quality_lay = QHBoxLayout()
+        quality_lay.addWidget(self.thumb_quality)
+        quality_lay.addWidget(self.thumb_quality_lbl)
+
+        self.cmd_stills = QPlainTextEdit(self.config.get("cmd_stills", ""))
+        self.cmd_stills.setMaximumHeight(50)
+        self.cmd_videos = QPlainTextEdit(self.config.get("cmd_videos", ""))
+        self.cmd_videos.setMaximumHeight(50)
+        self.cmd_sequences = QPlainTextEdit(self.config.get("cmd_sequences", ""))
+        self.cmd_sequences.setMaximumHeight(50)
+
+        self.thumbs_form.addRow("Sequence Thumbnail Frame:", self.seq_thumb_frame)
+        self.thumbs_form.addRow("High-Res Thumbnail Size:", self.high_res_size)
+        self.thumbs_form.addRow("Thumbnail Location:", self.thumb_location)
+        self.thumbs_form.addRow("Thumbnail Path:", self.thumb_location_path)
+        self.thumbs_form.addRow("Thumbnail Suffix:", self.thumb_suffix)
+        self.thumbs_form.addRow("Thumbnail File Format:", self.thumb_format)
+        self.thumbs_form.addRow("Thumbnail Quality:", quality_lay)
+        self.thumbs_form.addRow("Stills: Thumbnail Command:", self.cmd_stills)
+        self.thumbs_form.addRow("Videos: Thumbnail Command:", self.cmd_videos)
+        self.thumbs_form.addRow("Sequences: Thumbnail Command:", self.cmd_sequences)
+
+        self.thumbs_layout.addLayout(self.thumbs_form)
+        self.thumbs_layout.addStretch()
+        self.tabs.addTab(self.thumbs_tab, "Thumbs")
+        self._on_thumb_location_changed(self.thumb_location.currentText())
+
         # 2. GUI Tab (UI and Preview settings)
         self.gui_tab = QWidget()
         self.gui_layout = QVBoxLayout(self.gui_tab)
@@ -203,27 +293,16 @@ class PreferencesDialog(QDialog):
 
         self.label_regex = QLineEdit(self.config.get("label_allowed_chars", "^[a-zA-Z0-9_\\-\\.\\s]*$"))
         
-        self.seq_thumb_frame = QComboBox()
-        self.seq_thumb_frame.addItems(["First", "Second", "Middle"])
-        self.seq_thumb_frame.setCurrentText(self.config.get("seq_thumb_frame", "Middle"))
-
         self.low_res_size = QSpinBox()
         self.low_res_size.setRange(64, 512)
         self.low_res_size.setSuffix(" px")
         self.low_res_size.setValue(self.config.get("low_res_size", 150))
 
-        self.high_res_size = QSpinBox()
-        self.high_res_size.setRange(128, 2048)
-        self.high_res_size.setSuffix(" px")
-        self.high_res_size.setValue(self.config.get("high_res_size", 512))
-
         self.gui_form.addRow("Default Columns:", self.default_cols)
         self.gui_form.addRow("Default Text Size:", self.default_text_size)
         self.gui_form.addRow("Default Thumbnail Size:", self.default_thumb_size)
         self.gui_form.addRow("Allowed Label Characters:", self.label_regex)
-        self.gui_form.addRow("Sequence Thumbnail Frame:", self.seq_thumb_frame)
         self.gui_form.addRow("Low-Res Thumbnail Size:", self.low_res_size)
-        self.gui_form.addRow("High-Res Thumbnail Size:", self.high_res_size)
 
         self.gui_layout.addLayout(self.gui_form)
         self.gui_layout.addStretch()
@@ -336,6 +415,19 @@ class PreferencesDialog(QDialog):
         self.api_key = QLineEdit(self.secrets.get("ayon_api_key", ""))
         self.api_key.setEchoMode(QLineEdit.Password)
         self.secrets_form.addRow("AYON API Key:", self.api_key)
+
+        self.secrets_form.addRow(QLabel("")) # Spacer
+        self.secrets_form.addRow(QLabel("<b>Ftrack:</b>"))
+        
+        self.ftrack_server = QLineEdit(self.secrets.get("ftrack_server", ""))
+        self.secrets_form.addRow("Ftrack Server:", self.ftrack_server)
+        
+        self.ftrack_user = QLineEdit(self.secrets.get("ftrack_api_user", ""))
+        self.secrets_form.addRow("Ftrack API User:", self.ftrack_user)
+        
+        self.ftrack_key = QLineEdit(self.secrets.get("ftrack_api_key", ""))
+        self.ftrack_key.setEchoMode(QLineEdit.Password)
+        self.secrets_form.addRow("Ftrack API Key:", self.ftrack_key)
         
         self.secrets_layout.addLayout(self.secrets_form)
         self.secrets_layout.addStretch()
@@ -448,6 +540,14 @@ class PreferencesDialog(QDialog):
         if dir_path:
             self.default_scan_folder.setText(dir_path)
 
+    def _on_thumb_location_changed(self, text):
+        is_custom_or_rel = text in ["Relative to Source Folder", "Custom"]
+        self.thumb_location_path.setVisible(is_custom_or_rel)
+        # Find the label for this field to hide it too
+        label = self.thumbs_form.labelForField(self.thumb_location_path)
+        if label:
+            label.setVisible(is_custom_or_rel)
+
     def _on_apply(self):
         self.applied.emit(self.get_settings())
 
@@ -496,6 +596,15 @@ class PreferencesDialog(QDialog):
             "csv_columns": self.csv_columns.toPlainText(),
             "low_res_size": self.low_res_size.value(),
             "high_res_size": self.high_res_size.value(),
+            "thumb_size": self.high_res_size.value(),
+            "thumb_location": self.thumb_location.currentText(),
+            "thumb_location_path": self.thumb_location_path.text(),
+            "thumb_suffix": self.thumb_suffix.text(),
+            "thumb_format": self.thumb_format.currentText(),
+            "thumb_quality": self.thumb_quality.value(),
+            "cmd_stills": self.cmd_stills.toPlainText(),
+            "cmd_videos": self.cmd_videos.toPlainText(),
+            "cmd_sequences": self.cmd_sequences.toPlainText(),
             "presets": presets,
             "extensions": extensions,
             "stills_start_frame": stills_start,
@@ -513,9 +622,17 @@ class PreferencesDialog(QDialog):
             "folder_regex": self.folder_regex.text(),
             "task_regex": self.task_regex.text(),
             "sequence_regex": self.sequence_regex.text(),
-            "episode_regex": self.episode_regex.text()
+            "episode_regex": self.episode_regex.text(),
+            "ayon_project_name": self.ayon_project_name.text(),
+            "ayon_csv_ingest_folder": self.csv_ingest_folder.text(),
+            "ayon_csv_ingest_task": self.csv_ingest_task.text(),
+            "ayon_csv_preset": self.csv_preset.text(),
+            "ayon_ignore_validators": self.ignore_validators.isChecked()
         }
         new_secrets = {
-            "ayon_api_key": self.api_key.text()
+            "ayon_api_key": self.api_key.text(),
+            "ftrack_server": self.ftrack_server.text(),
+            "ftrack_api_user": self.ftrack_user.text(),
+            "ftrack_api_key": self.ftrack_key.text()
         }
         return new_config, new_secrets

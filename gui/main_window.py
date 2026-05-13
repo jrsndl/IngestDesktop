@@ -535,6 +535,7 @@ class MainWindow(QMainWindow):
         self.thumb_area.slider_cols.setValue(self.config.get("default_columns", 12))
         self.thumb_area.slider_text_size.setValue(self.config.get("default_text_size", 10))
         self.thumb_area.slider_thumb_size.setValue(self.config.get("default_thumb_size", 150))
+        self.thumb_area.high_res_size = self.config.get("thumb_size", 512)
         
         self.thumb_area.slider_cols.valueChanged.connect(self._on_cols_changed)
         self.thumb_area.slider_text_size.valueChanged.connect(self._on_text_size_changed)
@@ -850,6 +851,7 @@ class MainWindow(QMainWindow):
         self.thumb_area.slider_cols.setValue(self.config.get("default_columns", 12))
         self.thumb_area.slider_text_size.setValue(self.config.get("default_text_size", 10))
         self.thumb_area.slider_thumb_size.setValue(self.config.get("default_thumb_size", 150))
+        self.thumb_area.high_res_size = self.config.get("thumb_size", 512)
         
         # Apply label regex update
         label_regex = self.config.get("label_allowed_chars", "^[a-zA-Z0-9_\\-\\.\\s]*$")
@@ -959,55 +961,183 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Export CSV", "No valid source folder scanned.")
             return
 
-        # Name the CSV after the last folder in the path
+        # 1. Validate items
+        self.log_message("Export CSV: Running validation checks...")
+        valid_items, skipped_duplicates, skipped_collisions = self._validate_tagged_items(tagged_items)
+            
+        if not valid_items:
+            msg = "All selected items were skipped due to errors:\n"
+            if skipped_duplicates: msg += f"- {skipped_duplicates} duplicates\n"
+            if skipped_collisions: msg += f"- {skipped_collisions} version collisions\n"
+            QMessageBox.warning(self, "Export CSV", msg)
+            return
+
+        # 2. Export logic
         folder_name = os.path.basename(os.path.abspath(source_folder))
         if not folder_name: folder_name = "export"
         csv_path = os.path.join(source_folder, f"{folder_name}.csv")
         
-        # Use formatting from CSVPreviewModel
-        column_defs = self.csv_preview_model.column_defs
-        delimiter = self.config.get("csv_delimiter", ",")
-        quotechar = self.config.get("csv_quotechar", '"')
-        
-        import csv
         try:
-            with open(csv_path, "w", newline="", encoding="utf-8") as f:
-                writer = csv.writer(f, delimiter=delimiter, quotechar=quotechar, quoting=csv.QUOTE_MINIMAL)
-                # Header
-                writer.writerow([h for h, t in column_defs])
-                # Rows
-                for item in tagged_items:
-                    row_data = []
-                    for h, template in column_defs:
-                        val = self.model._expand_string(template, item, use_global_camel=True)
-                        row_data.append(val)
-                    writer.writerow(row_data)
+            self._write_csv_from_preview(valid_items, csv_path)
+            self.log_message(f"Exported {len(valid_items)} items to CSV: {csv_path}", "success")
             
-            self.log_message(f"Exported {len(tagged_items)} items to CSV: {csv_path}", "success")
-            QMessageBox.information(self, "Export CSV", f"CSV exported successfully to:\n{csv_path}")
+            # Summary message
+            summary = f"CSV exported successfully to:\n{csv_path}\n\n"
+            summary += f"Total exported: {len(valid_items)}\n"
+            if skipped_duplicates or skipped_collisions:
+                summary += f"Total skipped: {skipped_duplicates + skipped_collisions}\n"
+                if skipped_duplicates: summary += f"  - Duplicates: {skipped_duplicates}\n"
+                if skipped_collisions: summary += f"  - Version collisions: {skipped_collisions}\n"
+            
+            QMessageBox.information(self, "Export CSV", summary)
+            
         except Exception as e:
             self.log_message(f"Failed to export CSV: {e}", "error")
             QMessageBox.critical(self, "Export CSV", f"Failed to export CSV: {e}")
+
+    def _validate_tagged_items(self, tagged_items):
+        """Run duplicity and version collision checks and return (valid_items, skip_dup_count, skip_coll_count)."""
+        # 1. Run Duplicity Test
+        duplicate_items = self._check_duplicates_in_list(tagged_items)
+        duplicate_set = set(duplicate_items)
+        
+        # 2. Run Version Collision Test (Synchronous)
+        project = self.top_bar.combo_project.currentText()
+        v_map = {}
+        if project:
+            v_map = self._check_versions_sync(tagged_items)
+        
+        collision_items = []
+        for item in tagged_items:
+            folder_path = "/".join(item.ayon_path.split("/")[:-1])
+            path_map = self.ayon_panel.get_path_to_id_map()
+            f_id = path_map.get(folder_path)
+            if f_id:
+                prod_name = self.model._expand_string(self.model.product_name_template, item, use_global_camel=True)
+                key = f"{f_id}|{prod_name}|{item.product_type}"
+                last_v = v_map.get(key)
+                if last_v is not None and last_v >= item.version:
+                    collision_items.append(item)
+        
+        collision_set = set(collision_items)
+        
+        valid_items = []
+        skipped_duplicates = 0
+        skipped_collisions = 0
+        
+        for item in tagged_items:
+            if item in duplicate_set:
+                skipped_duplicates += 1
+                continue
+            if item in collision_set:
+                skipped_collisions += 1
+                continue
+            valid_items.append(item)
+            
+        return valid_items, skipped_duplicates, skipped_collisions
+
+    def _check_duplicates_in_list(self, items):
+        """Returns a list of items that are considered duplicates within the provided list."""
+        identity_map = {}
+        for item in items:
+            prod_name = self.model._expand_string(self.model.product_name_template, item, use_global_camel=True)
+            identity = f"{item.ayon_path}{prod_name}{item.version}"
+            if identity not in identity_map:
+                identity_map[identity] = []
+            identity_map[identity].append(item)
+            
+        duplicates = []
+        for group in identity_map.values():
+            if len(group) > 1:
+                duplicates.extend(group)
+        return duplicates
+
+    def _check_versions_sync(self, items):
+        """Synchronously fetch versions from AYON for the provided items."""
+        project = self.top_bar.combo_project.currentText()
+        if not project: return {}
+        
+        path_map = self.ayon_panel.get_path_to_id_map()
+        folder_ids = set()
+        for item in items:
+            if not item.ayon_path: continue
+            folder_path = "/".join(item.ayon_path.split("/")[:-1])
+            f_id = path_map.get(folder_path)
+            if f_id: folder_ids.add(f_id)
+            
+        if not folder_ids: return {}
+        
+        try:
+            return self.ayon.get_last_versions(project, list(folder_ids))
+        except Exception as e:
+            self.log_message(f"Version check failed during export: {e}", "error")
+            return {}
 
     def perform_publish_local(self):
         tagged_items = self._get_tagged_for_ingest()
         if not tagged_items: return
         
+        # 1. Validate items
+        self.log_message("Publish Local: Running validation checks...")
+        valid_items, skipped_duplicates, skipped_collisions = self._validate_tagged_items(tagged_items)
+        
+        if not valid_items:
+            msg = "All selected items were skipped due to errors:\n"
+            if skipped_duplicates: msg += f"- {skipped_duplicates} duplicates\n"
+            if skipped_collisions: msg += f"- {skipped_collisions} version collisions\n"
+            QMessageBox.warning(self, "Publish Ayon Local", msg)
+            return
+            
+        if skipped_duplicates or skipped_collisions:
+            msg = f"Found {skipped_duplicates + skipped_collisions} invalid items which will be skipped.\n"
+            if skipped_duplicates: msg += f"- {skipped_duplicates} duplicates\n"
+            if skipped_collisions: msg += f"- {skipped_collisions} version collisions\n"
+            msg += "\nDo you want to proceed with the remaining items?"
+            res = QMessageBox.question(self, "Publish Ayon Local", msg, QMessageBox.Yes | QMessageBox.No)
+            if res == QMessageBox.No:
+                return
+
+        # 2. Proceed with publish
         project = self.top_bar.combo_project.currentText()
         import tempfile
         csv_path = os.path.join(tempfile.gettempdir(), "ayon_ingest.csv")
-        self._write_ingest_csv(tagged_items, project, csv_path)
+        
+        try:
+            self._write_csv_from_preview(valid_items, csv_path)
+        except Exception as e:
+            self.log_message(f"Failed to write temporary CSV: {e}", "error")
+            QMessageBox.critical(self, "CSV Error", f"Failed to write temporary CSV: {e}")
+            return
         
         tray_path = self.config.get("traypublisher_path", "ayon_console.exe")
+        ingest_folder = self.config.get("ayon_csv_ingest_folder", "/edit/csvingest")
+        ingest_task = self.config.get("ayon_csv_ingest_task", "csvingest")
+        ingest_preset = self.config.get("ayon_csv_preset", "Default")
+        ignore_validators = self.config.get("ayon_ignore_validators", True)
+
         cmd = [
             tray_path, "addon", "traypublisher", "ingestcsv",
             "--filepath", csv_path,
-            "--project", project
+            "--project", project,
+            "--folder-path", ingest_folder,
+            "--task", ingest_task,
+            "--preset", ingest_preset
         ]
-        
+        if ignore_validators:
+            cmd.append("--ignore-validators")
+        print(cmd)
         try:
-            import subprocess
-            subprocess.Popen(cmd)
+            # Prepare environment with Ftrack secrets
+            env = os.environ.copy()
+            ftrack_server = self.secrets.get("ftrack_server", "")
+            ftrack_user = self.secrets.get("ftrack_api_user", "")
+            ftrack_key = self.secrets.get("ftrack_api_key", "")
+            
+            if ftrack_server: env["FTRACK_SERVER"] = ftrack_server
+            if ftrack_user: env["FTRACK_API_USER"] = ftrack_user
+            if ftrack_key: env["FTRACK_API_KEY"] = ftrack_key
+            
+            subprocess.Popen(cmd, env=env)
             self.log_message(f"Ingest CSV created and TrayPublisher started locally.", "success")
         except Exception as e:
             self.log_message(f"Failed to start TrayPublisher: {e}", "error")
@@ -1040,24 +1170,21 @@ class MainWindow(QMainWindow):
             return None
         return tagged_items
 
-    def _write_ingest_csv(self, items, project, csv_path):
-        import csv
-        try:
-            with open(csv_path, "w", newline="") as f:
-                writer = csv.writer(f)
-                # Header
-                writer.writerow(["File Path", "Folder Path", "Task Name", "Variant", "Version"])
-                for item in items:
-                    writer.writerow([
-                        item.file_path, 
-                        item.ayon_path, 
-                        "GenericTask", 
-                        item.label, 
-                        item.version
-                    ])
-        except Exception as e:
-            self.log_message(f"Failed to write CSV: {e}", "error")
-            QMessageBox.critical(self, "CSV Error", f"Failed to write CSV: {e}")
+    def _write_csv_from_preview(self, items, csv_path):
+        """Write items to CSV using the column definitions from CSVPreviewModel."""
+        column_defs = self.csv_preview_model.column_defs
+        delimiter = self.config.get("csv_delimiter", ",")
+        quotechar = self.config.get("csv_quotechar", '"')
+        
+        with open(csv_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f, delimiter=delimiter, quotechar=quotechar, quoting=csv.QUOTE_MINIMAL)
+            writer.writerow([h for h, t in column_defs])
+            for item in items:
+                row_data = []
+                for h, template in column_defs:
+                    val = self.model._expand_string(template, item, use_global_camel=True)
+                    row_data.append(val)
+                writer.writerow(row_data)
 
     def _on_selection_changed(self, selected, deselected):
         pass # Handle via sync methods now
