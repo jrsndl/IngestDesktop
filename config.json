@@ -2,7 +2,7 @@
     "ayon_server_url": "http://192.168.0.162:5000",
     "ayon_api_key": "5e97e13dc67b4a63a8b9085fd144e134\n",
     "traypublisher_path": "C:\\Users\\robur\\AppData\\Local\\Ynput\\AYON\\shim\\ayon_console.exe",
-    "last_source_folder": "C:\\Users\\robur\\Downloads\\IngestDesktop_260513",
+    "last_source_folder": "C:/Users/robur/Desktop/2ayon",
     "last_project": "",
     "last_task": {},
     "version_regex": "_v(\\d+)",
@@ -11,7 +11,7 @@
     "row_distance": 10,
     "column_distance": 10,
     "folder_spacing": 30,
-    "geometry": "01d9d0cb00030000fffff600fffffff8ffffffff0000059ffffff6a900000038fffffd450000056100000001020000000a00fffff60000000017ffffffff0000059f",
+    "geometry": "01d9d0cb00030000fffff600fffffff8ffffffff0000059ffffff85d00000039fffffef90000056200000001020000000a00fffff60000000017ffffffff0000059f",
     "h_splitter": "000000ff0000000100000003000001490000047f000000c101ffffffff010000000100",
     "v_splitter": "000000ff0000000100000002000003910000017b01ffffffff010000000200",
     "default_columns": 13,
@@ -187,5 +187,13 @@
     "ayon_csv_ingest_folder": "/edit/csvingest",
     "ayon_csv_ingest_task": "csvingest",
     "ayon_ignore_validators": true,
-    "ayon_csv_preset": "Default"
+    "ayon_csv_preset": "Default",
+    "clip_temp_root": "C:\\Users\\robur\\Downloads",
+    "clip_folder_template": "IngestDesktop_{yy}{mm}{dd}",
+    "clip_file_prefix": "clipboard",
+    "clip_file_counter": 3,
+    "item_info_stills": "STILL\n{ayon_folder_path}/{task_name}\n{metadata.width}x{metadata.height}",
+    "item_info_sequences": "SEQUENCE\n{ayon_folder_path}/{task_name}\n{metadata.width}x{metadata.height}",
+    "item_info_videos": "VIDEO\n{ayon_folder_path}/{task_name}\n{metadata.width}x{metadata.height}, ln={metadata.nb_frames}\ntc={metadata.timecode} {frame_start}-{frame_end}",
+    "item_info_other": "OTHER\n{ayon_folder_path}/{task_name}\n"
 }

@@ -25,8 +25,13 @@ def get_ffprobe_data(path_to_file, ffprobe_exe, logger=None):
         path_to_file
     ]
 
+    # Hide window on Windows
+    creationflags = 0
+    if os.name == 'nt':
+        creationflags = 0x08000000 # subprocess.CREATE_NO_WINDOW
+
     try:
-        result = subprocess.run(args, capture_output=True, text=True, check=True)
+        result = subprocess.run(args, capture_output=True, text=True, check=True, creationflags=creationflags)
         return json.loads(result.stdout)
     except Exception as e:
         logger.error(f"Failed to get ffprobe data for {path_to_file}: {e}")
@@ -51,8 +56,13 @@ def get_oiio_info_for_input(path_to_file, oiiotool_exe, logger=None):
         path_to_file
     ]
 
+    # Hide window on Windows
+    creationflags = 0
+    if os.name == 'nt':
+        creationflags = 0x08000000 # subprocess.CREATE_NO_WINDOW
+
     try:
-        result = subprocess.run(args, capture_output=True, text=True, check=True)
+        result = subprocess.run(args, capture_output=True, text=True, check=True, creationflags=creationflags)
         import xml.etree.ElementTree as ET
         root = ET.fromstring(result.stdout)
         

@@ -481,8 +481,13 @@ class MainWindow(QMainWindow):
         # 7. Help Overlay
         self.help_overlay = HelpOverlay(self)
         
-        # Initial config
-        self.load_config()
+        # Initial config apply
+        self._apply_preferences(self.config, self.secrets, 
+                               self.config.get("detect_sequences", True), 
+                               self.config.get("seq_thumb_frame", "Middle"),
+                               self.config.get("version_regex", ""),
+                               json.dumps(self.config.get("extensions", {}), sort_keys=True),
+                               show_message=False)
 
         # 6. Select All Shortcut
         self.shortcut_all = QShortcut(QKeySequence("Ctrl+A"), self)
@@ -863,6 +868,11 @@ class MainWindow(QMainWindow):
         label_regex = self.config.get("label_allowed_chars", "^[a-zA-Z0-9_\\-\\.\\s]*$")
         self.model.label_allowed_regex = label_regex
         self.thumb_area.update_label_validator(label_regex)
+        
+        # Update Tooltip templates
+        tt_keys = ["item_info_stills", "item_info_sequences", "item_info_videos", "item_info_other"]
+        tt_templates = {k: self.config.get(k, "") for k in tt_keys}
+        self.thumb_area.set_tooltip_templates(tt_templates)
         
         self.save_config()
         self.save_secrets()

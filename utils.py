@@ -64,8 +64,13 @@ def generate_video_thumbnail(video_path, ffmpeg_path, frame_mode="Middle", durat
         "-y", out_path
     ]
     
+    # Hide window on Windows
+    creationflags = 0
+    if os.name == 'nt':
+        creationflags = 0x08000000 # subprocess.CREATE_NO_WINDOW
+
     try:
-        subprocess.run(args, capture_output=True, check=True)
+        subprocess.run(args, capture_output=True, check=True, creationflags=creationflags)
         if os.path.exists(out_path):
             return out_path
     except Exception:

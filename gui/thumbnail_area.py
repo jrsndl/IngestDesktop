@@ -4,7 +4,8 @@ from PySide6.QtWidgets import (QGraphicsView, QGraphicsScene, QGraphicsItem, QGr
                              QSpinBox, QLabel, QLineEdit, QSlider, QFrame)
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtCore import Qt, QRectF, QPointF, Signal, QSize, QEvent, QTimer, QRegularExpression, QRunnable, QThreadPool, QObject
-from PySide6.QtGui import QPainter, QPen, QColor, QAction, QPixmap, QFontMetrics, QRegularExpressionValidator, QImage, QFont, QTextOption
+from PySide6.QtGui import QPainter, QPen, QColor, QAction, QPixmap, QFontMetrics, QRegularExpressionValidator, QImage, QFont, QTextOption, QHelpEvent
+from PySide6.QtWidgets import QToolTip
 from utils import generate_thumbnail
 
 class ThumbnailItem(QGraphicsObject):
@@ -23,6 +24,26 @@ class ThumbnailItem(QGraphicsObject):
         self.loading_sig_connected = False
         self.cached_label = ""
         self.setCacheMode(QGraphicsItem.NoCache)
+        self.tooltip_templates = {}
+
+    def update_tooltip(self, templates, model):
+        self.tooltip_templates = templates
+        if not templates or not model:
+            return
+            
+        cat = self.data.category.lower()
+        key = "other"
+        if "sequence" in cat: key = "sequences"
+        elif "still" in cat: key = "stills"
+        elif "video" in cat: key = "videos"
+        
+        template = templates.get(f"item_info_{key}", "")
+        if template:
+            expanded = model.expand_tokens(template, self.data)
+            self.setToolTip(expanded)
+        else:
+            self.setToolTip("")
+
 
     def boundingRect(self):
         # Dynamic height based on font size (approx 3.5 lines for label)
@@ -288,6 +309,14 @@ class ThumbnailArea(QWidget):
         self.view.setResizeAnchor(QGraphicsView.AnchorUnderMouse)
         self.view.viewport().installEventFilter(self)
         self.view.installEventFilter(self) # For key logic
+        self.view.setMouseTracking(True)
+        self.view.viewport().setMouseTracking(True)
+        
+        self._tooltip_timer = QTimer(self)
+        self._tooltip_timer.setSingleShot(True)
+        self._tooltip_timer.timeout.connect(self._show_fast_tooltip)
+        self._last_tooltip_pos = None
+        self._last_tooltip_local_pos = None
         
         self._is_panning = False
         self._last_pan_pos = None
@@ -329,6 +358,24 @@ class ThumbnailArea(QWidget):
         self._path_filter = ""
         self._last_age_filter = (False, 0)
         self._last_search_text = ""
+        self.tooltip_templates = {}
+
+    def set_tooltip_templates(self, templates):
+        self.tooltip_templates = templates
+        self.refresh_tooltips()
+
+    def refresh_tooltips(self):
+        if not self.model: return
+        for item in self.item_to_thumb.values():
+            item.update_tooltip(self.tooltip_templates, self.model)
+
+    def _show_fast_tooltip(self):
+        if not self._last_tooltip_local_pos: return
+        item = self.view.itemAt(self._last_tooltip_local_pos)
+        if item and hasattr(item, "toolTip"):
+            tip = item.toolTip()
+            if tip:
+                QToolTip.showText(self._last_tooltip_pos, tip, self.view)
 
     def _on_scene_selection_changed(self):
         self._has_selection = bool(self.scene.selectedItems())
@@ -359,6 +406,7 @@ class ThumbnailArea(QWidget):
             thumb = ThumbnailItem(item_data)
             thumb.size = thumb_size
             thumb.font_size = font_size
+            thumb.update_tooltip(self.tooltip_templates, self.model)
             self.scene.addItem(thumb)
             self.item_to_thumb[item_data] = thumb
             
@@ -375,6 +423,7 @@ class ThumbnailArea(QWidget):
                 thumb = ThumbnailItem(item_data)
                 thumb.size = thumb_size
                 thumb.font_size = font_size
+                thumb.update_tooltip(self.tooltip_templates, self.model)
                 self.scene.addItem(thumb)
                 self.item_to_thumb[item_data] = thumb
         self.rearrange_items()
@@ -396,6 +445,7 @@ class ThumbnailArea(QWidget):
                 if item_data in self.item_to_thumb:
                     thumb = self.item_to_thumb[item_data]
                     thumb.cached_label = ""
+                    thumb.update_tooltip(self.tooltip_templates, self.model)
                     thumb.update()
 
     def rearrange_items(self, age_filter=None, search_text=None):
@@ -554,7 +604,20 @@ class ThumbnailArea(QWidget):
                 self.update_zoom_indicator()
                 return True # Prevent default scrolling/panning
         
+        if event.type() == QEvent.MouseMove:
+            if source is self.view.viewport():
+                self._tooltip_timer.stop()
+                self._tooltip_timer.start(300) # 300ms delay
+                self._last_tooltip_pos = event.globalPos()
+                self._last_tooltip_local_pos = event.pos()
+
+        if event.type() == QEvent.Leave:
+            self._tooltip_timer.stop()
+            QToolTip.hideText()
+
         if event.type() == QEvent.MouseButtonPress:
+            self._tooltip_timer.stop()
+            QToolTip.hideText()
             if source is self.view.viewport():
                 is_middle = event.button() == Qt.MiddleButton
                 is_ctrl_left = event.button() == Qt.LeftButton and (event.modifiers() & Qt.ControlModifier)

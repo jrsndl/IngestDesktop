@@ -62,6 +62,10 @@ class ImageTableModel(QAbstractTableModel):
         self.presets = presets
         self.layoutChanged.emit()
 
+    def expand_tokens(self, text, item):
+        """Public wrapper for token expansion."""
+        return self._expand_string(text, item)
+
     def update_item(self, item):
         """Notify the model that an item has been updated (e.g. metadata fetched)."""
         try:
