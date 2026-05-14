@@ -271,12 +271,20 @@ class ImageScanner(QThread):
                 if os.path.exists(thumb_path):
                     item.thumbnail = generate_thumbnail(thumb_path, self.thumbnail_size)
 
-            # 2. Special handling for videos: start frame from TC
-            if item.category == "Video" and getattr(item, "_video_start_from_tc", False):
-                start_from_tc = metadata.get("start_from_tc")
-                if start_from_tc is not None:
-                    item.frame_start = start_from_tc
-                    item.frame_end = start_from_tc
+            # 2. Special handling for videos: start/end frames
+            if item.category == "Video":
+                if getattr(item, "_video_start_from_tc", False):
+                    start_from_tc = metadata.get("start_from_tc")
+                    if start_from_tc is not None:
+                        item.frame_start = start_from_tc
+                
+                # Calculate frame_end based on nb_frames
+                nb_frames = metadata.get("nb_frames")
+                try:
+                    nb_frames = int(nb_frames)
+                    item.frame_end = item.frame_start + nb_frames - 1
+                except (ValueError, TypeError):
+                    item.frame_end = item.frame_start
             
             self.item_updated.emit(item)
 

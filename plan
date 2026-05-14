@@ -249,3 +249,5 @@ Do not export lines with failed duplicity test, or with versions collision. Skip
 
 Implement AYON local publish.
 
+
+Thumbnail View, make a "tooltip" to show info about the thumbnail, when you hower mouse over thumbnail and wait. The tooltip will be the text configured in Preferences: "Item Info" for corresponding Category. The text can contain tokens in curly brackets to be expanded.

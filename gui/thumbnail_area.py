@@ -1,7 +1,7 @@
 import os
 from PySide6.QtWidgets import (QGraphicsView, QGraphicsScene, QGraphicsItem, QGraphicsObject, 
                              QMenu, QVBoxLayout, QWidget, QHBoxLayout, QPushButton, QCheckBox, 
-                             QSpinBox, QLabel, QLineEdit, QSlider, QFrame)
+                             QSpinBox, QLabel, QLineEdit, QSlider, QFrame, QDialog, QFormLayout)
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtCore import Qt, QRectF, QPointF, Signal, QSize, QEvent, QTimer, QRegularExpression, QRunnable, QThreadPool, QObject
 from PySide6.QtGui import QPainter, QPen, QColor, QAction, QPixmap, QFontMetrics, QRegularExpressionValidator, QImage, QFont, QTextOption, QHelpEvent
@@ -209,6 +209,55 @@ class ThumbnailWorker(QRunnable):
         pixmap = generate_thumbnail(self.item_data.file_path, self.size)
         self.signals.finished.emit(self.item_data, pixmap)
 
+class SequenceRenameDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Sequence Rename")
+        self.setMinimumWidth(300)
+        
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        
+        self.prefix = QLineEdit("img")
+        self.counter_start = QSpinBox()
+        self.counter_start.setRange(0, 999999)
+        self.counter_start.setValue(1)
+        
+        self.counter_zeroes = QSpinBox()
+        self.counter_zeroes.setRange(1, 10)
+        self.counter_zeroes.setValue(3)
+        
+        self.suffix = QLineEdit("")
+        
+        form.addRow("Prefix:", self.prefix)
+        form.addRow("Counter Start:", self.counter_start)
+        form.addRow("Counter Zeroes:", self.counter_zeroes)
+        form.addRow("Suffix:", self.suffix)
+        
+        layout.addLayout(form)
+        
+        btns = QHBoxLayout()
+        self.btn_ok = QPushButton("Rename")
+        self.btn_ok.setObjectName("IngestButton")
+        self.btn_ok.setMinimumHeight(40)
+        self.btn_ok.clicked.connect(self.accept)
+        
+        self.btn_cancel = QPushButton("Cancel")
+        self.btn_cancel.setMinimumHeight(40)
+        self.btn_cancel.clicked.connect(self.reject)
+        
+        btns.addWidget(self.btn_ok)
+        btns.addWidget(self.btn_cancel)
+        layout.addLayout(btns)
+
+    def get_values(self):
+        return {
+            "prefix": self.prefix.text().strip(),
+            "start": self.counter_start.value(),
+            "zeroes": self.counter_zeroes.value(),
+            "suffix": self.suffix.text().strip()
+        }
+
 class ThumbnailArea(QWidget):
     tag_toggle_requested = Signal()
     label_action_requested = Signal(str, object)
@@ -301,6 +350,7 @@ class ThumbnailArea(QWidget):
         self.view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.scene = QGraphicsScene(self)
         self.scene.setItemIndexMethod(QGraphicsScene.BspTreeIndex)
+        self.scene.setSceneRect(-50000, -50000, 100000, 100000)
         self.view.setScene(self.scene)
         self.scene.selectionChanged.connect(self._on_scene_selection_changed)
         self.view.setBackgroundBrush(QColor("#1e1e1e"))
@@ -368,6 +418,42 @@ class ThumbnailArea(QWidget):
         if not self.model: return
         for item in self.item_to_thumb.values():
             item.update_tooltip(self.tooltip_templates, self.model)
+
+    def _on_sequence_rename(self):
+        selected_thumbs = self.scene.selectedItems()
+        if not selected_thumbs:
+            return
+            
+        dialog = SequenceRenameDialog(self)
+        if dialog.exec():
+            vals = dialog.get_values()
+            
+            # Sort thumbs: Top-to-Bottom, then Left-to-Right
+            def sort_key(thumb):
+                # Using a rounded Y to group items in the same row
+                # Line height is roughly font_size * 1.5 + size
+                row_h = self.slider_thumb_size.value() + 50 
+                return (round(thumb.y() / row_h), thumb.x())
+            
+            sorted_thumbs = sorted(selected_thumbs, key=sort_key)
+            
+            prefix = vals["prefix"]
+            start = vals["start"]
+            zeroes = vals["zeroes"]
+            suffix = vals["suffix"]
+            
+            for i, thumb in enumerate(sorted_thumbs):
+                counter = start + i
+                new_label = f"{prefix}{counter:0{zeroes}d}{suffix}"
+                
+                try:
+                    row = self.model.items.index(thumb.data)
+                    idx = self.model.index(row, 2) # Column 2 is Label
+                    self.model.setData(idx, new_label, Qt.EditRole)
+                except ValueError:
+                    continue
+            
+            self.model.layoutChanged.emit()
 
     def _show_fast_tooltip(self):
         if not self._last_tooltip_local_pos: return
@@ -598,6 +684,7 @@ class ThumbnailArea(QWidget):
             
         if event.type() == QEvent.Wheel:
             if source in (self.view, self.view.viewport()):
+                self.view.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
                 angle = event.angleDelta().y()
                 factor = 1.15 if angle > 0 else 1 / 1.15
                 self.view.scale(factor, factor)
@@ -606,10 +693,20 @@ class ThumbnailArea(QWidget):
         
         if event.type() == QEvent.MouseMove:
             if source is self.view.viewport():
+                # Handle tooltip
                 self._tooltip_timer.stop()
                 self._tooltip_timer.start(300) # 300ms delay
                 self._last_tooltip_pos = event.globalPos()
                 self._last_tooltip_local_pos = event.pos()
+
+                if self._is_panning:
+                    delta = event.pos() - self._last_pan_pos
+                    self._last_pan_pos = event.pos()
+                    
+                    self.view.setTransformationAnchor(QGraphicsView.NoAnchor)
+                    factor = self.view.transform().m11()
+                    self.view.translate(delta.x() / factor, delta.y() / factor)
+                    return True
 
         if event.type() == QEvent.Leave:
             self._tooltip_timer.stop()
@@ -631,21 +728,11 @@ class ThumbnailArea(QWidget):
                 if not self.view.itemAt(event.pos()):
                     self.scene.clearSelection()
 
-        if event.type() == QEvent.MouseMove:
-            if self._is_panning:
-                delta = event.pos() - self._last_pan_pos
-                self._last_pan_pos = event.pos()
-                
-                # Use translate instead of scrollbars for "infinite" panning
-                # We need to account for current scale
-                factor = self.view.transform().m11()
-                self.view.translate(delta.x() / factor, delta.y() / factor)
-                return True
-
         if event.type() == QEvent.MouseButtonRelease:
             if self._is_panning:
                 self._is_panning = False
                 self.view.viewport().setCursor(Qt.ArrowCursor)
+                self.view.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
                 return True
         
         if event.type() == QEvent.MouseButtonDblClick:
@@ -678,11 +765,13 @@ class ThumbnailArea(QWidget):
                     return True
             elif event.key() in [Qt.Key_Plus, Qt.Key_Equal]:
                 if self.view.underMouse():
+                    self.view.setTransformationAnchor(QGraphicsView.AnchorViewCenter)
                     self.view.scale(1.15, 1.15)
                     self.update_zoom_indicator()
                     return True
             elif event.key() == Qt.Key_Minus:
                 if self.view.underMouse():
+                    self.view.setTransformationAnchor(QGraphicsView.AnchorViewCenter)
                     self.view.scale(1/1.15, 1/1.15)
                     self.update_zoom_indicator()
                     return True
@@ -819,6 +908,14 @@ class ThumbnailArea(QWidget):
         tag_action = QAction("Tag/Untag Selected", self)
         tag_action.triggered.connect(self.tag_toggle_requested.emit)
         menu.addAction(tag_action)
+        
+        menu.addSeparator()
+        action_seq_rename = QAction("Sequence Rename...", self)
+        action_seq_rename.triggered.connect(self._on_sequence_rename)
+        # Enable only if something is selected
+        action_seq_rename.setEnabled(bool(self.scene.selectedItems()))
+        menu.addAction(action_seq_rename)
+        
         menu.addSeparator()
         reset_action = QAction("Reset Label", self)
         reset_action.triggered.connect(lambda: self.label_action_requested.emit("reset", None))
