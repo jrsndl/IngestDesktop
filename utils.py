@@ -97,9 +97,9 @@ def strip_sequence_counter(filename):
     base, ext = os.path.splitext(filename)
     match = re.search(r"(.*?)(\d+)$", base)
     if match:
-        # If there's a dot before the numbers, strip it too
+        # If there's a dot or underscore before the numbers, strip it too
         base_name = match.group(1)
-        if base_name.endswith("."):
+        while base_name.endswith(".") or base_name.endswith("_"):
             base_name = base_name[:-1]
         return base_name
     return base
@@ -134,3 +134,37 @@ def evaluate_preset(file_path, presets, p_type, label=None):
         elif f_by == "label" and label:
             if fnmatch.fnmatch(label.lower(), f_str): return p
     return None
+
+def calculate_thumbnail_time(nb_frames, framerate, mode="Middle"):
+    """
+    Calculate the time in seconds for thumbnail extraction.
+    mode: First, Second, Middle
+    """
+    try:
+        nb_frames = int(nb_frames)
+        # Default to 24 fps if missing or zero
+        fps = float(framerate) if (framerate and float(framerate) > 0) else 24.0
+    except (ValueError, TypeError):
+        fps = 24.0
+        nb_frames = 1
+
+    if mode == "First":
+        target_frame = 0
+    elif mode == "Second" and nb_frames > 1:
+        target_frame = 1
+    elif mode == "Middle":
+        target_frame = max(0, (nb_frames - 1) // 2) if nb_frames > 0 else 0
+    else:
+        target_frame = 0
+
+    # User's specific formula implementation
+    hours = int(target_frame / 3600 / fps)
+    minutes = int((target_frame - hours * 3600 * fps) / 60 / fps)
+    seconds = int((target_frame - (hours * 3600 * fps) - (minutes * 60 * fps)) / fps)
+    rem_frames = int(target_frame - (hours * 3600 * fps) - (minutes * 60 * fps) - (seconds * fps))
+    
+    ms_per_frame = 1000.0 / fps
+    miliseconds = rem_frames * ms_per_frame
+    
+    total_seconds = float(hours * 3600 + minutes * 60 + seconds) + float(0.001 * miliseconds)
+    return total_seconds

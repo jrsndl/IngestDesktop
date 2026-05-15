@@ -5,7 +5,8 @@ import fnmatch
 from PySide6.QtCore import QThread, Signal
 from utils import (get_all_files, get_version_from_name, generate_thumbnail, 
                    generate_video_thumbnail, generate_placeholder_thumbnail,
-                   strip_sequence_counter, get_sequence_counter, evaluate_preset)
+                   strip_sequence_counter, get_sequence_counter, evaluate_preset,
+                   calculate_thumbnail_time)
 from logic.image_model import ImageItem
 from logic.metadata import get_image_info_metadata
 
@@ -22,7 +23,8 @@ class ImageScanner(QThread):
                  stills_start_frame=1001, stills_end_frame=1001,
                  video_start_from_tc=False, video_start_frame=1001,
                  ffmpeg_path="ffmpeg.exe", ffprobe_path="ffprobe.exe",
-                 oiiotool_path="oiiotool.exe", ocio_config="", stills_thumb_same=True):
+                 oiiotool_path="oiiotool.exe", ocio_config="", stills_thumb_same=True,
+                 thumb_suffix="_thumbnail", thumb_format=".jpg"):
         super().__init__()
         self.directory = directory
         self.recursive = recursive
@@ -42,6 +44,8 @@ class ImageScanner(QThread):
         self.oiiotool_path = oiiotool_path
         self.ocio_config = ocio_config
         self.stills_thumb_same = stills_thumb_same
+        self.thumb_suffix = thumb_suffix
+        self.thumb_format = thumb_format
         self._is_canceled = False
 
     def cancel(self):
@@ -82,7 +86,11 @@ class ImageScanner(QThread):
                 return
 
             # Completely ignore generated thumbnails
-            if f.lower().endswith("_thumbnail.png"):
+            filename_lower = f.lower()
+            if filename_lower.endswith("_thumbnail.png") or \
+               (self.thumb_suffix and self.thumb_format and \
+                self.thumb_suffix.lower() in filename_lower and \
+                filename_lower.endswith(self.thumb_format.lower())):
                 continue
 
             ext = os.path.splitext(f)[1].lower()
@@ -152,6 +160,7 @@ class ImageScanner(QThread):
                 if first_f and last_f:
                     category = f"sequence[{first_f}-{last_f}]"
                 
+                nb_frames = len(paths)
                 # Determine path for metadata/thumbnail
                 if self.seq_thumb_frame == "Middle":
                     source_path = paths[len(paths) // 2]
@@ -164,6 +173,7 @@ class ImageScanner(QThread):
                 source_path = first_path
                 first_f = self.stills_start_frame
                 last_f = self.stills_end_frame
+                nb_frames = 1
 
             p_type = "sequences" if len(paths) > 1 else "stills"
             is_seq = (len(paths) > 1)
@@ -180,6 +190,10 @@ class ImageScanner(QThread):
                              preset_name=preset_name, variant=variant, product_type=product_type, camel_case=camel_case,
                              representation=representation, colorspace=colorspace, rep_tags=rep_tags, is_sequence=is_seq,
                              preset_data=matched_p, frame_start=first_f, frame_end=last_f)
+            
+            item.metadata["nb_frames"] = nb_frames
+            if is_seq:
+                item.metadata["seq_thumbnail_path"] = source_path.replace("\\", "/")
             self._fill_metadata(item, source_path)
             
             # Save ref for metadata extraction later
@@ -279,12 +293,17 @@ class ImageScanner(QThread):
                         item.frame_start = start_from_tc
                 
                 # Calculate frame_end based on nb_frames
-                nb_frames = metadata.get("nb_frames")
+                nb_frames_val = item.metadata.get("nb_frames")
                 try:
-                    nb_frames = int(nb_frames)
-                    item.frame_end = item.frame_start + nb_frames - 1
+                    nb_frames_val = int(nb_frames_val)
+                    item.frame_end = item.frame_start + nb_frames_val - 1
                 except (ValueError, TypeError):
                     item.frame_end = item.frame_start
+
+            # 3. Calculate thumbnail time for ffmpeg seeking
+            fps = item.metadata.get("framerate")
+            nb = item.metadata.get("nb_frames", 1)
+            item.metadata["thumbnail_time"] = calculate_thumbnail_time(nb, fps, mode=self.seq_thumb_frame)
             
             self.item_updated.emit(item)
 
@@ -315,5 +334,121 @@ class ImageScanner(QThread):
             # Age
             source_time = item.modification_time if self.age_source == "Modification Date" else item.creation_time
             item.age_minutes = int((time.time() - source_time) / 60)
+            
+            # Initial thumbnail_time for stills/sequences (videos handled in Phase 2)
+            if item.category != "Video":
+                fps = item.metadata.get("framerate")
+                nb = item.metadata.get("nb_frames", 1)
+                item.metadata["thumbnail_time"] = calculate_thumbnail_time(nb, fps, mode=self.seq_thumb_frame)
         except Exception:
             pass
+
+class ThumbnailConversionWorker(QThread):
+    item_updated = Signal(object)
+    finished = Signal()
+    log = Signal(str)
+
+    def __init__(self, items, model, config):
+        super().__init__()
+        self.items = items
+        self.model = model
+        self.config = config
+        self._is_canceled = False
+        self.process = None
+
+    def cancel(self):
+        self._is_canceled = True
+        if self.process:
+            try:
+                import os
+                import subprocess
+                if os.name == 'nt':
+                    # Kill the whole process tree (cmd.exe and its children)
+                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(self.process.pid)], 
+                                   capture_output=True, creationflags=0x08000000)
+                else:
+                    self.process.kill()
+            except Exception as e:
+                print(f"Failed to kill conversion process: {e}")
+
+    def run(self):
+        import subprocess
+        import os
+        
+        for item in self.items:
+            if self._is_canceled:
+                break
+            
+            # Only process Stills, Videos, and Sequences
+            if item.category[:4].lower() not in ["stil", "vide", "sequ"]:
+                print(f"Skipping conversion for {item.file_path}: category '{item.category}' not in ['Still', 'Video', 'Sequence']")
+                continue
+                
+            cmd_template = ""
+            if item.category == "Still":
+                cmd_template = self.config.get("cmd_stills", "")
+            elif item.category == "Video":
+                cmd_template = self.config.get("cmd_videos", "")
+            else:
+                cmd_template = self.config.get("cmd_sequences", "")
+                
+            if not cmd_template:
+                print(f"Skipping conversion for {item.file_path}: no command template for category '{item.category}'")
+                continue
+                
+            try:
+                # Expand tokens to get the final command and target path
+                cmd = self.model.expand_tokens(cmd_template, item)
+                target_path = self.model.expand_tokens("{prefs_thumb_path}", item)
+                
+                if not cmd or not target_path:
+                    continue
+                    
+                print(f"Executing conversion: {cmd}")
+                self.log.emit(f"Executing conversion: {cmd}")
+                
+                # Ensure output directory exists
+                os.makedirs(os.path.dirname(target_path), exist_ok=True)
+                
+                # Run the conversion command
+                creationflags = 0
+                if os.name == 'nt':
+                    creationflags = 0x08000000 # CREATE_NO_WINDOW
+                
+                # Using shell=True as the command string might contain pipes or redirection.
+                # We use Popen with communicate(timeout=...) to avoid hanging indefinitely.
+                self.process = subprocess.Popen(cmd, shell=True, 
+                                                stdout=subprocess.PIPE, 
+                                                stderr=subprocess.PIPE, 
+                                                text=True, 
+                                                creationflags=creationflags)
+                
+                try:
+                    # Wait up to 60 seconds for conversion to finish
+                    stdout, stderr = self.process.communicate(timeout=60)
+                    returncode = self.process.returncode
+                except subprocess.TimeoutExpired:
+                    # If it times out, kill it and its children
+                    self.cancel() 
+                    stdout, stderr = "", "Timeout: conversion took more than 60 seconds."
+                    returncode = -1
+                except Exception as e:
+                    stdout, stderr = "", str(e)
+                    returncode = -1
+                finally:
+                    self.process = None
+                
+                # Validation: exit code 0, file exists, and size > 0
+                if returncode == 0 and os.path.exists(target_path) and os.path.getsize(target_path) > 0:
+                    item.conversion_thumb_path = target_path
+                    self.item_updated.emit(item)
+                else:
+                    err = stderr or stdout or "Unknown error"
+                    print(f"Conversion failed for {item.file_path}: {err}")
+                    self.log.emit(f"Conversion failed for {item.label}: {err}")
+                    
+            except Exception as e:
+                print(f"Error during conversion for {item.file_path}: {e}")
+                self.log.emit(f"Error during conversion for {item.label}: {e}")
+                
+        self.finished.emit()

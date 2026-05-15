@@ -64,22 +64,43 @@ class ThumbnailItem(QGraphicsObject):
             elif not self.data.is_high_res_loading:
                 self.request_high_res()
 
-        if not pixmap:
-            painter.fillRect(self.boundingRect(), QColor("#1e1e1e"))
-            painter.restore()
-            return
-
-        # thumb_rect calculation - fixed area at top, label area below
+        # 1. Calculate thumbnail area
         rect = QRectF(5, 5, self.boundingRect().width() - 10, self.size + 10)
-        scaled = pixmap.size()
-        scaled.scale(rect.size().toSize(), Qt.KeepAspectRatio)
         
-        thumb_rect = QRectF(0, 0, scaled.width(), scaled.height())
+        if pixmap:
+            scaled = pixmap.size()
+            scaled.scale(rect.size().toSize(), Qt.KeepAspectRatio)
+            thumb_rect = QRectF(0, 0, scaled.width(), scaled.height())
+        else:
+            # Placeholder logic: use metadata aspect ratio if available
+            w = self.data.metadata.get("width", 1)
+            h = self.data.metadata.get("height", 1)
+            try:
+                # Convert to float safely
+                fw = float(w) if w is not None else 1.0
+                fh = float(h) if h is not None else 1.0
+                aspect = fw / fh if fh > 0 else 1.0
+            except (ValueError, TypeError):
+                aspect = 1.0
+            
+            # Fit placeholder in rect with aspect ratio
+            if aspect > (rect.width() / rect.height()):
+                nw = rect.width()
+                nh = nw / aspect
+            else:
+                nh = rect.height()
+                nw = nh * aspect
+            thumb_rect = QRectF(0, 0, nw, nh)
+
         thumb_rect.moveCenter(rect.center())
 
-        # Draw Borders - Use cosmetic pens for constant screen thickness
-        # lod is inversely proportional to zoom-out.
-        # base_w is the reference for overview thickness.
+        # 2. Draw placeholder or pixmap
+        if not pixmap:
+            painter.fillRect(thumb_rect, QColor("#333333")) # Lighter gray for visibility
+        else:
+            painter.drawPixmap(thumb_rect, pixmap, QRectF(pixmap.rect()))
+
+        # 3. Draw Borders (always)
         base_w = 4
         if lod < 0.3:
             base_w = 12
@@ -92,14 +113,13 @@ class ThumbnailItem(QGraphicsObject):
             pen.setCosmetic(True)
             painter.setPen(pen)
         else:
-            # Unselected border stays as is or follows base_w
             pen = QPen(QColor("#444444"), base_w // 2)
             pen.setCosmetic(True)
             painter.setPen(pen)
         
         painter.drawRect(thumb_rect.adjusted(-4, -4, 4, 4))
 
-        # Inner Border (Tagging) - Half of base_w
+        # Inner Border (Tagging)
         if self.data.is_tagged:
             tag_color = QColor("#76ff03") if self.data.ayon_path else QColor("#558b2f")
         else:
@@ -109,30 +129,23 @@ class ThumbnailItem(QGraphicsObject):
         painter.setPen(tag_pen)
         painter.drawRect(thumb_rect.adjusted(-2, -2, 2, 2))
         
-        painter.drawPixmap(thumb_rect, pixmap, QRectF(pixmap.rect()))
-        
-        # Label - Only if zoomed in and NOT editing
+        # 4. Label - Only if zoomed in and NOT editing
         if lod > 0.05 and not self.is_editing:
             painter.setPen(QColor("#e0e0e0"))
             font = painter.font()
             
             base_size = getattr(self, 'font_size', 10)
-            # Dynamically grow text size when zooming out to keep it readable
-            # We use a power function to grow logical size faster than we zoom out
-            # but not so fast that it stays perfectly constant (to avoid total overlap)
             scale_factor = 1.0
             if lod < 0.9:
-                scale_factor = 1.0 / (lod ** 0.6)
-                scale_factor = min(scale_factor, 5.0) # Cap growth at 5x
+                scale_factor = min(1.0 / (lod ** 0.6), 5.0) # Cap growth at 5x
             
             font.setPointSizeF(base_size * scale_factor)
             painter.setFont(font)
             
             fm = QFontMetrics(font)
             line_height = fm.lineSpacing()
-            label_height = line_height * 3.5 # Allow a bit more height for scaled text
+            label_height = line_height * 3.5 
             
-            # Align label area with the base thumbnail size (centered horizontally)
             label_w = self.size
             label_x = (self.boundingRect().width() - label_w) / 2
             label_rect = QRectF(label_x, thumb_rect.bottom() + 5, label_w, label_height)

@@ -19,7 +19,7 @@ from gui.spreadsheet_panel import SpreadsheetPanel
 from gui.prefs_dialog import PreferencesDialog
 from logic.image_model import ImageTableModel
 from logic.csv_model import CSVPreviewModel
-from logic.scanner import ImageScanner
+from logic.scanner import ImageScanner, ThumbnailConversionWorker
 from ayon_client import AyonClient
 from utils import evaluate_preset
 
@@ -168,6 +168,7 @@ class HelpContentWidget(QWidget):
         y = draw_shortcut(painter, full_rect, "{metadata.nb_frames}", "Total frame count (Duration * FPS)", y)
         y = draw_shortcut(painter, full_rect, "{metadata.duration}", "Total duration in seconds (float)", y)
         y = draw_shortcut(painter, full_rect, "{metadata.framerate}", "Extracted technical framerate (float)", y)
+        y = draw_shortcut(painter, full_rect, "{metadata.seq_thumbnail_path}", "Path to the frame used for sequence thumbnail", y)
 
 class HelpOverlay(QWidget):
     def __init__(self, parent=None):
@@ -577,6 +578,7 @@ class MainWindow(QMainWindow):
             self.scanner.wait()
 
         self.model.clear()
+        self.model.source_folder = directory
         self.filter_panel.set_root_folder(directory)
         self.top_bar.set_path(directory)
         
@@ -597,7 +599,9 @@ class MainWindow(QMainWindow):
             ffprobe_path=self.config.get("ffprobe_path", "ffprobe.exe"),
             oiiotool_path=self.config.get("oiiotool_path", "oiiotool.exe"),
             ocio_config=self.config.get("ocio_config", ""),
-            stills_thumb_same=self.config.get("stills_thumb_same", True)
+            stills_thumb_same=self.config.get("stills_thumb_same", True),
+            thumb_suffix=self.config.get("thumb_suffix", "_thumbnail"),
+            thumb_format=self.config.get("thumb_format", ".jpg")
         )
         self.scanner.finished.connect(lambda items: self.log_message(f"Scan complete. Found {len(items)} items. Fetching metadata in background...", "success"))
         self.scanner.finished.connect(self._on_scan_finished)
@@ -620,6 +624,35 @@ class MainWindow(QMainWindow):
             self._parse_item_tags(item)
         self.model.add_items(new_items)
         self.thumb_area.frame_all()
+        
+        # Start background conversions for thumbnails
+        self.start_conversions(new_items)
+
+    def start_conversions(self, items):
+        """Start background conversion of thumbnails based on preferences."""
+        if hasattr(self, "_conv_worker") and self._conv_worker.isRunning():
+            self._conv_worker.cancel()
+            # Wait at most 2 seconds for the previous worker to finish its current command cleanup
+            if not self._conv_worker.wait(2000):
+                self.log_message("Previous conversion worker did not stop in time, starting new one anyway.", "warning")
+            
+        self._conv_worker = ThumbnailConversionWorker(items, self.model, self.config)
+        self._conv_worker.item_updated.connect(self._on_conversion_item_updated)
+        self._conv_worker.log.connect(lambda msg: self.log_message(msg))
+        self._conv_worker.start()
+
+    def _on_conversion_item_updated(self, item):
+        """Reload thumbnail from converted file and update UI."""
+        if not item.conversion_thumb_path:
+            return
+            
+        # Load the new thumbnail
+        from utils import generate_thumbnail
+        new_thumb = generate_thumbnail(item.conversion_thumb_path, self.config.get("default_thumb_size", 150))
+        if new_thumb:
+            item.thumbnail = new_thumb
+            self.model.update_item(item)
+            # Update high-res as well if needed? For now just the main thumb.
 
 
     def rescan_current(self):
@@ -630,6 +663,7 @@ class MainWindow(QMainWindow):
             return
             
         self.log_message(f"Rescanning directory: {directory}")
+        self.model.source_folder = directory
         if hasattr(self, "scanner") and self.scanner.isRunning():
             self.scanner.cancel()
             self.scanner.wait()
@@ -666,6 +700,8 @@ class MainWindow(QMainWindow):
             for item in new_items:
                 self._parse_item_tags(item)
             self.model.add_items(new_items)
+            self.thumb_area.frame_all()
+            self.start_conversions(new_items)
             self.log_message(f"Rescan complete. Added {len(new_items)} new items.", "success")
         else:
             self.log_message("Rescan complete. No new items found.")
@@ -874,6 +910,12 @@ class MainWindow(QMainWindow):
         tt_templates = {k: self.config.get(k, "") for k in tt_keys}
         self.thumb_area.set_tooltip_templates(tt_templates)
         
+        # Update Filter Panel sequence display
+        self.filter_panel.set_sequence_detection(
+            self.config.get("detect_sequences", True),
+            self.config.get("version_regex", r"([._]v|v)(\d+)")
+        )
+        
         self.save_config()
         self.save_secrets()
         self._update_model_presets()
@@ -882,6 +924,16 @@ class MainWindow(QMainWindow):
         self.model.product_name_template = self.config.get("product_name", "{label}")
         self.model.product_name_camel = self.config.get("product_name_camel", True)
         self.model.stills_thumb_same = self.config.get("stills_thumb_same", True)
+        self.model.high_res_size = self.config.get("thumb_size", 512)
+        
+        self.model.thumb_location = self.config.get("thumb_location", "Relative to Source Folder")
+        self.model.thumb_location_path = self.config.get("thumb_location_path", "_thumbs")
+        self.model.thumb_suffix = self.config.get("thumb_suffix", "_thumbnail")
+        self.model.thumb_format = self.config.get("thumb_format", ".jpg")
+        
+        self.model.ffmpeg_path = self.config.get("ffmpeg_path", "ffmpeg.exe")
+        self.model.ffprobe_path = self.config.get("ffprobe_path", "ffprobe.exe")
+        self.model.oiiotool_path = self.config.get("oiiotool_path", "oiiotool.exe")
         
         self.csv_preview_model.refresh_config(self.config)
         
@@ -1703,7 +1755,7 @@ class MainWindow(QMainWindow):
         if self.thumb_area.isVisible():
             self.thumb_area.frame_all()
 
-    def _on_ayon_task_selected(self, folder_path, task_name, task_type):
+    def _on_ayon_task_selected(self, folder_path, task_name, task_type, assignee=""):
         """Assign AYON path to selected items."""
         # Get selected rows robustly
         selection_model = self.spreadsheet.table.selectionModel()
@@ -1729,6 +1781,9 @@ class MainWindow(QMainWindow):
         for row in selected_rows:
             item = self.model.items[row]
             item.ayon_path = ayon_path
+            item.ayon_task_name = task_name
+            item.ayon_task_type = task_type
+            item.ayon_task_assignee = assignee
             
         # Notify the model that the AYON Path column (10) has changed for these rows
         start_idx = self.model.index(min(selected_rows), 10)
@@ -1786,6 +1841,9 @@ class MainWindow(QMainWindow):
         for item in self.model.items:
             if item.ayon_path == ayon_path:
                 item.ayon_path = ""
+                item.ayon_task_name = ""
+                item.ayon_task_type = ""
+                item.ayon_task_assignee = ""
                 affected += 1
         
         if affected:
@@ -1833,6 +1891,9 @@ class MainWindow(QMainWindow):
         for item in self.model.items:
             if item.ayon_path:
                 item.ayon_path = ""
+                item.ayon_task_name = ""
+                item.ayon_task_type = ""
+                item.ayon_task_assignee = ""
                 affected += 1
         
         if affected:
@@ -1958,6 +2019,9 @@ class MainWindow(QMainWindow):
                 ayon_path = f"{match['folder_path']}/{match['task_name']}"
                 if item.ayon_path != ayon_path:
                     item.ayon_path = ayon_path
+                    item.ayon_task_name = match.get("task_name", "")
+                    item.ayon_task_type = match.get("task_type", "")
+                    item.ayon_task_assignee = match.get("assignee", "")
                     count += 1
         
         if count:

@@ -1,9 +1,11 @@
 import os
+import re
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QPushButton, QLineEdit, 
                              QHBoxLayout, QLabel, QSpinBox, QTreeView, QFileSystemModel, 
                              QButtonGroup, QComboBox, QAbstractItemView, QCheckBox)
 from PySide6.QtCore import Signal, Qt, QDir, QSortFilterProxyModel, QItemSelectionModel
 from PySide6.QtGui import QColor
+from utils import strip_sequence_counter, get_version_from_name
 
 class TagColorProxyModel(QSortFilterProxyModel):
     def __init__(self, main_model, parent=None):
@@ -15,8 +17,13 @@ class TagColorProxyModel(QSortFilterProxyModel):
         self._age_limit = 0
         self._age_enabled = False
         
+        # Sequence settings
+        self.detect_sequences = False
+        self.version_regex = r"([._]v|v)(\d+)"
+        
         # Fast lookup: normalized_abs_path -> (is_tagged, age_minutes, label)
         self._path_info = {}
+        self._sequence_map = {} # (dir, base, ext, ver) -> item
         self._rebuild_cache()
         
         self.main_model.dataChanged.connect(self._on_model_data_changed)
@@ -30,9 +37,25 @@ class TagColorProxyModel(QSortFilterProxyModel):
 
     def _rebuild_cache(self):
         self._path_info = {}
+        self._sequence_map = {}
+        
         for item in self.main_model.items:
             abs_path = os.path.normpath(os.path.abspath(item.file_path))
             self._path_info[abs_path] = (item.is_tagged, item.age_minutes, item.label)
+            
+            if self.detect_sequences and item.is_sequence:
+                directory = os.path.dirname(abs_path)
+                filename = os.path.basename(abs_path)
+                
+                # Logic from ImageScanner to get the same key
+                version = get_version_from_name(filename, self.version_regex)
+                name_no_ver = re.sub(self.version_regex, "", filename)
+                base_name = strip_sequence_counter(name_no_ver)
+                ext = os.path.splitext(filename)[1].lower()
+                
+                key = (directory, base_name, ext, version)
+                self._sequence_map[key] = item
+                
         self.invalidateFilter()
 
     def _on_model_data_changed(self, tl, br):
@@ -45,9 +68,49 @@ class TagColorProxyModel(QSortFilterProxyModel):
         
         if file_name.lower().endswith("_thumbnail.png"):
             return False
+            
+        if self.detect_sequences and not source_model.isDir(idx):
+            file_path = source_model.filePath(idx)
+            abs_path = os.path.normpath(os.path.abspath(file_path))
+            directory = os.path.dirname(abs_path)
+            filename = os.path.basename(abs_path)
+            
+            # Check if this file is part of a known sequence
+            version = get_version_from_name(filename, self.version_regex)
+            name_no_ver = re.sub(self.version_regex, "", filename)
+            base_name = strip_sequence_counter(name_no_ver)
+            ext = os.path.splitext(filename)[1].lower()
+            
+            key = (directory, base_name, ext, version)
+            if key in self._sequence_map:
+                item = self._sequence_map[key]
+                item_abs_path = os.path.normpath(os.path.abspath(item.file_path))
+                if abs_path != item_abs_path:
+                    return False
+                    
         return super().filterAcceptsRow(source_row, source_parent)
 
     def data(self, index, role=Qt.DisplayRole):
+        if role == Qt.DisplayRole and self.detect_sequences:
+            source_index = self.mapToSource(index)
+            if not self.sourceModel().isDir(source_index):
+                file_path = self.sourceModel().filePath(source_index)
+                abs_path = os.path.normpath(os.path.abspath(file_path))
+                directory = os.path.dirname(abs_path)
+                filename = os.path.basename(abs_path)
+                
+                version = get_version_from_name(filename, self.version_regex)
+                name_no_ver = re.sub(self.version_regex, "", filename)
+                base_name = strip_sequence_counter(name_no_ver)
+                ext = os.path.splitext(filename)[1].lower()
+                
+                key = (directory, base_name, ext, version)
+                if key in self._sequence_map:
+                    item = self._sequence_map[key]
+                    display_name = strip_sequence_counter(filename)
+                    # Nuke notation: filename[first-last].extension
+                    return f"{display_name}[{item.frame_start}-{item.frame_end}]{ext}"
+
         if role == Qt.ForegroundRole:
             source_index = self.mapToSource(index)
             file_path = self.sourceModel().filePath(source_index)
@@ -135,6 +198,12 @@ class FilterPanel(QWidget):
         self.tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.tree.clicked.connect(self._on_folder_click)
         self.layout.addWidget(self.tree)
+
+    def set_sequence_detection(self, enabled, regex):
+        """Update sequence detection settings and rebuild cache."""
+        self.proxy.detect_sequences = enabled
+        self.proxy.version_regex = regex
+        self.proxy._rebuild_cache()
 
     def set_root_folder(self, path):
         self.fs_model.setRootPath(path)

@@ -92,8 +92,8 @@ class CheckableComboBox(QComboBox):
         return checked
 
 class AyonPanel(QWidget):
-    # Signal emitted when a task is double-clicked: (folder_path, task_name, task_type)
-    task_selected = Signal(str, str, str) 
+    # Signal emitted when a task is double-clicked: (folder_path, task_name, task_type, assignee)
+    task_selected = Signal(str, str, str, str) 
     # Context menu signals
     unassign_requested = Signal(str) # full_ayon_path
     select_assigned_requested = Signal(str) # full_ayon_path
@@ -385,7 +385,8 @@ class AyonPanel(QWidget):
             return {
                 "folder_path": folder_path,
                 "task_name": target_task.get("name"),
-                "task_type": target_task.get("type")
+                "task_type": target_task.get("type"),
+                "assignee": ", ".join(target_task.get("assignees", []))
             }
             
         return None
@@ -409,7 +410,8 @@ class AyonPanel(QWidget):
             folder_path = data.get('folder_path')
             task_name = data.get('name')
             task_type = data.get('type')
-            self.task_selected.emit(folder_path, task_name, task_type)
+            assignee = ", ".join(data.get('assignees', []))
+            self.task_selected.emit(folder_path, task_name, task_type, assignee)
 
     def _on_product_double_click(self, index):
         """Calculate variant and emit product_double_clicked signal."""
@@ -582,7 +584,7 @@ class AyonPanel(QWidget):
         if not is_assigned:
             assign_action = QAction(f"Assign path to selection", self)
             assign_action.triggered.connect(lambda: self.task_selected.emit(
-                data.get('folder_path'), data.get('name'), data.get('type')
+                data.get('folder_path'), data.get('name'), data.get('type'), ", ".join(data.get('assignees', []))
             ))
             menu.addAction(assign_action)
         else:

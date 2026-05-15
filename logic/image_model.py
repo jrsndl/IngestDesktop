@@ -1,5 +1,6 @@
 import os
 import re
+from utils import strip_sequence_counter
 from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex, Signal
 from PySide6.QtGui import QPixmap, QColor
 
@@ -14,6 +15,10 @@ class ImageItem:
         self.version = version
         self.category = category
         self.ayon_path = ""
+        self.ayon_task_name = ""
+        self.ayon_task_type = ""
+        self.ayon_task_assignee = ""
+        self.conversion_thumb_path = ""
         self.last_ayon_version = None
         self.is_tagged = True
         self.is_selected = False
@@ -57,6 +62,14 @@ class ImageTableModel(QAbstractTableModel):
         self.product_name_template = "{label}"
         self.product_name_camel = True
         self.stills_thumb_same = True
+        self.source_folder = ""
+        self.thumb_location = "Relative to Source Folder"
+        self.thumb_location_path = "_thumbs"
+        self.thumb_suffix = "_thumbnail"
+        self.thumb_format = ".jpg"
+        self.ffmpeg_path = "ffmpeg.exe"
+        self.ffprobe_path = "ffprobe.exe"
+        self.oiiotool_path = "oiiotool.exe"
 
     def set_presets(self, presets):
         self.presets = presets
@@ -317,6 +330,7 @@ class ImageTableModel(QAbstractTableModel):
         
         # Filename with hashes for sequences
         filename_val = item.file_path.replace("\\", "/")
+        filename_printf_val = filename_val
         if item.is_sequence:
             import re
             base, ext = os.path.splitext(filename_val)
@@ -326,6 +340,8 @@ class ImageTableModel(QAbstractTableModel):
                 digits = match.group(1)
                 hashes = "#" * len(digits)
                 filename_val = base[:match.start()] + hashes + ext
+                printf = f"%0{len(digits)}d"
+                filename_printf_val = base[:match.start()] + printf + ext
         
         p_data = item.preset_data or {}
         
@@ -338,9 +354,13 @@ class ImageTableModel(QAbstractTableModel):
             "{episode}": item.metadata.get("episode", ""),
             "{parent_folder}": parent_folder,
             "{ayon_folder_path}": ayon_folder_path,
+            "{ayon_task_name}": item.ayon_task_name or "",
+            "{ayon_task_type}": item.ayon_task_type or "",
+            "{ayon_task_assignee}": item.ayon_task_assignee or "",
             "{label}": item.label or "",
             "{variant}": self._expand_string(item.variant, item) if text != item.variant else (item.variant or ""),
             "{filename}": filename_val,
+            "{filename_printf}": filename_printf_val,
             "{file_name}": os.path.splitext(os.path.basename(item.file_path))[0],
             "{extension}": os.path.splitext(item.file_path)[1].replace(".", "").lower(),
             "{repre}": p_data.get("Representation", ""),
@@ -371,6 +391,11 @@ class ImageTableModel(QAbstractTableModel):
             "{VERSION_COLLISION}": str(getattr(item, "version_collision", "None")),
             "{thumb_path}": filename_val if (item.category == "Still" and getattr(self, "stills_thumb_same", True)) else "",
             "{THUMB_PATH}": filename_val if (item.category == "Still" and getattr(self, "stills_thumb_same", True)) else "",
+            "{prefs_highres_thumb_size}": str(getattr(self, "high_res_size", 512)),
+            "{prefs_thumb_path}": self._get_prefs_thumb_path(item),
+            "{ffmpeg}": self.ffmpeg_path,
+            "{ffprobe}": self.ffprobe_path,
+            "{oiiotool}": self.oiiotool_path,
         }
         return replacements
 
@@ -430,3 +455,26 @@ class ImageTableModel(QAbstractTableModel):
         res = re.sub(r"\{metadata\.([^}]+)\}", metadata_replacer, res)
             
         return res
+
+    def _get_prefs_thumb_path(self, item):
+        """Calculate the thumbnail path based on preferences."""
+        source_file = item.file_path.replace("\\", "/")
+        base_dir = os.path.dirname(source_file)
+        filename = os.path.basename(source_file)
+        name_no_ext, _ = os.path.splitext(filename)
+        
+        if item.is_sequence:
+            name_no_ext = strip_sequence_counter(name_no_ext)
+        
+        # Determine target directory
+        target_dir = base_dir
+        if self.thumb_location == "Relative to Source Folder":
+            if self.source_folder:
+                target_dir = os.path.join(self.source_folder, self.thumb_location_path).replace("\\", "/")
+        elif self.thumb_location == "Custom":
+            target_dir = self.thumb_location_path.replace("\\", "/")
+            
+        # Basename with suffix
+        target_filename = f"{name_no_ext}{self.thumb_suffix}{self.thumb_format}"
+        
+        return os.path.join(target_dir, target_filename).replace("\\", "/")
