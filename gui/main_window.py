@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QSplitter,
                              QPushButton, QMessageBox, QInputDialog, QApplication,
                              QDialog, QLineEdit, QLabel, QHBoxLayout, QPlainTextEdit, QFormLayout, QScrollArea)
 from PySide6.QtCore import Qt, QTimer, QItemSelectionModel, QItemSelection, QThread, Signal, QRect
-from PySide6.QtGui import QKeySequence, QCursor, QShortcut, QPainter, QColor, QImage
+from PySide6.QtGui import QKeySequence, QCursor, QShortcut, QPainter, QColor, QImage, QAction
 
 from gui.top_bar import TopBar
 from gui.ayon_panel import AyonPanel
@@ -19,7 +19,8 @@ from gui.spreadsheet_panel import SpreadsheetPanel
 from gui.prefs_dialog import PreferencesDialog
 from logic.image_model import ImageTableModel
 from logic.csv_model import CSVPreviewModel
-from logic.scanner import ImageScanner, ThumbnailConversionWorker
+from logic.scanner import ImageScanner, ThumbnailConversionWorker, ReviewConversionWorker
+from gui.conversion_queue_dialog import ConversionQueueDialog
 from ayon_client import AyonClient
 from utils import evaluate_preset
 
@@ -323,7 +324,9 @@ class MainWindow(QMainWindow):
         if not api_key: # Fallback to config during transition
             api_key = self.config.get("ayon_api_key", "").strip()
         
-        self.ayon = AyonClient(server_url, api_key)
+        # Instantiate parameterless to prevent synchronous startup connection blocking the GUI thread.
+        # The background ConnectionThread will handle the actual connection asynchronously.
+        self.ayon = AyonClient()
         
         # Configure logging to console
         self.log_signal.connect(self.log_message)
@@ -354,6 +357,11 @@ class MainWindow(QMainWindow):
         self._age_filter_units = "minutes"
         self._search_filter_text = ""
         self._selection_lock = False
+        
+        # Queue Workers
+        self._conv_worker = None
+        self._review_worker = None
+        self._queue_dialog = None
 
         # UI Components
         self.central_widget = QWidget()
@@ -362,14 +370,12 @@ class MainWindow(QMainWindow):
         self.main_layout.setContentsMargins(5, 5, 5, 5)
         self.main_layout.setSpacing(5)
 
-        # 1. Top Bar
         self.top_bar = TopBar()
         self.top_bar.setObjectName("TopBar")
         self.top_bar.folder_selected.connect(self.start_scan)
-        self.top_bar.project_changed.connect(self._on_project_changed)
         self.top_bar.prefs_requested.connect(self.show_preferences)
         self.top_bar.rescan_requested.connect(self.rescan_current)
-        self.top_bar.help_requested.connect(self.show_help)
+        self.top_bar.load_preset_requested.connect(self._on_preset_changed)
         self.main_layout.addWidget(self.top_bar, 0)
         self.main_layout.addSpacing(5)
 
@@ -378,6 +384,7 @@ class MainWindow(QMainWindow):
         
         # 2. Left Panel (AYON)
         self.ayon_panel = AyonPanel()
+        self.ayon_panel.project_changed.connect(self._on_project_changed)
         self.ayon_panel.task_selected.connect(self._on_ayon_task_selected)
         self.ayon_panel.product_double_clicked.connect(self._on_ayon_product_selected)
         self.ayon_panel.unassign_requested.connect(self._on_ayon_unassign)
@@ -397,6 +404,8 @@ class MainWindow(QMainWindow):
         self.thumb_area.label_action_requested.connect(self._on_label_action)
         self.thumb_area.maximize_toggle_requested.connect(lambda: self.toggle_maximize("thumbs"))
         self.thumb_area.paste_requested.connect(self.perform_paste_image)
+        self.thumb_area.queue_requested.connect(self.show_queue_dialog)
+        self.thumb_area.scene_items_changed.connect(self._sync_scene_items_to_filter)
         self.v_splitter.addWidget(self.thumb_area)
         
         self.spreadsheet = SpreadsheetPanel()
@@ -423,7 +432,17 @@ class MainWindow(QMainWindow):
         self.filter_panel = FilterPanel(self.model)
         self.filter_panel.age_changed.connect(self._on_age_filter_changed)
         self.filter_panel.search_changed.connect(self._on_filter_search_changed)
+        self.filter_panel.sequences_toggled.connect(self._on_filter_sequences_toggled)
+        self.filter_panel.toggles_changed.connect(self._save_filter_toggles)
+        
+        # Load initial toggle states
+        toggles = self.config.get("filter_toggles", {})
+        self.filter_panel.set_toggle_states(toggles)
+        
         self.filter_panel.tree.selectionModel().selectionChanged.connect(self._sync_selection_from_filter)
+        self.filter_panel.rename_to_label_requested.connect(self._on_rename_to_label_requested)
+        self.filter_panel.delete_scene_items_requested.connect(self._on_filter_delete_scene_items)
+        self.filter_panel.edit_scene_item_requested.connect(self._on_filter_edit_scene_item)
         self.h_splitter.addWidget(self.filter_panel)
 
         self.main_layout.addWidget(self.h_splitter, 1)
@@ -482,6 +501,9 @@ class MainWindow(QMainWindow):
         # 7. Help Overlay
         self.help_overlay = HelpOverlay(self)
         
+        # 8. Menu Bar
+        self._init_menu_bar()
+        
         # Initial config apply
         self._apply_preferences(self.config, self.secrets, 
                                self.config.get("detect_sequences", True), 
@@ -509,14 +531,158 @@ class MainWindow(QMainWindow):
         self.age_timer.timeout.connect(self._update_ages)
         self.age_timer.start(60000) # 60 seconds
 
+    def _init_menu_bar(self):
+        menubar = self.menuBar()
+        
+        # --- File Menu ---
+        file_menu = menubar.addMenu("&File")
+        
+        act_load_preset = QAction("Load Preset...", self)
+        act_load_preset.triggered.connect(self.show_preferences) # Preferences handles presets
+        file_menu.addAction(act_load_preset)
+        
+        act_save_preset = QAction("Save Preset As...", self)
+        act_save_preset.triggered.connect(self.save_preset_as)
+        file_menu.addAction(act_save_preset)
+        
+        file_menu.addSeparator()
+        
+        act_new_project = QAction("&New Project", self)
+        act_new_project.triggered.connect(self.perform_new_project)
+        file_menu.addAction(act_new_project)
+        
+        file_menu.addSeparator()
+        
+        act_open_project = QAction("&Open Project...", self)
+        act_open_project.setShortcut("Ctrl+O")
+        act_open_project.triggered.connect(lambda: self.top_bar.btn_folder.click())
+        file_menu.addAction(act_open_project)
+        
+        self.recent_menu = file_menu.addMenu("Open Recent")
+        self._update_recent_menu()
+        
+        file_menu.addSeparator()
+        
+        act_save_project = QAction("&Save Project...", self)
+        act_save_project.setShortcut("Ctrl+S")
+        act_save_project.triggered.connect(self.save_config)
+        file_menu.addAction(act_save_project)
+        
+        act_save_project_as = QAction("Save Project As...", self)
+        act_save_project_as.triggered.connect(self.save_config)
+        file_menu.addAction(act_save_project_as)
+        
+        file_menu.addSeparator()
+        
+        act_prefs = QAction("&Preferences", self)
+        act_prefs.setShortcut("Ctrl+,")
+        act_prefs.triggered.connect(self.show_preferences)
+        file_menu.addAction(act_prefs)
+        
+        file_menu.addSeparator()
+        
+        act_exit = QAction("Exit", self)
+        act_exit.setShortcut("Alt+F4")
+        act_exit.triggered.connect(self.close)
+        file_menu.addAction(act_exit)
+        
+        # --- Convert Menu ---
+        conv_menu = menubar.addMenu("&Convert")
+        
+        act_queue = QAction("&Queue...", self)
+        act_queue.setShortcut("Ctrl+Q")
+        act_queue.triggered.connect(self.show_queue_dialog)
+        conv_menu.addAction(act_queue)
+        
+        conv_menu.addSeparator()
+        
+        act_conv_thumbs = QAction("Convert Thumbnails", self)
+        act_conv_thumbs.triggered.connect(lambda: self.start_conversions(self.model.items))
+        conv_menu.addAction(act_conv_thumbs)
+        
+        act_force_thumbs = QAction("Force Convert Thumbnails", self)
+        act_force_thumbs.triggered.connect(lambda: self.start_conversions(self.model.items, force=True))
+        conv_menu.addAction(act_force_thumbs)
+        
+        conv_menu.addSeparator()
+        
+        act_conv_reviews = QAction("Convert Reviews", self)
+        act_conv_reviews.triggered.connect(lambda: self.start_review_conversions(force=True))
+        conv_menu.addAction(act_conv_reviews)
+        
+        act_force_reviews = QAction("Force Convert Reviews", self)
+        act_force_reviews.triggered.connect(lambda: self.start_review_conversions(force=True, reset=True))
+        conv_menu.addAction(act_force_reviews)
+        
+        # --- Help Menu ---
+        help_menu = menubar.addMenu("&Help")
+        
+        act_hotkeys = QAction("Hotkeys", self)
+        act_hotkeys.setShortcut("F1")
+        act_hotkeys.triggered.connect(self.show_help)
+        help_menu.addAction(act_hotkeys)
+        
+        act_keys = QAction("Key List", self)
+        act_keys.triggered.connect(self.show_help)
+        help_menu.addAction(act_keys)
+
+    def _update_recent_menu(self):
+        self.recent_menu.clear()
+        recent = self.config.get("recent_folders", [])
+        if not recent:
+            act_none = QAction("No Recent Projects", self)
+            act_none.setEnabled(False)
+            self.recent_menu.addAction(act_none)
+            return
+            
+        for path in recent:
+            act = QAction(path, self)
+            act.triggered.connect(lambda p=path: self.start_scan(p))
+            self.recent_menu.addAction(act)
+
+    def perform_new_project(self):
+        self.model.clear()
+        self.top_bar.path_display.setText("")
+        self.log_message("New project created. Select a folder to begin.")
+
+    def _add_to_recent(self, path):
+        recent = self.config.get("recent_folders", [])
+        if path in recent:
+            recent.remove(path)
+        recent.insert(0, path)
+        self.config["recent_folders"] = recent[:10] # Keep last 10
+        self.save_config()
+        self._update_recent_menu()
+
     def load_config(self):
+        import time
+        print("[Timer] Starting to read preferences...")
+        start_time = time.perf_counter()
+        config = {}
         try:
             if os.path.exists("config.json"):
                 with open("config.json", "r") as f:
-                    return json.load(f)
+                    config = json.load(f)
         except Exception as e:
             print(f"Error loading config: {e}")
-        return {}
+            
+        active_preset = config.get("active_preset", "")
+        presets_folder = config.get("presets_folder")
+        if presets_folder and active_preset:
+            username = os.environ.get("USERNAME", "default_user")
+            user_pref_path = os.path.join(presets_folder, "users", f"{username}.json")
+            if os.path.exists(user_pref_path):
+                try:
+                    with open(user_pref_path, "r") as f:
+                        user_config = json.load(f)
+                        config.update(user_config)
+                        print(f"[Prefs] Loaded user-centric preferences for '{username}' from {user_pref_path}")
+                except Exception as e:
+                    print(f"[Prefs] Error loading user-centric preferences: {e}")
+                    
+        self.load_prefs_elapsed = time.perf_counter() - start_time
+        print(f"[Timer] Reading preferences took {self.load_prefs_elapsed:.4f} seconds.")
+        return config
 
     def load_secrets(self):
         try:
@@ -539,9 +705,7 @@ class MainWindow(QMainWindow):
         self.thumb_area.update_label_validator(label_regex)
         
         # Initial UI states
-        self.thumb_area.slider_cols.setValue(self.config.get("default_columns", 12))
-        self.thumb_area.slider_text_size.setValue(self.config.get("default_text_size", 10))
-        self.thumb_area.slider_thumb_size.setValue(self.config.get("default_thumb_size", 150))
+        self._restore_gui_state()
         self.thumb_area.high_res_size = self.config.get("thumb_size", 512)
         
         self.thumb_area.slider_cols.valueChanged.connect(self._on_cols_changed)
@@ -550,13 +714,19 @@ class MainWindow(QMainWindow):
 
         # Update model presets mapping
         self._update_model_presets()
+        
+        # Populate and sync quick-preset selection dropdown
+        self.update_preset_dropdown()
 
         # Async AYON Load
         self.refresh_ayon_async()
 
+        from utils import expand_env_vars
         last_folder = self.config.get("last_source_folder")
-        if last_folder and not os.path.exists(last_folder):
-            last_folder = self.config.get("default_scan_folder")
+        if last_folder:
+            last_folder = expand_env_vars(last_folder)
+        if not last_folder or not os.path.exists(last_folder):
+            last_folder = expand_env_vars(self.config.get("default_scan_folder", ""))
             
         if last_folder and os.path.exists(last_folder):
             self.start_scan(last_folder)
@@ -570,6 +740,9 @@ class MainWindow(QMainWindow):
             self.h_splitter.restoreState(bytes.fromhex(self.config["h_splitter"]))
         if "v_splitter" in self.config:
             self.v_splitter.restoreState(bytes.fromhex(self.config["v_splitter"]))
+            
+        if hasattr(self, "load_prefs_elapsed"):
+            self.log_message(f"Reading preferences took {self.load_prefs_elapsed:.4f} seconds.", "info")
 
     def start_scan(self, directory):
         self.log_message(f"Starting scan of directory: {directory}")
@@ -582,6 +755,7 @@ class MainWindow(QMainWindow):
         self.filter_panel.set_root_folder(directory)
         self.top_bar.set_path(directory)
         
+        from utils import expand_env_vars
         self.scanner = ImageScanner(
             directory, 
             version_regex=self.config.get("version_regex", r"([._]v|v)(\d+)"),
@@ -595,18 +769,21 @@ class MainWindow(QMainWindow):
             stills_end_frame=self.config.get("stills_end_frame", 1001),
             video_start_from_tc=self.config.get("video_start_from_tc", False),
             video_start_frame=self.config.get("video_start_frame", 1001),
-            ffmpeg_path=self.config.get("ffmpeg_path", "ffmpeg.exe"),
-            ffprobe_path=self.config.get("ffprobe_path", "ffprobe.exe"),
-            oiiotool_path=self.config.get("oiiotool_path", "oiiotool.exe"),
-            ocio_config=self.config.get("ocio_config", ""),
+            ffmpeg_path=expand_env_vars(self.config.get("ffmpeg_path", "ffmpeg.exe")),
+            ffprobe_path=expand_env_vars(self.config.get("ffprobe_path", "ffprobe.exe")),
+            oiiotool_path=expand_env_vars(self.config.get("oiiotool_path", "oiiotool.exe")),
+            ocio_config=expand_env_vars(self.config.get("ocio_config", "")),
             stills_thumb_same=self.config.get("stills_thumb_same", True),
             thumb_suffix=self.config.get("thumb_suffix", "_thumbnail"),
-            thumb_format=self.config.get("thumb_format", ".jpg")
+            thumb_format=self.config.get("thumb_format", ".jpg"),
+            timeout=self.config.get("timeout_seconds", 6)
         )
         self.scanner.finished.connect(lambda items: self.log_message(f"Scan complete. Found {len(items)} items. Fetching metadata in background...", "success"))
         self.scanner.finished.connect(self._on_scan_finished)
         self.scanner.item_updated.connect(self.model.update_item)
+        self.scanner.status_text.connect(lambda txt: self.statusBar().showMessage(txt))
         self.scanner.start()
+        self._add_to_recent(directory)
         
         # Update config
         self.config["last_source_folder"] = directory
@@ -625,34 +802,118 @@ class MainWindow(QMainWindow):
         self.model.add_items(new_items)
         self.thumb_area.frame_all()
         
-        # Start background conversions for thumbnails
-        self.start_conversions(new_items)
+        # Start background conversions
+        if self.config.get("run_thumb_after_scan", False):
+            self.start_conversions(new_items)
+        elif self.config.get("run_review_after_scan", False):
+            self.start_review_conversions()
 
-    def start_conversions(self, items):
+    def start_conversions(self, items, force=False):
         """Start background conversion of thumbnails based on preferences."""
-        if hasattr(self, "_conv_worker") and self._conv_worker.isRunning():
+        if self._conv_worker and self._conv_worker.isRunning():
             self._conv_worker.cancel()
             # Wait at most 2 seconds for the previous worker to finish its current command cleanup
             if not self._conv_worker.wait(2000):
                 self.log_message("Previous conversion worker did not stop in time, starting new one anyway.", "warning")
             
-        self._conv_worker = ThumbnailConversionWorker(items, self.model, self.config)
+        self._conv_worker = ThumbnailConversionWorker(items, self.model, self.config, force=force, timeout=self.config.get("timeout_seconds", 6))
         self._conv_worker.item_updated.connect(self._on_conversion_item_updated)
         self._conv_worker.log.connect(lambda msg: self.log_message(msg))
+        self._conv_worker.status_text.connect(lambda txt: self.statusBar().showMessage(txt))
+        self._conv_worker.finished.connect(self.start_review_conversions)
         self._conv_worker.start()
+
+    def start_review_conversions(self, force=False, reset=False):
+        """Triggered after thumbnail conversions are done or scan finished."""
+        if not force and not self.config.get("run_review_after_scan", False):
+            return
+            
+        if self._review_worker and self._review_worker.isRunning():
+            return
+            
+        if reset:
+            for it in self.model.items:
+                if it.review_status != "do not convert":
+                    it.review_status = "waiting"
+            self.model.layoutChanged.emit()
+
+        items_to_convert = [it for it in self.model.items if it.review_status == "waiting"]
+        if not items_to_convert:
+            self.thumb_area.btn_queue.setText("Conversion Queue: done")
+            return
+            
+        self._review_worker = ReviewConversionWorker(self.model.items, self.model, self.config)
+        self._review_worker.item_updated.connect(self.model.update_item)
+        self._review_worker.progress.connect(self._on_review_progress)
+        self._review_worker.status_text.connect(lambda txt: self.statusBar().showMessage(txt))
+        self._review_worker.log.connect(lambda msg: self.log_message(msg))
+        self._review_worker.finished.connect(self._on_review_finished)
+        
+        self.thumb_area.btn_queue.setText("Conversion Queue: processing")
+        self._review_worker.start()
+
+    def _on_review_progress(self, current, total):
+        if self._queue_dialog:
+            self._queue_dialog.set_queue_status(f"Processing {current}/{total}")
+            
+    def _on_review_finished(self):
+        self.thumb_area.btn_queue.setText("Conversion Queue: done")
+        if self._queue_dialog:
+            self._queue_dialog.set_queue_status("Done")
+
+    def show_queue_dialog(self):
+        if not self._queue_dialog:
+            self._queue_dialog = ConversionQueueDialog(self.model, self)
+            self._queue_dialog.btn_pause.clicked.connect(self._on_queue_pause)
+            self._queue_dialog.btn_cancel.clicked.connect(self._on_queue_cancel)
+            self._queue_dialog.btn_restart.clicked.connect(self._on_queue_restart)
+            self._queue_dialog.convertReviewsRequested.connect(lambda: self.start_review_conversions(force=True))
+            self._queue_dialog.convertThumbsRequested.connect(lambda: self.start_conversions(self.model.items))
+            
+        self._queue_dialog.show()
+        self._queue_dialog.raise_()
+
+    def _on_queue_pause(self):
+        if self._review_worker:
+            is_paused = self._review_worker.toggle_pause()
+            self._queue_dialog.set_pause_text(is_paused)
+            if is_paused:
+                self.thumb_area.btn_queue.setText("Conversion Queue: paused")
+            else:
+                self.thumb_area.btn_queue.setText("Conversion Queue: processing")
+
+    def _on_queue_cancel(self):
+        if self._review_worker:
+            self._review_worker.cancel()
+            self.thumb_area.btn_queue.setText("Conversion Queue: canceled")
+            if self._queue_dialog:
+                self._queue_dialog.set_queue_status("Canceled")
+
+    def _on_queue_restart(self):
+        # Reset statuses
+        for it in self.model.items:
+            if it.review_status in ["done", "failed", "processing"]:
+                it.review_status = "waiting"
+        self.model.layoutChanged.emit()
+        self.start_review_conversions()
 
     def _on_conversion_item_updated(self, item):
         """Reload thumbnail from converted file and update UI."""
-        if not item.conversion_thumb_path:
-            return
-            
-        # Load the new thumbnail
-        from utils import generate_thumbnail
-        new_thumb = generate_thumbnail(item.conversion_thumb_path, self.config.get("default_thumb_size", 150))
-        if new_thumb:
-            item.thumbnail = new_thumb
-            self.model.update_item(item)
-            # Update high-res as well if needed? For now just the main thumb.
+        if hasattr(item, "temp_qimage") and item.temp_qimage:
+            from PySide6.QtGui import QPixmap
+            item.thumbnail = QPixmap.fromImage(item.temp_qimage)
+            try:
+                delattr(item, "temp_qimage")
+            except AttributeError:
+                pass
+        elif item.conversion_thumb_path:
+            # Fallback if somehow temp_qimage is missing
+            from utils import generate_thumbnail
+            new_thumb = generate_thumbnail(item.conversion_thumb_path, self.config.get("default_thumb_size", 150))
+            if new_thumb:
+                item.thumbnail = new_thumb
+        
+        self.model.update_item(item)
 
 
     def rescan_current(self):
@@ -668,6 +929,7 @@ class MainWindow(QMainWindow):
             self.scanner.cancel()
             self.scanner.wait()
             
+        from utils import expand_env_vars
         self.scanner = ImageScanner(
             directory, 
             version_regex=self.config.get("version_regex", r"([._]v|v)(\d+)"),
@@ -681,11 +943,12 @@ class MainWindow(QMainWindow):
             stills_end_frame=self.config.get("stills_end_frame", 1001),
             video_start_from_tc=self.config.get("video_start_from_tc", False),
             video_start_frame=self.config.get("video_start_frame", 1001),
-            ffmpeg_path=self.config.get("ffmpeg_path", "ffmpeg.exe"),
-            ffprobe_path=self.config.get("ffprobe_path", "ffprobe.exe"),
-            oiiotool_path=self.config.get("oiiotool_path", "oiiotool.exe"),
-            ocio_config=self.config.get("ocio_config", ""),
-            stills_thumb_same=self.config.get("stills_thumb_same", True)
+            ffmpeg_path=expand_env_vars(self.config.get("ffmpeg_path", "ffmpeg.exe")),
+            ffprobe_path=expand_env_vars(self.config.get("ffprobe_path", "ffprobe.exe")),
+            oiiotool_path=expand_env_vars(self.config.get("oiiotool_path", "oiiotool.exe")),
+            ocio_config=expand_env_vars(self.config.get("ocio_config", "")),
+            stills_thumb_same=self.config.get("stills_thumb_same", True),
+            timeout=self.config.get("timeout_seconds", 6)
         )
         self.scanner.finished.connect(self._on_rescan_finished)
         self.scanner.item_updated.connect(self.model.update_item)
@@ -701,7 +964,12 @@ class MainWindow(QMainWindow):
                 self._parse_item_tags(item)
             self.model.add_items(new_items)
             self.thumb_area.frame_all()
-            self.start_conversions(new_items)
+            
+            if self.config.get("run_thumb_after_scan", False):
+                self.start_conversions(new_items)
+            elif self.config.get("run_review_after_scan", False):
+                self.start_review_conversions()
+                
             self.log_message(f"Rescan complete. Added {len(new_items)} new items.", "success")
         else:
             self.log_message("Rescan complete. No new items found.")
@@ -764,6 +1032,17 @@ class MainWindow(QMainWindow):
                 item.colorspace = matched_p.get("Colorspace", "sRGB")
                 item.rep_tags = matched_p.get("Tags", "passing")
                 item.preset_data = matched_p
+                
+                # Update review status
+                if matched_p.get("Convert Review", True):
+                    # Only reset to waiting if it wasn't already done/processing? 
+                    # Actually, if the preset changed, we might want to re-convert.
+                    # But if it's already "done", we probably shouldn't reset it unless the user explicitly asks.
+                    # For now, let's only set to waiting if it was "do not convert" or "failed".
+                    if item.review_status in ["do not convert", "failed"]:
+                        item.review_status = "waiting"
+                else:
+                    item.review_status = "do not convert"
             else:
                 item.preset_name = None
                 item.variant = None
@@ -773,6 +1052,7 @@ class MainWindow(QMainWindow):
                 item.colorspace = "sRGB"
                 item.rep_tags = "passing"
                 item.preset_data = {}
+                item.review_status = "do not convert"
 
             # Refresh frames for non-sequences
             if cat == "Still":
@@ -797,6 +1077,10 @@ class MainWindow(QMainWindow):
         if hasattr(self, "_conn_thread") and self._conn_thread.isRunning():
             return
             
+        # Force a reconnect if we aren't connected yet
+        if not self.ayon.is_connected:
+            reconnect = True
+            
         self.ayon_panel.set_connection_status(self.ayon.is_connected, self.ayon.server_url)
         
         class ConnectionThread(QThread):
@@ -808,9 +1092,15 @@ class MainWindow(QMainWindow):
                 self.key = key
                 self.do_connect = do_connect
             def run(self):
+                import time
+                start_t = time.perf_counter()
+                print("[Timer] Starting to pull projects list from AYON...")
                 if self.do_connect:
+                    print(f"[Timer] Connecting to AYON server at {self.url}...")
                     self.ayon.connect(self.url, self.key)
                 projects = self.ayon.get_projects()
+                elapsed = time.perf_counter() - start_t
+                print(f"[Timer] Pulling projects list from AYON took {elapsed:.4f} seconds.")
                 self.finished.emit(self.ayon.is_connected, projects)
 
         server_url = self.config.get("ayon_server_url", "").strip()
@@ -827,25 +1117,38 @@ class MainWindow(QMainWindow):
         self.ayon_panel.set_connection_status(is_connected, self.ayon.server_url)
         
         # Block signals to avoid feedback loop when setting project list
-        self.top_bar.combo_project.blockSignals(True)
-        current = self.top_bar.combo_project.currentText()
+        self.ayon_panel.combo_project.blockSignals(True)
+        current = self.ayon_panel.combo_project.currentText()
         if not current:
-            current = self.config.get("last_ayon_project")
+            current = self.config.get("ayon_project") or self.config.get("last_ayon_project")
             
-        self.top_bar.set_projects(projects)
+        self.ayon_panel.set_projects(projects)
         if current in projects:
-            self.top_bar.combo_project.setCurrentText(current)
-        self.top_bar.combo_project.blockSignals(False)
+            self.ayon_panel.combo_project.setCurrentText(current)
+        self.ayon_panel.combo_project.blockSignals(False)
         
         if is_connected:
-            project = self.top_bar.combo_project.currentText()
+            project = self.ayon_panel.combo_project.currentText()
             if project:
                 self.refresh_hierarchy_async(project)
-
+ 
     def refresh_hierarchy_async(self, project_name):
         """Asynchronously fetch folder hierarchy for a specific project."""
+        if hasattr(self, "_last_fetched_project") and self._last_fetched_project == project_name:
+            if hasattr(self, "_hier_thread") and self._hier_thread.isRunning():
+                return
+        self._last_fetched_project = project_name
+        
         if hasattr(self, "_hier_thread") and self._hier_thread.isRunning():
-            self._hier_thread.terminate() # Kill old fetch if switching fast
+            try:
+                self._hier_thread.finished.disconnect()
+            except Exception:
+                pass
+            self._hier_thread.terminate()
+            if not hasattr(self, "_old_threads"):
+                self._old_threads = []
+            self._old_threads = [t for t in self._old_threads if t.isRunning()]
+            self._old_threads.append(self._hier_thread)
             
         class HierarchyThread(QThread):
             finished = Signal(object)
@@ -854,12 +1157,18 @@ class MainWindow(QMainWindow):
                 self.ayon = ayon
                 self.project = project
             def run(self):
+                import time
+                start_t = time.perf_counter()
+                print(f"[Timer] Starting to pull folder hierarchy for project '{self.project}' from AYON...")
                 hierarchy = self.ayon.get_project_hierarchy(self.project)
+                elapsed = time.perf_counter() - start_t
+                print(f"[Timer] Pulling folder hierarchy for project '{self.project}' from AYON took {elapsed:.4f} seconds.")
                 self.finished.emit(hierarchy)
-
+ 
         self._hier_thread = HierarchyThread(self.ayon, project_name)
         self._hier_thread.finished.connect(self.ayon_panel.set_hierarchy)
         self._hier_thread.finished.connect(self._update_ayon_visuals)
+        self._hier_thread.finished.connect(self._restore_ayon_selection)
         self._hier_thread.start()
 
     def resizeEvent(self, event):
@@ -919,6 +1228,7 @@ class MainWindow(QMainWindow):
         self.save_config()
         self.save_secrets()
         self._update_model_presets()
+        self.update_preset_dropdown()
         
         # Update model properties that affect string expansion
         self.model.product_name_template = self.config.get("product_name", "{label}")
@@ -931,9 +1241,10 @@ class MainWindow(QMainWindow):
         self.model.thumb_suffix = self.config.get("thumb_suffix", "_thumbnail")
         self.model.thumb_format = self.config.get("thumb_format", ".jpg")
         
-        self.model.ffmpeg_path = self.config.get("ffmpeg_path", "ffmpeg.exe")
-        self.model.ffprobe_path = self.config.get("ffprobe_path", "ffprobe.exe")
-        self.model.oiiotool_path = self.config.get("oiiotool_path", "oiiotool.exe")
+        from utils import expand_env_vars
+        self.model.ffmpeg_path = expand_env_vars(self.config.get("ffmpeg_path", "ffmpeg.exe"))
+        self.model.ffprobe_path = expand_env_vars(self.config.get("ffprobe_path", "ffprobe.exe"))
+        self.model.oiiotool_path = expand_env_vars(self.config.get("oiiotool_path", "oiiotool.exe"))
         
         self.csv_preview_model.refresh_config(self.config)
         
@@ -986,6 +1297,12 @@ class MainWindow(QMainWindow):
         self._update_ages()
         self.spreadsheet.update_filtering(age_filter=(self._age_filter_enabled, self._age_filter_value))
         self.thumb_area.rearrange_items(age_filter=(self._age_filter_enabled, self._age_filter_value))
+        
+        # Save changed states immediately
+        self.config["filter_age_enabled"] = enabled
+        self.config["filter_age_value"] = value
+        self.config["filter_age_units"] = units
+        self.save_config()
 
     def _update_ages(self):
         import time
@@ -1003,7 +1320,101 @@ class MainWindow(QMainWindow):
                 self.model.index(len(self.model.items)-1, 9)
             )
 
+    def _gather_gui_state(self):
+        # 1. AYON Panel
+        if hasattr(self, "ayon_panel") and self.ayon_panel:
+            self.config["ayon_project"] = self.ayon_panel.combo_project.currentText()
+            self.config["ayon_search_text"] = self.ayon_panel.search_edit.text()
+            self.config["ayon_search_column"] = self.ayon_panel.search_combo.currentIndex()
+            
+            # Selected folder & task in AYON tree
+            ayon_folder = ""
+            ayon_task = ""
+            try:
+                indexes = self.ayon_panel.tree.selectionModel().selectedIndexes()
+                if indexes:
+                    source_idx = self.ayon_panel.proxy.mapToSource(indexes[0])
+                    first_col_index = self.ayon_panel.model.index(source_idx.row(), 0, source_idx.parent())
+                    item = self.ayon_panel.model.itemFromIndex(first_col_index)
+                    if item:
+                        data = item.data(Qt.UserRole)
+                        if data:
+                            if 'folderId' in data and 'folder_path' in data: # Task
+                                ayon_folder = data.get("folder_path", "")
+                                ayon_task = data.get("name", "")
+                            elif 'path' in data: # Folder
+                                ayon_folder = data.get("path", "")
+                                ayon_task = ""
+            except Exception as e:
+                print(f"Error gathering AYON selection state: {e}")
+            self.config["ayon_selected_folder"] = ayon_folder
+            self.config["ayon_selected_task"] = ayon_task
+
+        # 2. Top Panel
+        if hasattr(self, "top_bar") and self.top_bar:
+            self.config["last_source_folder"] = self.top_bar.path_display.text()
+            self.config["active_preset"] = self.top_bar.combo_preset.currentText()
+
+        # 3. Thumbnails Panel
+        if hasattr(self, "thumb_area") and self.thumb_area:
+            self.config["default_columns"] = self.thumb_area.slider_cols.value()
+            self.config["thumbnails_show_text"] = self.thumb_area.btn_show_text.isChecked()
+            self.config["default_text_size"] = self.thumb_area.slider_text_size.value()
+            self.config["default_thumb_size"] = self.thumb_area.slider_thumb_size.value()
+
+        # 4. Filter Panel
+        if hasattr(self, "filter_panel") and self.filter_panel:
+            self.config["filter_search_enabled"] = self.filter_panel.chk_search.isChecked()
+            self.config["filter_search_text"] = self.filter_panel.search_bar.text()
+            self.config["filter_age_enabled"] = self.filter_panel.chk_age.isChecked()
+            self.config["filter_age_value"] = self.filter_panel.spin_age.value()
+            self.config["filter_age_units"] = self.filter_panel.combo_units.currentText()
+            self.config["filter_files_only"] = self.filter_panel.btn_files_only.isChecked()
+            self.config["filter_flat"] = self.filter_panel.btn_flat.isChecked()
+            self.config["filter_v_stack"] = self.filter_panel.btn_v_stack.isChecked()
+            self.config["filter_sequences"] = self.filter_panel.btn_sequences.isChecked()
+
+    def _restore_gui_state(self):
+        # 1. AYON Panel
+        if hasattr(self, "ayon_panel") and self.ayon_panel:
+            self.ayon_panel.search_edit.setText(self.config.get("ayon_search_text", ""))
+            self.ayon_panel.search_combo.setCurrentIndex(self.config.get("ayon_search_column", 0))
+
+        # 2. Thumbnails Panel
+        if hasattr(self, "thumb_area") and self.thumb_area:
+            self.thumb_area.slider_cols.setValue(self.config.get("default_columns", 12))
+            self.thumb_area.slider_text_size.setValue(self.config.get("default_text_size", 10))
+            self.thumb_area.slider_thumb_size.setValue(self.config.get("default_thumb_size", 150))
+            
+            show_text = self.config.get("thumbnails_show_text", True)
+            self.thumb_area.btn_show_text.setChecked(show_text)
+            self.thumb_area._on_show_text_toggled(show_text)
+
+        # 3. Filter Panel
+        if hasattr(self, "filter_panel") and self.filter_panel:
+            self.filter_panel.chk_search.setChecked(self.config.get("filter_search_enabled", True))
+            self.filter_panel.search_bar.setText(self.config.get("filter_search_text", ""))
+            self.filter_panel.chk_age.setChecked(self.config.get("filter_age_enabled", False))
+            self.filter_panel.spin_age.setValue(self.config.get("filter_age_value", 0))
+            self.filter_panel.combo_units.setCurrentText(self.config.get("filter_age_units", "minutes"))
+            
+            # Toggles
+            toggles = {
+                "files_only": self.config.get("filter_files_only", self.config.get("filter_toggles", {}).get("files_only", True)),
+                "flat": self.config.get("filter_flat", self.config.get("filter_toggles", {}).get("flat", False)),
+                "v_stack": self.config.get("filter_v_stack", self.config.get("filter_toggles", {}).get("v_stack", False)),
+                "sequences": self.config.get("filter_sequences", self.config.get("filter_toggles", {}).get("sequences", True)),
+            }
+            self.filter_panel.set_toggle_states(toggles)
+
+    def _restore_ayon_selection(self):
+        folder = self.config.get("ayon_selected_folder")
+        task = self.config.get("ayon_selected_task")
+        if folder:
+            self.ayon_panel.select_path(folder, task)
+
     def save_config(self):
+        self._gather_gui_state()
         # Sensitive data should not be in config.json
         clean_config = self.config.copy()
         if "ayon_api_key" in clean_config:
@@ -1013,8 +1424,31 @@ class MainWindow(QMainWindow):
         if "thumbnails_per_row" in clean_config:
             del clean_config["thumbnails_per_row"]
             
-        with open("config.json", "w") as f:
-            json.dump(clean_config, f, indent=4)
+        try:
+            with open("config.json", "w") as f:
+                json.dump(clean_config, f, indent=4)
+        except Exception as e:
+            print(f"Error saving config.json: {e}")
+            
+        active_preset = self.config.get("active_preset", "")
+        presets_folder = self.config.get("presets_folder")
+        if presets_folder and active_preset:
+            import os
+            username = os.environ.get("USERNAME", "default_user")
+            users_dir = os.path.join(presets_folder, "users")
+            if not os.path.exists(users_dir):
+                try:
+                    os.makedirs(users_dir, exist_ok=True)
+                except Exception as e:
+                    print(f"Error creating user presets directory {users_dir}: {e}")
+                    return
+            user_pref_path = os.path.join(users_dir, f"{username}.json")
+            try:
+                with open(user_pref_path, "w") as f:
+                    json.dump(clean_config, f, indent=4)
+                print(f"Saved user preferences for '{username}' to {user_pref_path}")
+            except Exception as e:
+                print(f"Error saving user preferences: {e}")
 
     def save_secrets(self):
         with open("secrets.json", "w") as f:
@@ -1070,7 +1504,7 @@ class MainWindow(QMainWindow):
         duplicate_set = set(duplicate_items)
         
         # 2. Run Version Collision Test (Synchronous)
-        project = self.top_bar.combo_project.currentText()
+        project = self.ayon_panel.combo_project.currentText()
         v_map = {}
         if project:
             v_map = self._check_versions_sync(tagged_items)
@@ -1122,7 +1556,9 @@ class MainWindow(QMainWindow):
 
     def _check_versions_sync(self, items):
         """Synchronously fetch versions from AYON for the provided items."""
-        project = self.top_bar.combo_project.currentText()
+        import time
+        start_t = time.perf_counter()
+        project = self.ayon_panel.combo_project.currentText()
         if not project: return {}
         
         path_map = self.ayon_panel.get_path_to_id_map()
@@ -1136,7 +1572,11 @@ class MainWindow(QMainWindow):
         if not folder_ids: return {}
         
         try:
-            return self.ayon.get_last_versions(project, list(folder_ids))
+            print(f"[Timer] Starting synchronous pull of last versions for {len(folder_ids)} folders in project '{project}' from AYON...")
+            res = self.ayon.get_last_versions(project, list(folder_ids))
+            elapsed = time.perf_counter() - start_t
+            print(f"[Timer] Synchronous pull of last versions from AYON took {elapsed:.4f} seconds.")
+            return res
         except Exception as e:
             self.log_message(f"Version check failed during export: {e}", "error")
             return {}
@@ -1177,7 +1617,8 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "CSV Error", f"Failed to write temporary CSV: {e}")
             return
         
-        tray_path = self.config.get("traypublisher_path", "ayon_console.exe")
+        from utils import expand_env_vars
+        tray_path = expand_env_vars(self.config.get("traypublisher_path", "ayon_console.exe"))
         ingest_folder = self.config.get("ayon_csv_ingest_folder", "/edit/csvingest")
         ingest_task = self.config.get("ayon_csv_ingest_task", "csvingest")
         ingest_preset = self.config.get("ayon_csv_preset", "Default")
@@ -1261,7 +1702,8 @@ class MainWindow(QMainWindow):
         dd = now.strftime("%d")
         
         default_root = os.path.join(os.environ.get("USERPROFILE", os.path.expanduser("~")), "Downloads")
-        root = self.config.get("clip_temp_root", default_root)
+        from utils import expand_env_vars
+        root = expand_env_vars(self.config.get("clip_temp_root", default_root))
         folder_tpl = self.config.get("clip_folder_template", "IngestDesktop_{yy}{mm}{dd}")
         folder_name = folder_tpl.replace("{yy}", yy).replace("{mm}", mm).replace("{dd}", dd)
         
@@ -1397,6 +1839,25 @@ class MainWindow(QMainWindow):
         finally:
             self._selection_lock = False
 
+    def _save_filter_toggles(self):
+        self.config["filter_toggles"] = self.filter_panel.get_toggle_states()
+        self.save_config()
+
+    def _on_filter_sequences_toggled(self, enabled):
+        if self.config.get("detect_sequences") == enabled:
+            return
+        self.config["detect_sequences"] = enabled
+        self.save_config()
+        
+        # Trigger rescan if we have a current folder
+        current = self.config.get("last_source_folder")
+        if current:
+            self.start_scan(current)
+
+    def _sync_scene_items_to_filter(self):
+        summaries = self.thumb_area.get_scene_item_summaries()
+        self.filter_panel.set_scene_items(summaries)
+
     def _sync_selection_to_table(self):
         if self._selection_lock: return
         if not hasattr(self, 'spreadsheet') or not self.spreadsheet.table.selectionModel(): return
@@ -1454,9 +1915,25 @@ class MainWindow(QMainWindow):
         for idx in selected_indexes:
             if idx.column() == 0:
                 source_idx = self.filter_panel.proxy.mapToSource(idx)
-                path = self.filter_panel.fs_model.filePath(source_idx)
+                
+                # Get the actual source model
+                source_model = self.filter_panel.proxy.sourceModel()
+                
+                if hasattr(source_model, "filePath"):
+                    path = source_model.filePath(source_idx)
+                else:
+                    path = source_idx.data(Qt.UserRole)
+                
                 if path:
-                    paths.add(os.path.normpath(os.path.abspath(path)))
+                    is_path_model = hasattr(source_model, "filePath")
+                    if isinstance(path, str) and (is_path_model or os.path.isabs(path) or os.path.exists(path)):
+                        paths.add(os.path.normpath(os.path.abspath(path)))
+                    elif not isinstance(path, dict):
+                        # Use only hashable IDs (ints/strings)
+                        paths.add(path)
+                    elif isinstance(path, dict) and "id" in path:
+                        # Fallback for old model data if any
+                        paths.add(path["id"])
         
         if not paths: return
         
@@ -1481,9 +1958,11 @@ class MainWindow(QMainWindow):
                 item_abs = os.path.normpath(os.path.abspath(item.file_path))
                 is_selected = False
                 for p in paths:
-                    if item_abs == p or item_abs.startswith(p + os.sep):
-                        is_selected = True
-                        break
+                    # Only compare strings as paths
+                    if isinstance(p, str):
+                        if item_abs == p or item_abs.startswith(p + os.sep):
+                            is_selected = True
+                            break
                 
                 if is_selected:
                     # Select in table
@@ -1496,6 +1975,18 @@ class MainWindow(QMainWindow):
                     # Select in thumbs
                     if item in self.thumb_area.item_to_thumb:
                         self.thumb_area.item_to_thumb[item].setSelected(True)
+            
+            # 3. Sync Scene Items (Backdrops/Notes)
+            for p in paths:
+                if not isinstance(p, str) or not (os.path.isabs(p) or os.path.exists(p)):
+                    # Check for scene items by UUID
+                    try:
+                        for scene_item in self.thumb_area.scene.items():
+                            if hasattr(scene_item, "uuid") and scene_item.uuid == p:
+                                scene_item.setSelected(True)
+                                break
+                    except (RuntimeError, AttributeError):
+                        continue
             
             if not selection.isEmpty():
                 self.spreadsheet.table.selectionModel().select(selection, QItemSelectionModel.Select)
@@ -1594,6 +2085,64 @@ class MainWindow(QMainWindow):
             age_filter=(self._age_filter_enabled, self._age_filter_value),
             search_text=self._search_filter_text
         )
+        
+        # Save search state immediately
+        self.config["filter_search_text"] = text
+        self.save_config()
+
+    def _on_rename_to_label_requested(self, paths):
+        v_regex = self.config.get("version_regex", r"([._]v|v)(\d+)")
+        renamed_count = self.model.perform_rename_to_label(paths, v_regex)
+        if renamed_count > 0:
+            self.log_message(f"Renamed {renamed_count} files/sequences to their labels.", "success")
+            
+            # Automatically rescan source folder to reflect changed files on disk
+            last_folder = self.config.get("last_source_folder")
+            if last_folder and os.path.exists(last_folder):
+                self.start_scan(last_folder)
+        else:
+            self.log_message("No items renamed. Check for collisions or items not in model.", "warning")
+
+    def _on_filter_delete_scene_items(self, uuids):
+        to_remove = []
+        for item in self.thumb_area.scene.items():
+            if hasattr(item, "uuid") and item.uuid in uuids:
+                to_remove.append(item)
+        if to_remove:
+            for it in to_remove:
+                self.thumb_area.scene.removeItem(it)
+            self.thumb_area.scene_items_changed.emit()
+            self.thumb_area._update_note_toolbar()
+            self.log_message(f"Deleted {len(to_remove)} scene items from filter panel.", "info")
+
+    def _on_filter_edit_scene_item(self, uuid_str):
+        target_item = None
+        for item in self.thumb_area.scene.items():
+            if hasattr(item, "uuid") and item.uuid == uuid_str:
+                target_item = item
+                break
+        if not target_item:
+            return
+            
+        from gui.thumbnail_area import TextNoteItem, BackdropItem
+        if isinstance(target_item, TextNoteItem):
+            # Focus view on item
+            self.thumb_area.view.ensureVisible(target_item)
+            # Programmatically trigger inline editing
+            self.thumb_area.scene.clearSelection()
+            target_item.setSelected(True)
+            target_item.text_item.setAcceptedMouseButtons(Qt.LeftButton)
+            target_item.text_item.setTextInteractionFlags(Qt.TextEditorInteraction)
+            target_item.text_item.setFocus()
+            cursor = target_item.text_item.textCursor()
+            cursor.select(QTextCursor.SelectionType.Document)
+            target_item.text_item.setTextCursor(cursor)
+            self.thumb_area._update_note_toolbar()
+        elif isinstance(target_item, BackdropItem):
+            # Focus view on item
+            self.thumb_area.view.ensureVisible(target_item)
+            # Trigger Backdrop Settings Dialog
+            self.thumb_area.edit_backdrop(target_item)
 
             
 
@@ -1704,8 +2253,7 @@ class MainWindow(QMainWindow):
         self.config["h_splitter"] = self.h_splitter.saveState().toHex().data().decode()
         self.config["v_splitter"] = self.v_splitter.saveState().toHex().data().decode()
         
-        with open("config.json", "w") as f:
-            json.dump(self.config, f, indent=4)
+        self.save_config()
         super().closeEvent(event)
 
     def toggle_maximize(self, source="thumbs"):
@@ -1833,6 +2381,9 @@ class MainWindow(QMainWindow):
     def _update_ayon_visuals(self):
         """Highlight assigned tasks in the AYON panel."""
         assigned_paths = set(item.ayon_path for item in self.model.items if item.ayon_path)
+        if hasattr(self, "_last_assigned_paths") and self._last_assigned_paths == assigned_paths:
+            return
+        self._last_assigned_paths = assigned_paths
         self.ayon_panel.update_assigned_status(assigned_paths)
 
     def _on_ayon_unassign(self, ayon_path):
@@ -1903,11 +2454,19 @@ class MainWindow(QMainWindow):
 
     def _on_ayon_info_requested(self, folder_id):
         """Lazy load products for the selected folder."""
-        project = self.top_bar.combo_project.currentText()
+        project = self.ayon_panel.combo_project.currentText()
         if not project: return
         
         if hasattr(self, "_prod_thread") and self._prod_thread.isRunning():
+            try:
+                self._prod_thread.finished.disconnect()
+            except Exception:
+                pass
             self._prod_thread.terminate()
+            if not hasattr(self, "_old_threads"):
+                self._old_threads = []
+            self._old_threads = [t for t in self._old_threads if t.isRunning()]
+            self._old_threads.append(self._prod_thread)
 
         class ProductThread(QThread):
             finished = Signal(object)
@@ -1917,7 +2476,12 @@ class MainWindow(QMainWindow):
                 self.project = project
                 self.f_id = f_id
             def run(self):
+                import time
+                start_t = time.perf_counter()
+                print(f"[Timer] Starting to pull products for folder ID '{self.f_id}' in project '{self.project}' from AYON...")
                 products = self.ayon.get_products_for_folder(self.project, self.f_id)
+                elapsed = time.perf_counter() - start_t
+                print(f"[Timer] Pulling products for folder ID '{self.f_id}' in project '{self.project}' from AYON took {elapsed:.4f} seconds.")
                 self.finished.emit(products)
 
         self._prod_thread = ProductThread(self.ayon, project, folder_id)
@@ -2090,7 +2654,7 @@ class MainWindow(QMainWindow):
 
     def perform_version_collision_check(self):
         """Batch check current versions in AYON for tagged and filtered items."""
-        project = self.top_bar.combo_project.currentText()
+        project = self.ayon_panel.combo_project.currentText()
         if not project: 
             self.log_message("No project selected for version check.", "warning")
             return
@@ -2143,7 +2707,15 @@ class MainWindow(QMainWindow):
         self.log_message(f"Checking AYON versions for {len(candidates)} items across {len(folder_ids)} folders...")
         
         if hasattr(self, "_ver_thread") and self._ver_thread.isRunning():
+            try:
+                self._ver_thread.finished.disconnect()
+            except Exception:
+                pass
             self._ver_thread.terminate()
+            if not hasattr(self, "_old_threads"):
+                self._old_threads = []
+            self._old_threads = [t for t in self._old_threads if t.isRunning()]
+            self._old_threads.append(self._ver_thread)
 
         class VersionThread(QThread):
             finished = Signal(object)
@@ -2153,7 +2725,12 @@ class MainWindow(QMainWindow):
                 self.project = project
                 self.f_ids = f_ids
             def run(self):
+                import time
+                start_t = time.perf_counter()
+                print(f"[Timer] Starting to pull last versions for {len(self.f_ids)} folder IDs in project '{self.project}' from AYON...")
                 versions = self.ayon.get_last_versions(self.project, self.f_ids)
+                elapsed = time.perf_counter() - start_t
+                print(f"[Timer] Pulling last versions for folder IDs in project '{self.project}' from AYON took {elapsed:.4f} seconds.")
                 self.finished.emit(versions)
 
         self._ver_thread = VersionThread(self.ayon, project, list(folder_ids))
@@ -2249,3 +2826,170 @@ class MainWindow(QMainWindow):
         super().resizeEvent(event)
         if hasattr(self, 'help_overlay'):
             self.help_overlay.setGeometry(self.rect())
+
+    def update_preset_dropdown(self):
+        """Populate the TopBar preset combobox with available presets from presets_folder."""
+        self.top_bar.combo_preset.blockSignals(True)
+        self.top_bar.combo_preset.clear()
+        self.top_bar.combo_preset.addItem("(None / Active)")
+        
+        presets_folder = self.config.get("presets_folder")
+        if presets_folder and os.path.exists(presets_folder):
+            try:
+                for filename in os.listdir(presets_folder):
+                    if filename.endswith(".json"):
+                        preset_name = os.path.splitext(filename)[0]
+                        self.top_bar.combo_preset.addItem(preset_name)
+            except Exception as e:
+                print(f"Error listing presets: {e}")
+                
+        # Set current preset in combobox if active in config
+        active_preset = self.config.get("active_preset", "")
+        if active_preset:
+            index = self.top_bar.combo_preset.findText(active_preset)
+            if index >= 0:
+                self.top_bar.combo_preset.setCurrentIndex(index)
+        else:
+            self.top_bar.combo_preset.setCurrentIndex(0)
+            
+        self.top_bar.combo_preset.blockSignals(False)
+
+    def _on_preset_changed(self, preset_name):
+        # Capture the actual active settings BEFORE loading the preset
+        old_detect = self.config.get("detect_sequences", True)
+        old_thumb = self.config.get("seq_thumb_frame", "Middle")
+        old_regex = self.config.get("version_regex", r"([._]v|v)(\d+)")
+        old_exts = json.dumps(self.config.get("extensions", {}), sort_keys=True)
+
+        if not preset_name or preset_name == "(None / Active)":
+            try:
+                # Load config.json in app root as the target config
+                config_root = {}
+                if os.path.exists("config.json"):
+                    with open("config.json", "r") as f:
+                        config_root = json.load(f)
+                
+                # Retain session-specific/local-only settings
+                geom = self.config.get("geometry")
+                h_split = self.config.get("h_splitter")
+                v_split = self.config.get("v_splitter")
+                p_folder = self.config.get("presets_folder")
+                last_folder = self.config.get("last_source_folder")
+                recent = self.config.get("recent_folders")
+                
+                # Apply preset
+                self.config = config_root
+                self.config["active_preset"] = ""
+                
+                # Restore retained
+                if geom: self.config["geometry"] = geom
+                if h_split: self.config["h_splitter"] = h_split
+                if v_split: self.config["v_splitter"] = v_split
+                if p_folder: self.config["presets_folder"] = p_folder
+                if last_folder: self.config["last_source_folder"] = last_folder
+                if recent: self.config["recent_folders"] = recent
+                
+                # Save config
+                self.save_config()
+                
+                # Apply preferences
+                self._apply_preferences(self.config, self.secrets, old_detect, old_thumb, old_regex, old_exts, show_message=False)
+                
+                self.log_message("Successfully reset to default (None / Active) config.", "success")
+            except Exception as e:
+                self.log_message(f"Error resetting to default config: {e}", "error")
+            return
+            
+        presets_folder = self.config.get("presets_folder")
+        if not presets_folder:
+            return
+            
+        preset_path = os.path.join(presets_folder, f"{preset_name}.json")
+        if os.path.exists(preset_path):
+            try:
+                with open(preset_path, "r") as f:
+                    preset_config = json.load(f)
+                    
+                # Retain session-specific/local-only settings
+                geom = self.config.get("geometry")
+                h_split = self.config.get("h_splitter")
+                v_split = self.config.get("v_splitter")
+                p_folder = self.config.get("presets_folder")
+                last_folder = self.config.get("last_source_folder")
+                recent = self.config.get("recent_folders")
+                
+                # Apply preset
+                self.config = preset_config
+                self.config["active_preset"] = preset_name
+                
+                # Restore retained
+                if geom: self.config["geometry"] = geom
+                if h_split: self.config["h_splitter"] = h_split
+                if v_split: self.config["v_splitter"] = v_split
+                if p_folder: self.config["presets_folder"] = p_folder
+                if last_folder: self.config["last_source_folder"] = last_folder
+                if recent: self.config["recent_folders"] = recent
+                
+                # Save it so config.json and user-centric json are actually the preset json!
+                self.save_config()
+                
+                # Re-apply config and trigger proper refreshes/rescans
+                self._apply_preferences(self.config, self.secrets, old_detect, old_thumb, old_regex, old_exts, show_message=False)
+                
+                self.log_message(f"Successfully loaded preset '{preset_name}'.", "success")
+            except Exception as e:
+                self.log_message(f"Error loading preset '{preset_name}': {e}", "error")
+
+    def save_preset_as(self):
+        presets_folder = self.config.get("presets_folder")
+        if not presets_folder:
+            QMessageBox.warning(self, "Save Preset", "Presets Folder is not configured in Preferences -> General Tab.")
+            return
+            
+        name, ok = QInputDialog.getText(self, "Save Preset As", "Enter preset name:")
+        if not ok or not name.strip():
+            return
+            
+        preset_name = name.strip()
+        # Sanitize preset name to be safe for filenames
+        safe_name = re.sub(r'[^a-zA-Z0-9_\-]', '_', preset_name)
+        if not safe_name:
+            QMessageBox.warning(self, "Save Preset", "Invalid preset name.")
+            return
+            
+        preset_path = os.path.join(presets_folder, f"{safe_name}.json")
+        if os.path.exists(preset_path):
+            reply = QMessageBox.question(self, "Save Preset", f"Preset '{safe_name}' already exists. Overwrite?", 
+                                         QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if reply == QMessageBox.No:
+                return
+                
+        try:
+            os.makedirs(presets_folder, exist_ok=True)
+            
+            # Keep identical structure to config.json
+            clean_config = self.config.copy()
+            if "ayon_api_key" in clean_config:
+                del clean_config["ayon_api_key"]
+            if "thumbnails_per_row" in clean_config:
+                del clean_config["thumbnails_per_row"]
+                
+            # Filter out local-only parameters from the saved preset template so they don't lock
+            local_keys = ["geometry", "h_splitter", "v_splitter", "last_source_folder", "recent_folders"]
+            for key in local_keys:
+                if key in clean_config:
+                    del clean_config[key]
+            
+            with open(preset_path, "w") as f:
+                json.dump(clean_config, f, indent=4)
+                
+            # Make the newly saved preset the active one
+            self.config["active_preset"] = safe_name
+            self.save_config()
+            self.update_preset_dropdown()
+            
+            self.log_message(f"Successfully saved preset '{safe_name}' to {preset_path}.", "success")
+            QMessageBox.information(self, "Save Preset", f"Preset '{safe_name}' successfully saved and set as active.")
+        except Exception as e:
+            QMessageBox.critical(self, "Save Preset Error", f"Error saving preset: {e}")
+

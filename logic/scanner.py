@@ -3,8 +3,8 @@ import time
 import re
 import fnmatch
 from PySide6.QtCore import QThread, Signal
-from utils import (get_all_files, get_version_from_name, generate_thumbnail, 
-                   generate_video_thumbnail, generate_placeholder_thumbnail,
+from utils import (get_all_files, get_version_from_name, generate_thumbnail_image, 
+                   generate_video_thumbnail, generate_placeholder_thumbnail_image,
                    strip_sequence_counter, get_sequence_counter, evaluate_preset,
                    calculate_thumbnail_time)
 from logic.image_model import ImageItem
@@ -12,6 +12,7 @@ from logic.metadata import get_image_info_metadata
 
 class ImageScanner(QThread):
     progress = Signal(int, int) # current, total
+    status_text = Signal(str)
     finished = Signal(list)
     item_updated = Signal(object)
     canceled = Signal()
@@ -24,7 +25,8 @@ class ImageScanner(QThread):
                  video_start_from_tc=False, video_start_frame=1001,
                  ffmpeg_path="ffmpeg.exe", ffprobe_path="ffprobe.exe",
                  oiiotool_path="oiiotool.exe", ocio_config="", stills_thumb_same=True,
-                 thumb_suffix="_thumbnail", thumb_format=".jpg"):
+                 thumb_suffix="_thumbnail", thumb_format=".jpg",
+                 timeout=6):
         super().__init__()
         self.directory = directory
         self.recursive = recursive
@@ -46,6 +48,7 @@ class ImageScanner(QThread):
         self.stills_thumb_same = stills_thumb_same
         self.thumb_suffix = thumb_suffix
         self.thumb_format = thumb_format
+        self.timeout = timeout
         self._is_canceled = False
 
     def cancel(self):
@@ -56,10 +59,14 @@ class ImageScanner(QThread):
             self.finished.emit([])
             return
 
+        print(f"[Timer] Starting directory scan in: {self.directory}...")
+        start_time = time.perf_counter()
+        self.status_text.emit("Scanning Files...")
         all_files = get_all_files(self.directory, self.recursive)
         if not all_files:
             self.finished.emit([])
             return
+        self.status_text.emit(f"Scanning Files, {len(all_files)} files found")
 
         # Categorization logic (defaults if config is empty)
         def parse_exts(s, default):
@@ -85,12 +92,44 @@ class ImageScanner(QThread):
                 self.canceled.emit()
                 return
 
+            if time.perf_counter() - start_time > self.timeout:
+                warning_msg = f"[Warning] Scan operation timed out after {self.timeout} seconds. Stopping operation."
+                print(warning_msg)
+                self.status_text.emit(warning_msg)
+                self.finished.emit([])
+                return
+
             # Completely ignore generated thumbnails
             filename_lower = f.lower()
             if filename_lower.endswith("_thumbnail.png") or \
                (self.thumb_suffix and self.thumb_format and \
                 self.thumb_suffix.lower() in filename_lower and \
                 filename_lower.endswith(self.thumb_format.lower())):
+                continue
+
+            # Completely ignore generated reviews
+            # 1. Check common/preset folder names
+            f_norm = f.replace("\\", "/")
+            parts = f_norm.lower().split("/")
+            ignore_folders = {"_reviews"}
+            # Collect custom review folders from presets
+            for p_type, p_list in self.presets.items():
+                for p in p_list:
+                    r_path = p.get("Review Path")
+                    if r_path: ignore_folders.add(r_path.lower())
+            
+            if any(p in ignore_folders for p in parts):
+                continue
+                
+            # 2. Check common/preset suffixes
+            ignore_suffixes = {"_review"}
+            for p_type, p_list in self.presets.items():
+                for p in p_list:
+                    r_suf = p.get("Review Suffix")
+                    if r_suf: ignore_suffixes.add(r_suf.lower())
+            
+            base_name_lower = os.path.splitext(os.path.basename(f_norm))[0]
+            if any(base_name_lower.endswith(s) for s in ignore_suffixes):
                 continue
 
             ext = os.path.splitext(f)[1].lower()
@@ -135,6 +174,12 @@ class ImageScanner(QThread):
         for key, paths in groups.items():
             if self._is_canceled:
                 self.canceled.emit()
+                return
+            if time.perf_counter() - start_time > self.timeout:
+                warning_msg = f"[Warning] Scan operation timed out after {self.timeout} seconds. Stopping operation."
+                print(warning_msg)
+                self.status_text.emit(warning_msg)
+                self.finished.emit([])
                 return
             
             paths.sort()
@@ -191,6 +236,12 @@ class ImageScanner(QThread):
                              representation=representation, colorspace=colorspace, rep_tags=rep_tags, is_sequence=is_seq,
                              preset_data=matched_p, frame_start=first_f, frame_end=last_f)
             
+            # Initial Review Status
+            if matched_p and matched_p.get("Convert Review", True):
+                item.review_status = "waiting"
+            else:
+                item.review_status = "do not convert"
+            
             item.metadata["nb_frames"] = nb_frames
             if is_seq:
                 item.metadata["seq_thumbnail_path"] = source_path.replace("\\", "/")
@@ -208,6 +259,12 @@ class ImageScanner(QThread):
             if self._is_canceled:
                 self.canceled.emit()
                 return
+            if time.perf_counter() - start_time > self.timeout:
+                warning_msg = f"[Warning] Scan operation timed out after {self.timeout} seconds. Stopping operation."
+                print(warning_msg)
+                self.status_text.emit(warning_msg)
+                self.finished.emit([])
+                return
             
             matched_p = evaluate_preset(f, self.presets, "videos", label=os.path.splitext(os.path.basename(f))[0])
             preset_name = matched_p.get("Name") if matched_p else None
@@ -222,6 +279,12 @@ class ImageScanner(QThread):
             item = ImageItem(f, category="Video", preset_name=preset_name, variant=variant, product_type=product_type, camel_case=camel_case,
                              representation=representation, colorspace=colorspace, rep_tags=rep_tags,
                              preset_data=matched_p, frame_start=start_f, frame_end=start_f)
+            
+            # Initial Review Status
+            if matched_p and matched_p.get("Convert Review", True):
+                item.review_status = "waiting"
+            else:
+                item.review_status = "do not convert"
             self._fill_metadata(item, f)
             
             # Save ref for metadata extraction later
@@ -238,6 +301,12 @@ class ImageScanner(QThread):
             if self._is_canceled:
                 self.canceled.emit()
                 return
+            if time.perf_counter() - start_time > self.timeout:
+                warning_msg = f"[Warning] Scan operation timed out after {self.timeout} seconds. Stopping operation."
+                print(warning_msg)
+                self.status_text.emit(warning_msg)
+                self.finished.emit([])
+                return
             
             matched_p = evaluate_preset(f, self.presets, "other", label=os.path.splitext(os.path.basename(f))[0])
             preset_name = matched_p.get("Name") if matched_p else None
@@ -250,25 +319,45 @@ class ImageScanner(QThread):
             item = ImageItem(f, category="Other", preset_name=preset_name, variant=variant, product_type=product_type, camel_case=camel_case,
                              representation=representation, colorspace=colorspace, rep_tags=rep_tags,
                              preset_data=matched_p)
+            
+            # Initial Review Status
+            if matched_p and matched_p.get("Convert Review", True):
+                item.review_status = "waiting"
+            else:
+                item.review_status = "do not convert"
             self._fill_metadata(item, f)
             final_items.append(item)
             current += 1
             self.progress.emit(current, total_units)
 
+        elapsed = time.perf_counter() - start_time
+        print(f"[Timer] Scan files took {elapsed:.4f} seconds.")
+        self.status_text.emit(f"Scan files took {elapsed:.4f} seconds.")
+        
         self.finished.emit(final_items)
         
         # --- Phase 2: Async Metadata Extraction ---
-        from concurrent.futures import ThreadPoolExecutor
-        
         # Filter items that actually need metadata (sequences and videos)
         meta_queue = [item for item in final_items if hasattr(item, "_meta_source")]
         if not meta_queue:
             return
 
+        print(f"[Timer] Starting to fetch metadata for {len(meta_queue)} items...")
+        meta_start_time = time.perf_counter()
+
+        total_meta = len(meta_queue)
+        checked_meta = 0
+
         def process_item_metadata(item):
             if self._is_canceled: return
+            if time.perf_counter() - meta_start_time > self.timeout:
+                warning_msg = f"[Warning] Metadata fetching timed out after {self.timeout} seconds. Stopping operation."
+                print(warning_msg)
+                self.status_text.emit(warning_msg)
+                self._is_canceled = True
+                return
             
-            metadata = get_image_info_metadata(item._meta_source, self.ffprobe_path, self.oiiotool_path)
+            metadata = get_image_info_metadata(item._meta_source, self.ffprobe_path, self.oiiotool_path, timeout=self.timeout)
             if not metadata: return
             
             item.metadata.update(metadata)
@@ -283,7 +372,7 @@ class ImageScanner(QThread):
                 
                 # Update icon if thumbnail exists now
                 if os.path.exists(thumb_path):
-                    item.thumbnail = generate_thumbnail(thumb_path, self.thumbnail_size)
+                    item.thumbnail_image = generate_thumbnail_image(thumb_path, self.thumbnail_size)
 
             # 2. Special handling for videos: start/end frames
             if item.category == "Video":
@@ -305,12 +394,20 @@ class ImageScanner(QThread):
             nb = item.metadata.get("nb_frames", 1)
             item.metadata["thumbnail_time"] = calculate_thumbnail_time(nb, fps, mode=self.seq_thumb_frame)
             
+            nonlocal checked_meta
+            checked_meta += 1
+            self.status_text.emit(f"Gathering metadata from Files, {checked_meta} from {total_meta} files checked")
             self.item_updated.emit(item)
 
         # Use a thread pool to extract metadata in parallel
         # 4-8 workers is usually good for I/O and external processes
+        from concurrent.futures import ThreadPoolExecutor
         with ThreadPoolExecutor(max_workers=4) as executor:
             executor.map(process_item_metadata, meta_queue)
+
+        meta_elapsed = time.perf_counter() - meta_start_time
+        print(f"[Timer] Metadata fetching took {meta_elapsed:.4f} seconds.")
+        self.status_text.emit(f"Metadata fetching took {meta_elapsed:.4f} seconds.")
 
     def _fill_metadata(self, item, file_path):
         """Helper to fill common metadata for an item."""
@@ -319,12 +416,12 @@ class ImageScanner(QThread):
             # Check for existing sidecar thumbnail
             thumb_path = file_path + "_thumbnail.png"
             if os.path.exists(thumb_path):
-                item.thumbnail = generate_thumbnail(thumb_path, self.thumbnail_size)
+                item.thumbnail_image = generate_thumbnail_image(thumb_path, self.thumbnail_size)
             else:
                 # Use gray placeholder until background extraction finishes
-                item.thumbnail = generate_placeholder_thumbnail(self.thumbnail_size, "#555555")
+                item.thumbnail_image = generate_placeholder_thumbnail_image(self.thumbnail_size, "#555555")
         else:
-            item.thumbnail = generate_thumbnail(file_path, self.thumbnail_size)
+            item.thumbnail_image = generate_thumbnail_image(file_path, self.thumbnail_size)
         
         # Times
         try:
@@ -345,14 +442,18 @@ class ImageScanner(QThread):
 
 class ThumbnailConversionWorker(QThread):
     item_updated = Signal(object)
+    progress = Signal(int, int)
+    status_text = Signal(str)
     finished = Signal()
     log = Signal(str)
 
-    def __init__(self, items, model, config):
+    def __init__(self, items, model, config, force=False, timeout=6):
         super().__init__()
         self.items = items
         self.model = model
         self.config = config
+        self.force = force
+        self.timeout = timeout
         self._is_canceled = False
         self.process = None
 
@@ -374,26 +475,50 @@ class ThumbnailConversionWorker(QThread):
     def run(self):
         import subprocess
         import os
+        import time
         
-        for item in self.items:
+        total = len(self.items)
+        print(f"[Timer] Starting thumbnail generation for {total} items...")
+        self.log.emit(f"Starting thumbnail generation for {total} items...")
+        start_time = time.perf_counter()
+        for i, item in enumerate(self.items):
             if self._is_canceled:
                 break
+                
+            if time.perf_counter() - start_time > self.timeout:
+                warning_msg = f"[Warning] Thumbnail generation timed out after {self.timeout} seconds. Stopping operation."
+                print(warning_msg)
+                self.log.emit(warning_msg)
+                self.status_text.emit(warning_msg)
+                break
+            
+            self.progress.emit(i + 1, total)
+            self.status_text.emit(f"Creating Thumbnails, {i+1} from {total} done")
             
             # Only process Stills, Videos, and Sequences
             if item.category[:4].lower() not in ["stil", "vide", "sequ"]:
                 print(f"Skipping conversion for {item.file_path}: category '{item.category}' not in ['Still', 'Video', 'Sequence']")
                 continue
                 
+            p_data = item.preset_data or {}
+            if not p_data.get("Convert Thumbnail", True):
+                print(f"Skipping conversion for {item.file_path}: 'Convert Thumbnail' is disabled in preset")
+                continue
+
             cmd_template = ""
-            if item.category == "Still":
-                cmd_template = self.config.get("cmd_stills", "")
-            elif item.category == "Video":
-                cmd_template = self.config.get("cmd_videos", "")
-            else:
-                cmd_template = self.config.get("cmd_sequences", "")
+            if p_data.get("Convert Thumbnail Override", False):
+                cmd_template = p_data.get("Convert Thumbnail Command", "")
+            
+            if not cmd_template:
+                if item.category == "Still":
+                    cmd_template = self.config.get("cmd_stills", "")
+                elif item.category == "Video":
+                    cmd_template = self.config.get("cmd_videos", "")
+                else:
+                    cmd_template = self.config.get("cmd_sequences", "")
                 
             if not cmd_template:
-                print(f"Skipping conversion for {item.file_path}: no command template for category '{item.category}'")
+                print(f"Skipping conversion for {item.file_path}: no command template found (preset or general)")
                 continue
                 
             try:
@@ -402,6 +527,21 @@ class ThumbnailConversionWorker(QThread):
                 target_path = self.model.expand_tokens("{prefs_thumb_path}", item)
                 
                 if not cmd or not target_path:
+                    continue
+                    
+                # Skip existing if enabled (and not forced)
+                if not self.force and self.config.get("skip_existing_thumbs", True) and \
+                   os.path.exists(target_path) and os.path.getsize(target_path) > 0:
+                    print(f"Skipping thumbnail conversion: {target_path} already exists")
+                    item.conversion_thumb_path = target_path
+                    
+                    # Load the QImage on background thread to prevent UI freeze!
+                    from utils import generate_thumbnail_image
+                    qimage = generate_thumbnail_image(target_path, self.config.get("default_thumb_size", 150))
+                    if qimage:
+                        item.thumbnail_image = qimage
+                        
+                    self.item_updated.emit(item)
                     continue
                     
                 print(f"Executing conversion: {cmd}")
@@ -415,8 +555,9 @@ class ThumbnailConversionWorker(QThread):
                 if os.name == 'nt':
                     creationflags = 0x08000000 # CREATE_NO_WINDOW
                 
-                # Using shell=True as the command string might contain pipes or redirection.
-                # We use Popen with communicate(timeout=...) to avoid hanging indefinitely.
+                print(f"[Timer] Starting to execute conversion subprocess for {item.label}...")
+                self.log.emit(f"Starting to execute conversion subprocess for {item.label}...")
+                start_cmd_time = time.perf_counter()
                 self.process = subprocess.Popen(cmd, shell=True, 
                                                 stdout=subprocess.PIPE, 
                                                 stderr=subprocess.PIPE, 
@@ -424,23 +565,40 @@ class ThumbnailConversionWorker(QThread):
                                                 creationflags=creationflags)
                 
                 try:
-                    # Wait up to 60 seconds for conversion to finish
-                    stdout, stderr = self.process.communicate(timeout=60)
+                    # Calculate remaining time for the overall operation, but at least 0.1s
+                    rem_time = max(0.1, self.timeout - (time.perf_counter() - start_time))
+                    stdout, stderr = self.process.communicate(timeout=rem_time)
                     returncode = self.process.returncode
                 except subprocess.TimeoutExpired:
                     # If it times out, kill it and its children
                     self.cancel() 
-                    stdout, stderr = "", "Timeout: conversion took more than 60 seconds."
+                    stdout, stderr = "", f"Timeout: conversion took more than {self.timeout} seconds."
                     returncode = -1
+                    warning_msg = f"[Warning] Thumbnail generation timed out after {self.timeout} seconds. Stopping operation."
+                    print(warning_msg)
+                    self.log.emit(warning_msg)
+                    self.status_text.emit(warning_msg)
+                    self._is_canceled = True
                 except Exception as e:
                     stdout, stderr = "", str(e)
                     returncode = -1
                 finally:
                     self.process = None
                 
+                elapsed_cmd = time.perf_counter() - start_cmd_time
+                print(f"[Timer] Generating thumbnail for {item.label} took {elapsed_cmd:.4f} seconds.")
+                self.log.emit(f"Generating thumbnail for {item.label} took {elapsed_cmd:.4f} seconds.")
+                
                 # Validation: exit code 0, file exists, and size > 0
                 if returncode == 0 and os.path.exists(target_path) and os.path.getsize(target_path) > 0:
                     item.conversion_thumb_path = target_path
+                    
+                    # Load the QImage on background thread to prevent UI freeze!
+                    from utils import generate_thumbnail_image
+                    qimage = generate_thumbnail_image(target_path, self.config.get("default_thumb_size", 150))
+                    if qimage:
+                        item.thumbnail_image = qimage
+                        
                     self.item_updated.emit(item)
                 else:
                     err = stderr or stdout or "Unknown error"
@@ -450,5 +608,175 @@ class ThumbnailConversionWorker(QThread):
             except Exception as e:
                 print(f"Error during conversion for {item.file_path}: {e}")
                 self.log.emit(f"Error during conversion for {item.label}: {e}")
+                
+        elapsed = time.perf_counter() - start_time
+        print(f"[Timer] Thumbnail generation took {elapsed:.4f} seconds.")
+        self.status_text.emit(f"Thumbnail generation took {elapsed:.4f} seconds.")
+        self.log.emit(f"Thumbnail generation took {elapsed:.4f} seconds.")
+        self.finished.emit()
+
+class ReviewConversionWorker(QThread):
+    item_updated = Signal(object)
+    finished = Signal()
+    progress = Signal(int, int) # current, total
+    status_text = Signal(str)
+    log = Signal(str)
+
+    def __init__(self, items, model, config):
+        super().__init__()
+        self.items = [it for it in items if it.review_status == "waiting"]
+        self.model = model
+        self.config = config
+        self._is_canceled = False
+        self._is_paused = False
+        self.process = None
+
+    def cancel(self):
+        self._is_canceled = True
+        self.resume() # Ensure we're not stuck in paused state
+        if self.process:
+            try:
+                import os
+                import subprocess
+                if os.name == 'nt':
+                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(self.process.pid)], 
+                                   capture_output=True, creationflags=0x08000000)
+                else:
+                    self.process.kill()
+            except Exception as e:
+                print(f"Failed to kill review conversion process: {e}")
+
+    def pause(self):
+        self._is_paused = True
+
+    def resume(self):
+        self._is_paused = False
+
+    def toggle_pause(self):
+        self._is_paused = not self._is_paused
+        return self._is_paused
+
+    def run(self):
+        import subprocess
+        import os
+        import time
+        
+        total = len(self.items)
+        for i, item in enumerate(self.items):
+            while self._is_paused and not self._is_canceled:
+                time.sleep(0.5)
+
+            if self._is_canceled:
+                break
+            
+            p_data = item.preset_data or {}
+            cmd_template = p_data.get("Convert Review Command", "")
+            
+            if not cmd_template:
+                # If no command, we mark as failed or just done if it was supposed to be empty?
+                # Actually, the user requirement implies if it's on, we should have a command.
+                item.review_status = "failed"
+                self.item_updated.emit(item)
+                continue
+                
+            try:
+                item.review_status = "processing"
+                self.item_updated.emit(item)
+                self.progress.emit(i + 1, total)
+                self.status_text.emit(f"Creating Reviews, {i+1} from {total} done. Currently processing: {item.label}")
+
+                # Expand tokens
+                cmd = self.model.expand_tokens(cmd_template, item)
+                target_path = self.model.expand_tokens("{prefs_review_path}", item)
+                
+                if not cmd or not target_path:
+                    item.review_status = "failed"
+                    self.item_updated.emit(item)
+                    continue
+                    
+                # Skip existing if enabled
+                if self.config.get("skip_existing_reviews", True) and \
+                   os.path.exists(target_path) and os.path.getsize(target_path) > 0:
+                    print(f"Skipping review conversion: {target_path} already exists")
+                    item.review_status = "done"
+                    self.item_updated.emit(item)
+                    continue
+                    
+                print(f"Executing review conversion: {cmd}")
+                self.log.emit(f"Executing review conversion: {cmd}")
+                
+                # Ensure output directory exists
+                os.makedirs(os.path.dirname(target_path), exist_ok=True)
+                
+                # Run the conversion command
+                creationflags = 0
+                if os.name == 'nt':
+                    creationflags = 0x08000000 # CREATE_NO_WINDOW
+                
+                self.process = subprocess.Popen(cmd, shell=True, 
+                                                stdout=subprocess.PIPE, 
+                                                stderr=subprocess.PIPE, 
+                                                text=True, 
+                                                creationflags=creationflags)
+                
+                try:
+                    import re
+                    # Regex for ffmpeg time output: time=00:00:04.00
+                    time_regex = re.compile(r"time=(\d+:\d+:\d+\.\d+)")
+                    duration = float(item.metadata.get("duration", 0))
+                    last_pct = -1
+                    
+                    # Read stderr line by line for progress
+                    # We use readline() because ffmpeg outputs progress updates on stderr
+                    while True:
+                        line = self.process.stderr.readline()
+                        if not line and self.process.poll() is not None:
+                            break
+                        
+                        if not line:
+                            continue
+                            
+                        # Parse time
+                        match = time_regex.search(line)
+                        if match and duration > 0:
+                            t_str = match.group(1)
+                            # Convert HH:MM:SS.ms to seconds
+                            parts = t_str.split(':')
+                            if len(parts) == 3:
+                                h, m, s = map(float, parts)
+                                current_secs = h * 3600 + m * 60 + s
+                                pct = int((current_secs / duration) * 100)
+                                pct = min(100, max(0, pct))
+                                
+                                # Only update every 10% to avoid flickering/perf issues
+                                if pct // 10 > last_pct // 10:
+                                    last_pct = pct
+                                    item.review_status = f"processing {pct}%"
+                                    self.item_updated.emit(item)
+                    
+                    returncode = self.process.wait()
+                    stdout, stderr = "", "" # Not used anymore for success check
+                except Exception as e:
+                    stdout, stderr = "", str(e)
+                    returncode = -1
+                finally:
+                    self.process = None
+                
+                if returncode == 0 and os.path.exists(target_path) and os.path.getsize(target_path) > 0:
+                    item.review_status = "done"
+                    # We don't have a field for review path in ImageItem yet, but review_status is "done"
+                else:
+                    item.review_status = "failed"
+                    err = stderr or stdout or "Unknown error"
+                    print(f"Review conversion failed for {item.file_path}: {err}")
+                    self.log.emit(f"Review conversion failed for {item.label}: {err}")
+                
+                self.item_updated.emit(item)
+                
+            except Exception as e:
+                item.review_status = "failed"
+                self.item_updated.emit(item)
+                print(f"Error during review conversion for {item.file_path}: {e}")
+                self.log.emit(f"Error during review conversion for {item.label}: {e}")
                 
         self.finished.emit()

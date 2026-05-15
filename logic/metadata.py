@@ -7,7 +7,7 @@ IMAGE_EXTENSIONS = {
     ".exr", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".tga", ".dpx", ".hdr"
 }
 
-def get_ffprobe_data(path_to_file, ffprobe_exe, logger=None):
+def get_ffprobe_data(path_to_file, ffprobe_exe, logger=None, timeout=6.0):
     """Get metadata via ffprobe."""
     if logger is None:
         logger = logging.getLogger(__name__)
@@ -31,13 +31,13 @@ def get_ffprobe_data(path_to_file, ffprobe_exe, logger=None):
         creationflags = 0x08000000 # subprocess.CREATE_NO_WINDOW
 
     try:
-        result = subprocess.run(args, capture_output=True, text=True, check=True, creationflags=creationflags)
+        result = subprocess.run(args, capture_output=True, text=True, check=True, creationflags=creationflags, timeout=timeout)
         return json.loads(result.stdout)
     except Exception as e:
         logger.error(f"Failed to get ffprobe data for {path_to_file}: {e}")
         return {}
 
-def get_oiio_info_for_input(path_to_file, oiiotool_exe, logger=None):
+def get_oiio_info_for_input(path_to_file, oiiotool_exe, logger=None, timeout=6.0):
     """Get metadata via oiiotool."""
     if logger is None:
         logger = logging.getLogger(__name__)
@@ -62,7 +62,7 @@ def get_oiio_info_for_input(path_to_file, oiiotool_exe, logger=None):
         creationflags = 0x08000000 # subprocess.CREATE_NO_WINDOW
 
     try:
-        result = subprocess.run(args, capture_output=True, text=True, check=True, creationflags=creationflags)
+        result = subprocess.run(args, capture_output=True, text=True, check=True, creationflags=creationflags, timeout=timeout)
         import xml.etree.ElementTree as ET
         root = ET.fromstring(result.stdout)
         
@@ -93,7 +93,7 @@ def get_oiio_info_for_input(path_to_file, oiiotool_exe, logger=None):
 def is_oiio_supported(oiiotool_exe):
     return oiiotool_exe and os.path.exists(oiiotool_exe)
 
-def get_image_info_metadata(path_to_file, ffprobe_exe, oiiotool_exe, keys=None, logger=None):
+def get_image_info_metadata(path_to_file, ffprobe_exe, oiiotool_exe, keys=None, logger=None, timeout=6.0):
     """Get flattened metadata from image file.
     
     Based on ayon-core implementation.
@@ -126,7 +126,7 @@ def get_image_info_metadata(path_to_file, ffprobe_exe, oiiotool_exe, keys=None, 
     
     # Try OIIO first for supported images
     if ext in IMAGE_EXTENSIONS and is_oiio_supported(oiiotool_exe):
-        oiio_stream = get_oiio_info_for_input(path_to_file, oiiotool_exe, logger=logger)
+        oiio_stream = get_oiio_info_for_input(path_to_file, oiiotool_exe, logger=logger, timeout=timeout)
         if "attribs" in (oiio_stream or {}):
             metadata_stream = {}
             for key, val in oiio_stream["attribs"].items():
@@ -140,7 +140,7 @@ def get_image_info_metadata(path_to_file, ffprobe_exe, oiiotool_exe, keys=None, 
     
     # Fallback to FFprobe if OIIO failed or extension not supported
     if not metadata_stream:
-        ffprobe_stream = get_ffprobe_data(path_to_file, ffprobe_exe, logger)
+        ffprobe_stream = get_ffprobe_data(path_to_file, ffprobe_exe, logger, timeout=timeout)
         if "streams" in ffprobe_stream and len(ffprobe_stream["streams"]) > 0:
             metadata_stream = _get_video_metadata_from_ffprobe(ffprobe_stream)
 

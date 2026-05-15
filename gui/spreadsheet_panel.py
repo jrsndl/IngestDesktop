@@ -51,7 +51,10 @@ class SpreadsheetPanel(QWidget):
         self.layout.setContentsMargins(0, 0, 0, 0)
 
         # Controls
-        controls_layout = QHBoxLayout()
+        self.controls = QWidget()
+        self.controls.setObjectName("SpreadsheetControls")
+        controls_layout = QHBoxLayout(self.controls)
+        controls_layout.setContentsMargins(5, 5, 5, 5)
         self.btn_selected_only = QPushButton("Selected only")
         self.btn_selected_only.setCheckable(True)
         self.btn_selected_only.toggled.connect(lambda: self.update_filtering())
@@ -95,7 +98,7 @@ class SpreadsheetPanel(QWidget):
         controls_layout.addStretch()
         controls_layout.addWidget(self.lbl_row_height)
         controls_layout.addWidget(self.slider_row_height)
-        self.layout.addLayout(controls_layout)
+        self.layout.addWidget(self.controls)
 
         # Table View
         self.table = QTableView()
@@ -212,6 +215,10 @@ class SpreadsheetPanel(QWidget):
         self.csv_mode_changed.emit(checked)
 
     def _on_model_data_changed(self, top_left, bottom_right):
+        # Skip auto-resizing during bulk updates (e.g. metadata scanner updates) to prevent GUI lag
+        if bottom_right.column() - top_left.column() > 5:
+            return
+            
         # If Label column (2) was changed, auto-resize it
         if top_left.column() <= 2 <= bottom_right.column():
             self.table.resizeColumnToContents(2)

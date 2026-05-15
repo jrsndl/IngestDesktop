@@ -251,3 +251,150 @@ Implement AYON local publish.
 
 
 Thumbnail View, make a "tooltip" to show info about the thumbnail, when you hower mouse over thumbnail and wait. The tooltip will be the text configured in Preferences: "Item Info" for corresponding Category. The text can contain tokens in curly brackets to be expanded.
+
+Preferences: Stills, File Sequences, Video Containers, Other:
+* for every preset in every category:
+- add the FPS from metadata checkbox to the same line as FPS is, default: on
+- add Convert Thumbnail option below Rep. Tags, default is on
+- add Convert Thumbnail override checkbox, default off
+- add Convert Thumbnail Override Command multiline text
+- add line separator
+- add "Convert Review" checkbox, default on
+- add "Review Location" dropbox ["Same as File", "Relative to Source Folder", "Custom"], default: "Relative to Source Folder"
+- add "Review Path" text , default: "_reviews"
+- add "Review Suffix", default: "_review"
+- add "Review File Format", default: ".mp4"
+- add "Convert Review Command" multiline text
+Preferences: Stills, File Sequences, Video Containers, Other:
+* for every preset in every category, for every item:
+- construct {prefs_review_path} key from the convert review in a similar fashion as {prefs_thumb_path} is made
+
+
+When all the thumbnail processing is done, check if any items need Review conversion (Convert Review checkbox on).
+Start running the conversions, mind performance.
+Create "Conversion Queue" button on very top, next to Rescan button. The button label will indicate the queaue status: ["waiting to start", "processing", "done"]
+Pressing the  "Conversion Queue" button will show pop up with spreadsheet showing only the items that require review processing. Colums:  "Thumbnail", "Status",  "Label", "File". The row background color will indicate the status "waiting": gray, "processing": orange, "done":green, "failed": red
+Add Queue control buttons: Pause, Cancel, Restart
+
+Bottom Spreadsheet view: all items: add column Review, with possible values/status: ["do not convert", "waiting", "processing", "done", "failed"]
+
+
+Preferences: Stills, File Sequences, Video Containers, Other:
+* for every preset in every category, add to the bottom:
+- add "Review Representation", default="h264"
+- add "Review Colorspace", default="Output - sRGB"
+- add "Review Rep. Tags", default="passing;ftracreview;webreview"
+
+Preferences: Stills, File Sequences, Video Containers, Other: for every preset in every category
+* make the gui more compact layout to reduce the height of the unfolded preset
+* group1, left to right "line by line":
+- Name, Filter By, Filter
+- Product Type, Variant, camelCase
+- FPS, from metadata, Slate Exists
+- Handle Start, Handle End
+- Repre, Rep. Tags, Colorspace
+- divider line
+- convert thumbnain, override command
+- Thumb Cmd
+- divider line
+- Convert Review, Review Loc., Rev. Path
+- Rev. Suffix, Rev. Format, Rev. Repre
+- Rev. Colorspace, Rev. Tags
+
+Thumbnail View: make new feature: Backdrops:
+* Backdrop is a rectangle area, serving as a group of items.
+* User can freely drag items in or out of the group
+* Dragging the backdrop corners will resize the backdrop
+* Dragging the backdrop top bar will move the backdrop
+* When moving the backdrop (by dragging top bar), every item inside the backdrop moves with the backdrop ()
+* Control + Dragging the backdrop top bar will move the backdrop only, and not move any items inside the backdrop
+* Backdrop Creation: add the "Add Backdrop" to the Thumbnail view context menu. Alt + N for hotkey
+* When Creating the Backdrop, popup dialog will appear first:
+- "Name" textbox: default empty
+- "Label" textbox: default empty
+- "Label Alignment" dropbox: ["Top Left", "Top Center", "Top Right", "Middle Left", "Middle Center", "Middle Right", "Bottom Left", "Bottom Center", "Bottom Right"], default "Top Left"
+- Appearance radiobutton: ["Border", "Fill"], default "Border"
+- "Border Color" color picker, default magenta
+- "Fill Color" color picker, default dark gray
+- Done and Cancel Button
+* Backdrop Edit: add the "Edit Backdrop" to the Thumbnail view context menu. This will show the same popup dialog as Backdrop Creation, user can adjust Backdrop look.
+* Backdrop Look:
+- Thin rectangle: border color
+- Thicker but still not big top rectangle (border color) to show the backdrop Name
+- Corners, bit bigger than the top rectangle, to indicate Backdrop resize (border color)
+- Backdrop background, transparent for "Border" apperance, and filled with fill color for "Fill" appearance
+
+* Backdrop Creation Position: when some items are selected when creating the Backdrop, Backdrop size and position is made so the Backdrop "collects" all the selected items (ie selected items bounding box is calculated), plus some space, so the selected items are not too close to the backdrop rectangle borders
+
+
+SHow processing at the bottom:
+* scan
+* reading metadata
+* thumbnail generation
+* conversion
+
+
+Show Backdrop and text items in the right panel (optionally)
+
+Saving and loading preferences, network path, per user last setup, hide other users from preferences dropdown
+
+Saving and loading the desktop, network path
+
+Collect items: will move the items to the desktop file location
+
+feature: version stack:
+* detect the file names with the same file name and extension, except the version. Path can be different
+* collapse those files to the highest version by default, user can pick version from the list of available versions
+* indicate the item is a version stack by making a small green version number overlay in the top right corner of the thumbnail
+* version stack will be displayed in the spreadsheet view category column, in a simmilar fashion as sequence. for example version stack with lowest version number1 and highest version numbe 21 will be displayed as still[v1-v21@21] or sequence[1001-1100][v1-v21@21] or video[v1-v21@21] or other[v1-v21@21], the number after the @ characted displays the currently active version number displayed.
+* display the version notation for version stacks also in the right panel
+
+
+
+Right panel, top control part:
+* add toggle button "Files Only". Default on. If off, right panel will display also notes and backdrops
+* add toggle button "Flat". Default off. If on, no subdirectories are shown
+* add toggle button "Version Stack". Default off.
+* add toggle button "Sequences". Default on. This can switch the file sequence preference, live.
+
+Feature: Named Preferences = Presets
+* Preferences: General Tab: Add text "Presets Folder", with Browse button. This path will be used to save named Presets (json files same as preferences json). This will allow user to quickly pick from several preconfigured preferences, aimed for particular task.
+
+Feature: User Centric preferences.
+* when User quits the app, app will save the preferences to the "Presets Folder"/users/username.json where username is the current user name takev from environment variable "USERNAME".
+* when User opens the app, app will first check if "Presets Folder"/users/username.json exists, and if yes, tries to load it. If the file doesn't exist, or is unreadable, app will load preferences from app folder as a fallback.
+
+Feature: Saving and loading Project
+
+
+Add classic top menu to the main window:
+* File
+- Load Preset...
+- Save Preset As...
+- divider
+- New Project
+- divider
+- Open Project...
+- Open Recent
+- divider
+- Save Project...
+- Save Project As...
+- Preferences
+- Exit
+
+* Convert
+- Queue...
+- Convert Thumbnails
+- Forece Convert Thumbnails
+- Convert Reviews
+- Force Convert Reviews
+
+* Help
+- Hotkeys
+- Key List
+
+for all the paths that can be modified by user in gui, support environment variable expansion
+* the environment variable can be present as dollar sign, followed by curly brackets with the environment name: ${variable_name}
+* if the environment variable is not present, replace it with empty string
+* cache the environment variables from the system at the app start, for speedup
+* patsh: "Default Scan Folder", "AYON COnsole Path", "FFmpeg Path", "FFprobe Path", "OIIOTool Path", "OCIO Config", "Default Temp Root"

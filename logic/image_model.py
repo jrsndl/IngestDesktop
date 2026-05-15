@@ -19,12 +19,14 @@ class ImageItem:
         self.ayon_task_type = ""
         self.ayon_task_assignee = ""
         self.conversion_thumb_path = ""
+        self.review_status = "do not convert" # ["do not convert", "waiting", "processing", "done", "failed"]
         self.last_ayon_version = None
         self.is_tagged = True
         self.is_selected = False
         self.thumbnail = None
         self.high_res_thumbnail = None
         self.is_high_res_loading = False
+        self.high_res_failed = False
         self.creation_time = 0
         self.modification_time = 0
         self.age_minutes = 0 
@@ -50,7 +52,7 @@ class ImageTableModel(QAbstractTableModel):
 
     COLUMNS = [
         "Tag", "Thumbnail", "Label", "Variant", "Product Name", "Category", "Preset", "Version", 
-        "Last Version", "Age", "AYON Path", "Key Value Pairs"
+        "Last Version", "Age", "Review", "AYON Path", "Key Value Pairs"
     ]
 
     def __init__(self, parent=None):
@@ -81,6 +83,12 @@ class ImageTableModel(QAbstractTableModel):
 
     def update_item(self, item):
         """Notify the model that an item has been updated (e.g. metadata fetched)."""
+        if hasattr(item, "thumbnail_image") and item.thumbnail_image:
+            item.thumbnail = QPixmap.fromImage(item.thumbnail_image)
+            try:
+                delattr(item, "thumbnail_image")
+            except AttributeError:
+                pass
         try:
             row = self.items.index(item)
             # Notify that all data columns for this row might have changed
@@ -137,8 +145,9 @@ class ImageTableModel(QAbstractTableModel):
                     if m < 60: return f"{m}m"
                     if m < 1440: return f"{m//60}h"
                     return f"{m//1440}d"
-                if col == 10: return item.ayon_path
-                if col == 11: # Key Value Pairs
+                if col == 10: return item.review_status
+                if col == 11: return item.ayon_path
+                if col == 12: # Key Value Pairs
                     return self._get_all_tokens_string(item)
             else:
                 # For EditRole in non-label/version columns
@@ -222,6 +231,13 @@ class ImageTableModel(QAbstractTableModel):
             self.layoutChanged.emit()
 
     def add_items(self, new_items):
+        for item in new_items:
+            if hasattr(item, "thumbnail_image") and item.thumbnail_image:
+                item.thumbnail = QPixmap.fromImage(item.thumbnail_image)
+                try:
+                    delattr(item, "thumbnail_image")
+                except AttributeError:
+                    pass
         self.beginInsertRows(QModelIndex(), len(self.items), len(self.items) + len(new_items) - 1)
         self.items.extend(new_items)
         self.endInsertRows()
@@ -303,7 +319,8 @@ class ImageTableModel(QAbstractTableModel):
             if column == 7: return item.version
             if column == 8: return item.last_ayon_version or 0
             if column == 9: return item.age_minutes
-            if column == 10: return item.ayon_path
+            if column == 10: return item.review_status
+            if column == 11: return item.ayon_path
             return ""
 
         reverse = (order == Qt.DescendingOrder)
@@ -393,6 +410,13 @@ class ImageTableModel(QAbstractTableModel):
             "{THUMB_PATH}": filename_val if (item.category == "Still" and getattr(self, "stills_thumb_same", True)) else "",
             "{prefs_highres_thumb_size}": str(getattr(self, "high_res_size", 512)),
             "{prefs_thumb_path}": self._get_prefs_thumb_path(item),
+            "{prefs_review_path}": self._get_prefs_review_path(item),
+            "{review_repre}": p_data.get("Review Representation", "h264"),
+            "{REVIEW_REPRE}": p_data.get("Review Representation", "h264"),
+            "{review_colorspace}": p_data.get("Review Colorspace", "Output - sRGB"),
+            "{REVIEW_COLORSPACE}": p_data.get("Review Colorspace", "Output - sRGB"),
+            "{review_tags}": p_data.get("Review Tags", "passing;ftracreview;webreview"),
+            "{REVIEW_TAGS}": p_data.get("Review Tags", "passing;ftracreview;webreview"),
             "{ffmpeg}": self.ffmpeg_path,
             "{ffprobe}": self.ffprobe_path,
             "{oiiotool}": self.oiiotool_path,
@@ -478,3 +502,143 @@ class ImageTableModel(QAbstractTableModel):
         target_filename = f"{name_no_ext}{self.thumb_suffix}{self.thumb_format}"
         
         return os.path.join(target_dir, target_filename).replace("\\", "/")
+
+    def _get_prefs_review_path(self, item):
+        """Calculate the review path based on preset preferences."""
+        source_file = item.file_path.replace("\\", "/")
+        base_dir = os.path.dirname(source_file)
+        filename = os.path.basename(source_file)
+        name_no_ext, _ = os.path.splitext(filename)
+        
+        if item.is_sequence:
+            name_no_ext = strip_sequence_counter(name_no_ext)
+            
+        p_data = item.preset_data or {}
+        rev_loc = p_data.get("Review Location", "Relative to Source Folder")
+        rev_path = p_data.get("Review Path", "_reviews")
+        rev_suffix = p_data.get("Review Suffix", "_review")
+        rev_format = p_data.get("Review Format", ".mp4")
+        
+        # Determine target directory
+        target_dir = base_dir
+        if rev_loc == "Relative to Source Folder":
+            if self.source_folder:
+                target_dir = os.path.join(self.source_folder, rev_path).replace("\\", "/")
+            else:
+                target_dir = os.path.join(base_dir, rev_path).replace("\\", "/")
+        elif rev_loc == "Custom":
+            target_dir = rev_path.replace("\\", "/")
+            
+        # Basename with suffix and format
+        target_filename = f"{name_no_ext}{rev_suffix}{rev_format}"
+        
+        return os.path.join(target_dir, target_filename).replace("\\", "/")
+    def perform_rename_to_label(self, selected_paths, version_regex):
+        """
+        Renames files on disk based on their model label.
+        Handles sequences and avoids collisions.
+        Returns the number of items (files or sequences) renamed.
+        """
+        import os
+        import re
+        from utils import strip_sequence_counter
+        
+        # 1. Map selected paths to items in our model
+        abs_selected = {os.path.normpath(os.path.abspath(p)) for p in selected_paths}
+        items_to_rename = []
+        seen_items = set()
+        
+        for item in self.items:
+            item_abs = os.path.normpath(os.path.abspath(item.file_path))
+            if item_abs in abs_selected and item not in seen_items:
+                items_to_rename.append(item)
+                seen_items.add(item)
+                
+        if not items_to_rename:
+            return 0
+
+        renamed_count = 0
+        
+        for item in items_to_rename:
+            directory = os.path.dirname(item.file_path)
+            orig_filename = os.path.basename(item.file_path)
+            base, ext = os.path.splitext(orig_filename)
+            
+            # Extract version string if present (e.g. _v001)
+            ver_match = re.search(version_regex, orig_filename, re.IGNORECASE)
+            ver_str = ver_match.group(0) if ver_match else ""
+            
+            # New base name (label + version)
+            new_base_no_counter = item.label + ver_str
+            
+            # Collect all files belonging to this item
+            files_to_move = [] # (old_full, new_full)
+            collision = False
+            
+            if item.is_sequence:
+                # Pattern: strip counter and version from original filename
+                name_no_ver = re.sub(version_regex, "", orig_filename)
+                pattern_base = strip_sequence_counter(name_no_ver)
+                
+                # Get all files in directory
+                try:
+                    all_dir_files = [f for f in os.listdir(directory) if os.path.isfile(os.path.join(directory, f))]
+                except Exception:
+                    continue
+                
+                for f in all_dir_files:
+                    f_no_ver = re.sub(version_regex, "", f)
+                    f_pattern_base = strip_sequence_counter(f_no_ver)
+                    f_ver_match = re.search(version_regex, f, re.IGNORECASE)
+                    f_ver_str = f_ver_match.group(0) if f_ver_match else ""
+                    
+                    if f_pattern_base == pattern_base and f_ver_str == ver_str and f.lower().endswith(ext.lower()):
+                        # It's part of the sequence.
+                        f_base, f_ext = os.path.splitext(f)
+                        counter_match = re.search(r"([._]?)(\d+)$", f_base)
+                        sep = ""
+                        counter = ""
+                        if counter_match:
+                            sep = counter_match.group(1)
+                            counter = counter_match.group(2)
+                        
+                        new_name = new_base_no_counter + sep + counter + f_ext
+                        old_full = os.path.join(directory, f)
+                        new_full = os.path.join(directory, new_name)
+                        
+                        if os.path.exists(new_full) and old_full != new_full:
+                            collision = True
+                            break
+                        files_to_move.append((old_full, new_full))
+            else:
+                # Single file
+                new_name = new_base_no_counter + ext
+                old_full = os.path.normpath(os.path.abspath(item.file_path))
+                new_full = os.path.join(directory, new_name)
+                
+                if os.path.exists(new_full) and old_full != new_full:
+                    collision = True
+                else:
+                    files_to_move.append((old_full, new_full))
+                    
+            if not collision and files_to_move:
+                success = True
+                for old_p, new_p in files_to_move:
+                    try:
+                        if old_p == new_p: continue
+                        os.rename(old_p, new_p)
+                        # If this was the representative file_path, update it
+                        if old_p == os.path.normpath(os.path.abspath(item.file_path)):
+                            item.file_path = new_p
+                            item.filename = os.path.basename(new_p)
+                    except Exception as e:
+                        print(f"Failed to rename {old_p} -> {new_p}: {e}")
+                        success = False
+                
+                if success:
+                    renamed_count += 1
+
+        if renamed_count > 0:
+            self.layoutChanged.emit()
+            
+        return renamed_count

@@ -56,8 +56,17 @@ class PreferencesDialog(QDialog):
         self.scan_folder_layout = QHBoxLayout()
         self.scan_folder_layout.addWidget(self.default_scan_folder)
         self.scan_folder_layout.addWidget(self.btn_browse_scan)
+        
+        self.presets_folder = QLineEdit(self.config.get("presets_folder", ""))
+        self.btn_browse_presets = QPushButton("Browse...")
+        self.btn_browse_presets.clicked.connect(self._on_browse_presets_folder)
+        
+        self.presets_folder_layout = QHBoxLayout()
+        self.presets_folder_layout.addWidget(self.presets_folder)
+        self.presets_folder_layout.addWidget(self.btn_browse_presets)
 
         self.form.addRow("Default Scan Folder:", self.scan_folder_layout)
+        self.form.addRow("Presets Folder:", self.presets_folder_layout)
         self.form.addRow("Age Calculation Source:", self.age_source)
         self.form.addRow("Sequence Detection:", self.detect_sequences)
         
@@ -180,10 +189,22 @@ class PreferencesDialog(QDialog):
         self.thumbs_layout = QVBoxLayout(self.thumbs_tab)
         self.thumbs_form = QFormLayout()
 
+        self.run_thumb_after_scan = QCheckBox("Run thumbnail conversion after scan")
+        self.run_thumb_after_scan.setChecked(self.config.get("run_thumb_after_scan", False))
+        
+        self.run_review_after_scan = QCheckBox("Run review conversion after scan")
+        self.run_review_after_scan.setChecked(self.config.get("run_review_after_scan", False))
+
         # Moved from GUI tab
         self.seq_thumb_frame = QComboBox()
         self.seq_thumb_frame.addItems(["First", "Second", "Middle"])
         self.seq_thumb_frame.setCurrentText(self.config.get("seq_thumb_frame", "Middle"))
+
+        self.skip_existing_thumbs = QCheckBox("Skip Existing Thumbnails")
+        self.skip_existing_thumbs.setChecked(self.config.get("skip_existing_thumbs", True))
+        
+        self.skip_existing_reviews = QCheckBox("Skip Existing Reviews")
+        self.skip_existing_reviews.setChecked(self.config.get("skip_existing_reviews", True))
 
         self.high_res_size = QSpinBox()
         self.high_res_size.setRange(128, 2048)
@@ -224,6 +245,10 @@ class PreferencesDialog(QDialog):
         self.cmd_sequences = QPlainTextEdit(self.config.get("cmd_sequences", ""))
         self.cmd_sequences.setMaximumHeight(50)
 
+        self.thumbs_form.addRow(self.run_thumb_after_scan)
+        self.thumbs_form.addRow(self.run_review_after_scan)
+        self.thumbs_form.addRow(self.skip_existing_thumbs)
+        self.thumbs_form.addRow(self.skip_existing_reviews)
         self.thumbs_form.addRow("Sequence Thumbnail Frame:", self.seq_thumb_frame)
         self.thumbs_form.addRow("High-Res Thumbnail Size:", self.high_res_size)
         self.thumbs_form.addRow("Thumbnail Location:", self.thumb_location)
@@ -321,11 +346,17 @@ class PreferencesDialog(QDialog):
         self.low_res_size.setSuffix(" px")
         self.low_res_size.setValue(self.config.get("low_res_size", 150))
 
+        self.timeout_seconds = QSpinBox()
+        self.timeout_seconds.setRange(1, 3600)
+        self.timeout_seconds.setSuffix(" sec")
+        self.timeout_seconds.setValue(self.config.get("timeout_seconds", 6))
+
         self.gui_form.addRow("Default Columns:", self.default_cols)
         self.gui_form.addRow("Default Text Size:", self.default_text_size)
         self.gui_form.addRow("Default Thumbnail Size:", self.default_thumb_size)
         self.gui_form.addRow("Allowed Label Characters:", self.label_regex)
         self.gui_form.addRow("Low-Res Thumbnail Size:", self.low_res_size)
+        self.gui_form.addRow("Timeout seconds:", self.timeout_seconds)
 
         self.gui_layout.addLayout(self.gui_form)
         self.gui_layout.addStretch()
@@ -575,14 +606,30 @@ class PreferencesDialog(QDialog):
         self._on_browse_file(self.traypublisher_path, "Select AYON Console Executable", "Executable Files (*.exe);;All Files (*)")
 
     def _on_browse_file(self, line_edit, title, filter_str):
-        file_path, _ = QFileDialog.getOpenFileName(self, title, "", filter_str)
+        import os
+        from utils import expand_env_vars
+        init_dir = expand_env_vars(line_edit.text())
+        if init_dir and os.path.exists(os.path.dirname(init_dir)):
+            init_path = init_dir
+        else:
+            init_path = ""
+        file_path, _ = QFileDialog.getOpenFileName(self, title, init_path, filter_str)
         if file_path:
-            line_edit.setText(file_path)
+            line_edit.setText(os.path.normpath(file_path))
 
     def _on_browse_scan_folder(self):
-        dir_path = QFileDialog.getExistingDirectory(self, "Select Default Scan Folder", self.default_scan_folder.text())
+        from utils import expand_env_vars
+        init_dir = expand_env_vars(self.default_scan_folder.text())
+        dir_path = QFileDialog.getExistingDirectory(self, "Select Default Scan Folder", init_dir)
         if dir_path:
-            self.default_scan_folder.setText(dir_path)
+            self.default_scan_folder.setText(os.path.normpath(dir_path))
+
+    def _on_browse_presets_folder(self):
+        from utils import expand_env_vars
+        init_dir = expand_env_vars(self.presets_folder.text())
+        dir_path = QFileDialog.getExistingDirectory(self, "Select Presets Folder", init_dir)
+        if dir_path:
+            self.presets_folder.setText(os.path.normpath(dir_path))
 
     def _on_thumb_location_changed(self, text):
         is_custom_or_rel = text in ["Relative to Source Folder", "Custom"]
@@ -629,12 +676,14 @@ class PreferencesDialog(QDialog):
             "default_columns": self.default_cols.value(),
             "default_text_size": self.default_text_size.value(),
             "default_thumb_size": self.default_thumb_size.value(),
+            "timeout_seconds": self.timeout_seconds.value(),
             "age_source": self.age_source.currentText(),
             "label_allowed_chars": self.label_regex.text(),
             "detect_sequences": self.detect_sequences.isChecked(),
             "seq_thumb_frame": self.seq_thumb_frame.currentText(),
             "traypublisher_path": self.traypublisher_path.text(),
             "default_scan_folder": self.default_scan_folder.text(),
+            "presets_folder": self.presets_folder.text(),
             "product_name": self.product_name.text(),
             "product_name_camel": self.product_name_camel.isChecked(),
             "csv_delimiter": self.csv_delimiter.text(),
@@ -648,9 +697,11 @@ class PreferencesDialog(QDialog):
             "thumb_suffix": self.thumb_suffix.text(),
             "thumb_format": self.thumb_format.currentText(),
             "thumb_quality": self.thumb_quality.value(),
-            "cmd_stills": self.cmd_stills.toPlainText(),
-            "cmd_videos": self.cmd_videos.toPlainText(),
             "cmd_sequences": self.cmd_sequences.toPlainText(),
+            "run_thumb_after_scan": self.run_thumb_after_scan.isChecked(),
+            "run_review_after_scan": self.run_review_after_scan.isChecked(),
+            "skip_existing_thumbs": self.skip_existing_thumbs.isChecked(),
+            "skip_existing_reviews": self.skip_existing_reviews.isChecked(),
             "presets": presets,
             "extensions": extensions,
             "stills_start_frame": stills_start,

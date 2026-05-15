@@ -60,6 +60,8 @@ class AyonFilterProxy(QSortFilterProxyModel):
         return False
         
 class CheckableComboBox(QComboBox):
+    selection_changed = Signal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.view().viewport().installEventFilter(self)
@@ -68,27 +70,29 @@ class CheckableComboBox(QComboBox):
     def eventFilter(self, object, event):
         if object == self.view().viewport() and event.type() == QEvent.MouseButtonRelease:
             index = self.view().indexAt(event.pos())
-            item = self.model().itemFromIndex(index)
-            if item.checkState() == Qt.Checked:
-                item.setCheckState(Qt.Unchecked)
-            else:
-                item.setCheckState(Qt.Checked)
-            self._changed = True
-            return True
+            if index.isValid():
+                state = self.model().data(index, Qt.CheckStateRole)
+                new_state = Qt.Unchecked if state == Qt.Checked else Qt.Checked
+                self.model().setData(index, new_state, Qt.CheckStateRole)
+                self._changed = True
+                return True
         return super().eventFilter(object, event)
 
     def hidePopup(self):
         if self._changed:
             self._changed = False
-            self.activated.emit(self.currentIndex())
+            self.selection_changed.emit()
         super().hidePopup()
 
     def get_checked_items(self):
         checked = []
         for i in range(self.count()):
-            item = self.model().item(i)
-            if item.checkState() == Qt.Checked:
-                checked.append(item.text())
+            index = self.model().index(i, 0)
+            state = self.model().data(index, Qt.CheckStateRole)
+            if state in (Qt.Checked, Qt.CheckState.Checked, 2):
+                text = self.model().data(index, Qt.DisplayRole)
+                if text:
+                    checked.append(str(text))
         return checked
 
 class AyonPanel(QWidget):
@@ -101,11 +105,21 @@ class AyonPanel(QWidget):
     info_requested = Signal(str) # folder_id
     product_double_clicked = Signal(str, str, str, str) # (folder_path, task_name, task_type, variant)
     auto_assign_requested = Signal()
+    project_changed = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.layout = QVBoxLayout(self)
         self.layout.setContentsMargins(0, 0, 0, 0)
+
+        # Project Selection
+        project_layout = QHBoxLayout()
+        self.lbl_project = QLabel("Project:")
+        self.combo_project = QComboBox()
+        self.combo_project.setMinimumWidth(200)
+        self.combo_project.currentTextChanged.connect(self.project_changed.emit)
+        project_layout.addWidget(self.lbl_project)
+        project_layout.addWidget(self.combo_project, 1)
 
         # Buttons
         btn_layout = QHBoxLayout()
@@ -176,6 +190,7 @@ class AyonPanel(QWidget):
         self.top_container = QWidget()
         top_layout = QVBoxLayout(self.top_container)
         top_layout.setContentsMargins(0, 0, 0, 0)
+        top_layout.addLayout(project_layout)
         top_layout.addLayout(btn_layout)
         top_layout.addLayout(search_layout)
         top_layout.addLayout(extra_btn_layout)
@@ -203,7 +218,7 @@ class AyonPanel(QWidget):
         
         self.combo_product_types = CheckableComboBox()
         self.combo_product_types.setPlaceholderText("Filter types...")
-        self.combo_product_types.activated.connect(self._refresh_product_list)
+        self.combo_product_types.selection_changed.connect(self._refresh_product_list)
         self.product_layout.addWidget(self.combo_product_types)
         
         self.product_view = QTreeView()
@@ -221,6 +236,7 @@ class AyonPanel(QWidget):
         # Initial splitter sizes
         self.splitter.setStretchFactor(0, 3)
         self.splitter.setStretchFactor(1, 1)
+        self.splitter.setSizes([700, 300])
 
         # Unreachable Warning Label
         self.lbl_unreachable = QLabel("AYON Unreachable")
@@ -251,6 +267,17 @@ class AyonPanel(QWidget):
                 _recurse(item)
         _recurse(self.model.invisibleRootItem())
         return mapping
+
+    def set_projects(self, projects):
+        self.combo_project.blockSignals(True)
+        self.combo_project.clear()
+        self.combo_project.addItems(projects)
+        self.combo_project.blockSignals(False)
+
+    def set_current_project(self, project):
+        self.combo_project.blockSignals(True)
+        self.combo_project.setCurrentText(project)
+        self.combo_project.blockSignals(False)
 
     def set_hierarchy(self, root_folders):
         self.model.removeRows(0, self.model.rowCount())
@@ -452,12 +479,21 @@ class AyonPanel(QWidget):
         if not indexes: return
         
         source_idx = self.proxy.mapToSource(indexes[0])
-        item = self.model.itemFromIndex(source_idx)
+        first_col_index = self.model.index(source_idx.row(), 0, source_idx.parent())
+        item = self.model.itemFromIndex(first_col_index)
+        if not item: return
         data = item.data(Qt.UserRole)
         
-        if data and 'folderId' in data:
-            f_id = data.get('folderId')
-            self.info_requested.emit(f_id)
+        if data:
+            if 'folderId' in data:
+                f_id = data.get('folderId')
+            elif 'id' in data:
+                f_id = data.get('id')
+            else:
+                f_id = None
+                
+            if f_id:
+                self.info_requested.emit(f_id)
 
     def set_products(self, products):
         """Populate the product info list and types dropdown."""
@@ -467,10 +503,10 @@ class AyonPanel(QWidget):
         types = sorted(list(set(p['type'] for p in products)))
         self.combo_product_types.clear()
         for t in types:
-            item = QStandardItem(t)
-            item.setCheckable(True)
-            item.setCheckState(Qt.Checked)
-            self.combo_product_types.model().appendRow(item)
+            self.combo_product_types.addItem(t)
+            # Make the item checked
+            index = self.combo_product_types.model().index(self.combo_product_types.count() - 1, 0)
+            self.combo_product_types.model().setData(index, Qt.Checked, Qt.CheckStateRole)
             
         self._refresh_product_list()
 
@@ -597,3 +633,43 @@ class AyonPanel(QWidget):
             menu.addAction(select_action)
             
         menu.exec(self.tree.viewport().mapToGlobal(pos))
+
+    def select_path(self, folder_path, task_name=None):
+        """Programmatically select and scroll to a folder or task in the tree view."""
+        def _recurse(parent_item):
+            for row in range(parent_item.rowCount()):
+                item = parent_item.child(row, 0)
+                if not item: continue
+                
+                data = item.data(Qt.UserRole)
+                if data:
+                    is_task = "folderId" in data
+                    if is_task:
+                        if task_name and data.get("folder_path") == folder_path and data.get("name") == task_name:
+                            return item
+                    else:
+                        if not task_name and data.get("path") == folder_path:
+                            return item
+                
+                # Recurse children
+                res = _recurse(item)
+                if res:
+                    return res
+            return None
+
+        matched_item = _recurse(self.model.invisibleRootItem())
+        if matched_item:
+            src_idx = self.model.indexFromItem(matched_item)
+            proxy_idx = self.proxy.mapFromSource(src_idx)
+            if proxy_idx.isValid():
+                # Ensure parents are expanded all the way to the item
+                parent_idx = proxy_idx.parent()
+                while parent_idx.isValid():
+                    self.tree.expand(parent_idx)
+                    parent_idx = parent_idx.parent()
+                
+                self.tree.setCurrentIndex(proxy_idx)
+                self.tree.scrollTo(proxy_idx)
+                return True
+        return False
+

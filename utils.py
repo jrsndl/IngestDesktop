@@ -10,6 +10,13 @@ def generate_placeholder_thumbnail(size=150, color="#444444"):
     pixmap.fill(QColor(color))
     return pixmap
 
+def generate_placeholder_thumbnail_image(size=150, color="#444444"):
+    """Generate a solid color placeholder QImage."""
+    from PySide6.QtGui import QImage
+    image = QImage(size, size, QImage.Format_RGB32)
+    image.fill(QColor(color))
+    return image
+
 def get_version_from_name(filename, pattern=r"([._]v|v)(\d+)"):
     """
     Extract version number from filename using regex.
@@ -21,8 +28,11 @@ def get_version_from_name(filename, pattern=r"([._]v|v)(\d+)"):
         return int(match.groups()[-1])
     return 1
 
-def generate_thumbnail(image_path, size=150):
-    """Generate a thumbnail pixmap for the given image path."""
+def generate_thumbnail_image(image_path, size=150):
+    """Generate a scaled QImage for the given image path."""
+    import time
+    start_time = time.perf_counter()
+    print(f"[Timer] Starting to read thumbnail image for {os.path.basename(image_path)}...")
     reader = QImageReader(image_path)
     if not reader.canRead():
         return None
@@ -35,11 +45,30 @@ def generate_thumbnail(image_path, size=150):
     if image.isNull():
         return None
         
-    return QPixmap.fromImage(image)
+    elapsed = time.perf_counter() - start_time
+    print(f"[Timer] Reading thumbnail image for {os.path.basename(image_path)} took {elapsed:.4f} seconds.")
+    return image
+
+def generate_thumbnail(image_path, size=150):
+    """Generate a thumbnail pixmap for the given image path."""
+    import time
+    start_time = time.perf_counter()
+    print(f"[Timer] Starting to generate thumbnail pixmap for {os.path.basename(image_path)}...")
+    image = generate_thumbnail_image(image_path, size)
+    if not image or image.isNull():
+        return None
+        
+    pixmap = QPixmap.fromImage(image)
+    elapsed = time.perf_counter() - start_time
+    print(f"[Timer] Generating thumbnail pixmap for {os.path.basename(image_path)} took {elapsed:.4f} seconds.")
+    return pixmap
 
 def generate_video_thumbnail(video_path, ffmpeg_path, frame_mode="Middle", duration=None):
     """Generate a PNG thumbnail for a video file at the source path."""
     import subprocess
+    import time
+    print(f"[Timer] Starting to generate video thumbnail for {os.path.basename(video_path)}...")
+    start_time = time.perf_counter()
     if not ffmpeg_path or not os.path.exists(ffmpeg_path):
         return None
         
@@ -71,6 +100,8 @@ def generate_video_thumbnail(video_path, ffmpeg_path, frame_mode="Middle", durat
 
     try:
         subprocess.run(args, capture_output=True, check=True, creationflags=creationflags)
+        elapsed = time.perf_counter() - start_time
+        print(f"[Timer] Generating video thumbnail for {os.path.basename(video_path)} took {elapsed:.4f} seconds.")
         if os.path.exists(out_path):
             return out_path
     except Exception:
@@ -168,3 +199,30 @@ def calculate_thumbnail_time(nb_frames, framerate, mode="Middle"):
     
     total_seconds = float(hours * 3600 + minutes * 60 + seconds) + float(0.001 * miliseconds)
     return total_seconds
+
+import sys
+_ENV_CACHE = dict(os.environ)
+if getattr(sys, 'frozen', False):
+    app_dir = os.path.dirname(os.path.abspath(sys.executable))
+    resource_dir = getattr(sys, '_MEIPASS', app_dir)
+else:
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    resource_dir = app_dir
+
+_ENV_CACHE["IngestDesktop"] = app_dir
+_ENV_CACHE["IngestDesktopResources"] = resource_dir
+
+def expand_env_vars(path_str):
+    """
+    Expand environment variables present as ${variable_name}.
+    If the variable is not found in the environment, it is replaced by an empty string.
+    The environment variables are cached at app start for speedup.
+    """
+    if not path_str or not isinstance(path_str, str):
+        return path_str
+        
+    def replacer(match):
+        var_name = match.group(1)
+        return _ENV_CACHE.get(var_name, "")
+        
+    return re.sub(r'\$\{([^}]+)\}', replacer, path_str)

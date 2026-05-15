@@ -13,6 +13,11 @@ wheels/
 secrets.json
 .gemini/
 
+ffmpeg/
 ffmpeg/ffmpeg.exe
 
 ffmpeg/ffprobe.exe
+
+ffmpeg/ffmpeg.exe.old
+
+presets/
