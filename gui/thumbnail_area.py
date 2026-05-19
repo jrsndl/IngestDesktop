@@ -1554,7 +1554,7 @@ class ThumbnailArea(QWidget):
         vals["cols"] = self.slider_cols.value()
         
         # Use (0,0) as anchor for the main layout
-        self._apply_arrangement(visible_items, "grid", vals, anchor=(0, 0))
+        self._apply_arrangement(visible_items, "grid", vals, anchor=(0, 0), ignore_manual=True)
 
     def set_path_filter(self, path):
         self._path_filter = path
@@ -2018,8 +2018,12 @@ class ThumbnailArea(QWidget):
         self._arrange_dialog.raise_()
         self._arrange_dialog.activateWindow()
 
-    def _apply_arrangement(self, items, mode, vals, anchor=None):
+    def _apply_arrangement(self, items, mode, vals, anchor=None, ignore_manual=False):
         if not items: return
+        
+        if ignore_manual:
+            items = [item for item in items if not item.is_manually_moved]
+            if not items: return
         
         sort_by = vals.get("sort_by", "File Name")
         reverse = vals.get("reverse", False)

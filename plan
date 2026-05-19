@@ -364,7 +364,15 @@ Feature: User Centric preferences.
 * when User quits the app, app will save the preferences to the "Presets Folder"/users/username.json where username is the current user name takev from environment variable "USERNAME".
 * when User opens the app, app will first check if "Presets Folder"/users/username.json exists, and if yes, tries to load it. If the file doesn't exist, or is unreadable, app will load preferences from app folder as a fallback.
 
-Feature: Saving and loading Project
+Feature: Saving and loading Project:
+This allows to save the preferences (same as user preferences, project.json), as well as the state of the items. (save to yaml: project.yaml)
+* item positions in the Thumbnail view
+* item labels
+* item selections
+* versions (that were parsed and possibly user-edited)
+* item comments if user added
+* any Text notes
+* any Backdrops
 
 
 Add classic top menu to the main window:

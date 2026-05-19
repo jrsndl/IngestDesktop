@@ -295,6 +295,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         self._is_initializing = True
+        self.current_project_path = None
         super().__init__()
         self.setWindowTitle("IngestDesktop - AYON Pipeline Tool")
         self.resize(1200, 800)
@@ -557,7 +558,7 @@ class MainWindow(QMainWindow):
         
         act_open_project = QAction("&Open Project...", self)
         act_open_project.setShortcut("Ctrl+O")
-        act_open_project.triggered.connect(lambda: self.top_bar.btn_folder.click())
+        act_open_project.triggered.connect(self.perform_open_project)
         file_menu.addAction(act_open_project)
         
         self.recent_menu = file_menu.addMenu("Open Recent")
@@ -567,11 +568,11 @@ class MainWindow(QMainWindow):
         
         act_save_project = QAction("&Save Project...", self)
         act_save_project.setShortcut("Ctrl+S")
-        act_save_project.triggered.connect(self.save_config)
+        act_save_project.triggered.connect(self.perform_save_project)
         file_menu.addAction(act_save_project)
         
         act_save_project_as = QAction("Save Project As...", self)
-        act_save_project_as.triggered.connect(self.save_config)
+        act_save_project_as.triggered.connect(self.perform_save_project_as)
         file_menu.addAction(act_save_project_as)
         
         file_menu.addSeparator()
@@ -643,9 +644,268 @@ class MainWindow(QMainWindow):
             self.recent_menu.addAction(act)
 
     def perform_new_project(self):
+        self.current_project_path = None
         self.model.clear()
         self.top_bar.path_display.setText("")
         self.log_message("New project created. Select a folder to begin.")
+
+    def perform_save_project(self):
+        if self.current_project_path:
+            self.save_project_files(self.current_project_path)
+        else:
+            self.perform_save_project_as()
+
+    def perform_save_project_as(self):
+        from PySide6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Project As...", "", "IngestProject (*.yaml)"
+        )
+        if path:
+            self.save_project_files(path)
+
+    def save_project_files(self, yaml_path):
+        import yaml
+        self._gather_gui_state()
+        
+        project_data = {
+            "source_folder": self.top_bar.path_display.text(),
+            "items": [],
+            "text_notes": [],
+            "backdrops": []
+        }
+        
+        # Gather items
+        from PySide6.QtCore import QModelIndex
+        for item in self.model.items:
+            # Check if this item is selected in either the thumbnail view or table
+            is_selected = False
+            if hasattr(self, "thumb_area") and self.thumb_area:
+                thumb = self.thumb_area.item_to_thumb.get(item)
+                if thumb and thumb.isSelected():
+                    is_selected = True
+            if not is_selected and hasattr(self, "spreadsheet") and self.spreadsheet:
+                try:
+                    row = self.model.items.index(item)
+                    selection_model = self.spreadsheet.table.selectionModel()
+                    if selection_model and selection_model.isRowSelected(row, QModelIndex()):
+                        is_selected = True
+                except ValueError:
+                    pass
+                    
+            item_dict = {
+                "file_path": item.file_path,
+                "label": item.label,
+                "is_tagged": item.is_tagged,
+                "version": item.version,
+                "comment": item.comment,
+                "category": item.category,
+                "variant": item.variant,
+                "product_type": item.product_type,
+                "representation": item.representation,
+                "colorspace": item.colorspace,
+                "rep_tags": item.rep_tags,
+                "ayon_path": item.ayon_path,
+                "ayon_task_name": item.ayon_task_name,
+                "is_selected": is_selected,
+                "position": item.position,
+                "metadata": item.metadata
+            }
+            project_data["items"].append(item_dict)
+            
+        # Gather Text Notes and Backdrops
+        from gui.thumbnail_area import TextNoteItem, BackdropItem
+        for graphics_item in self.thumb_area.scene.items():
+            if isinstance(graphics_item, TextNoteItem):
+                note_dict = {
+                    "uuid": graphics_item.uuid,
+                    "x": graphics_item.pos().x(),
+                    "y": graphics_item.pos().y(),
+                    "width": graphics_item.width,
+                    "height": graphics_item.height,
+                    "bg_color": graphics_item.bg_color.name(),
+                    "text": graphics_item.text_item.toPlainText()
+                }
+                project_data["text_notes"].append(note_dict)
+            elif isinstance(graphics_item, BackdropItem):
+                bd_dict = {
+                    "uuid": graphics_item.uuid,
+                    "x": graphics_item.pos().x(),
+                    "y": graphics_item.pos().y(),
+                    "width": graphics_item.width,
+                    "height": graphics_item.height,
+                    "name": graphics_item.name,
+                    "label": graphics_item.label,
+                    "label_size": graphics_item.label_size,
+                    "label_color": graphics_item.label_color.name(),
+                    "label_bold": graphics_item.label_bold,
+                    "label_italic": graphics_item.label_italic,
+                    "label_strike": graphics_item.label_strike,
+                    "label_underline": graphics_item.label_underline,
+                    "label_alignment": graphics_item.label_alignment,
+                    "appearance": graphics_item.appearance,
+                    "border_color": graphics_item.border_color.name(),
+                    "fill_color": graphics_item.fill_color.name()
+                }
+                project_data["backdrops"].append(bd_dict)
+                
+        try:
+            with open(yaml_path, "w", encoding="utf-8") as f:
+                yaml.safe_dump(project_data, f, default_flow_style=False, sort_keys=False)
+                
+            # Save JSON preferences next to it
+            json_path = os.path.splitext(yaml_path)[0] + ".json"
+            clean_config = self.config.copy()
+            if "ayon_api_key" in clean_config:
+                del clean_config["ayon_api_key"]
+            if "thumbnails_per_row" in clean_config:
+                del clean_config["thumbnails_per_row"]
+                
+            with open(json_path, "w", encoding="utf-8") as f:
+                json.dump(clean_config, f, indent=4)
+                
+            self.current_project_path = yaml_path
+            self.log_message(f"Saved project successfully to {yaml_path}", "success")
+        except Exception as e:
+            self.log_message(f"Failed to save project: {e}", "error")
+
+    def perform_open_project(self):
+        from PySide6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Open Project...", "", "IngestProject (*.yaml)"
+        )
+        if not path:
+            return
+            
+        import yaml
+        try:
+            # 1. Look for and load corresponding JSON config
+            json_path = os.path.splitext(path)[0] + ".json"
+            if os.path.exists(json_path):
+                with open(json_path, "r", encoding="utf-8") as f:
+                    new_config = json.load(f)
+                
+                # Apply preferences
+                old_detect = self.config.get("detect_sequences")
+                old_thumb = self.config.get("seq_thumb_frame")
+                old_regex = self.config.get("version_regex")
+                old_exts = json.dumps(self.config.get("extensions", {}), sort_keys=True)
+                
+                self.config.update(new_config)
+                self._apply_preferences(
+                    self.config, self.secrets, old_detect, old_thumb, old_regex, old_exts,
+                    show_message=False, save=False
+                )
+                self._restore_gui_state()
+                
+            # 2. Read YAML project file
+            with open(path, "r", encoding="utf-8") as f:
+                project_data = yaml.safe_load(f)
+                
+            self.current_project_path = path
+            
+            # 3. Reconstruct items
+            from logic.image_model import ImageItem
+            reconstructed_items = []
+            
+            items_list = project_data.get("items", [])
+            for it in items_list:
+                item = ImageItem(
+                    file_path=it.get("file_path"),
+                    label=it.get("label"),
+                    version=it.get("version", 1),
+                    category=it.get("category", "Other"),
+                    variant=it.get("variant"),
+                    product_type=it.get("product_type"),
+                    representation=it.get("representation"),
+                    colorspace=it.get("colorspace"),
+                    rep_tags=it.get("rep_tags"),
+                    comment=it.get("comment", "")
+                )
+                # Populate additional parameters
+                item.is_tagged = it.get("is_tagged", True)
+                item.ayon_path = it.get("ayon_path", "")
+                item.ayon_task_name = it.get("ayon_task_name", "")
+                item.position = tuple(it.get("position", (0, 0)))
+                item.metadata = it.get("metadata", {})
+                
+                # Check for standard model keys
+                item.is_sequence = it.get("is_sequence", False)
+                item.conversion_thumb_path = it.get("conversion_thumb_path", "")
+                
+                # Keep selected flag
+                item.is_selected = it.get("is_selected", False)
+                
+                reconstructed_items.append(item)
+                
+            # Update Model
+            self.model.clear()
+            self.model.beginResetModel()
+            self.model.items = reconstructed_items
+            source_folder = project_data.get("source_folder", "")
+            self.model.source_folder = source_folder
+            self.top_bar.path_display.setText(source_folder)
+            self.model.endResetModel()
+            
+            # Now restore backdrops and text notes
+            from gui.thumbnail_area import TextNoteItem, BackdropItem
+            from PySide6.QtCore import QPointF
+            
+            # Recreate text notes
+            text_notes = project_data.get("text_notes", [])
+            for nt in text_notes:
+                pos = QPointF(nt.get("x", 0), nt.get("y", 0))
+                note = TextNoteItem(pos, nt.get("text", "New Note"))
+                note.uuid = nt.get("uuid", note.uuid)
+                note.width = nt.get("width", 400)
+                note.height = nt.get("height", 200)
+                note.bg_color = QColor(nt.get("bg_color", "#1e1e1e"))
+                self.thumb_area.scene.addItem(note)
+                
+            # Recreate backdrops
+            backdrops = project_data.get("backdrops", [])
+            for bd in backdrops:
+                from PySide6.QtCore import QRectF
+                rect = QRectF(bd.get("x", 0), bd.get("y", 0), bd.get("width", 300), bd.get("height", 300))
+                bd_data = {
+                    "name": bd.get("name", ""),
+                    "label": bd.get("label", ""),
+                    "label_size": bd.get("label_size", 200),
+                    "label_color": bd.get("label_color", "white"),
+                    "label_bold": bd.get("label_bold", True),
+                    "label_italic": bd.get("label_italic", False),
+                    "label_strike": bd.get("label_strike", False),
+                    "label_underline": bd.get("label_underline", False),
+                    "label_alignment": bd.get("label_alignment", "Top Left"),
+                    "appearance": bd.get("appearance", "Border"),
+                    "border_color": bd.get("border_color", "magenta"),
+                    "fill_color": bd.get("fill_color", "#282828")
+                }
+                backdrop = BackdropItem(rect, bd_data)
+                backdrop.uuid = bd.get("uuid", backdrop.uuid)
+                self.thumb_area.scene.addItem(backdrop)
+                
+            # Restore manual positions on reconstructed items in the scene
+            for item in self.model.items:
+                thumb = self.thumb_area.item_to_thumb.get(item)
+                if thumb:
+                    if item.position != (0, 0):
+                        thumb.setPos(item.position[0], item.position[1])
+                        thumb.is_manually_moved = True
+                    if item.is_selected:
+                        thumb.setSelected(True)
+                        
+            # Sync selection to table
+            self._sync_selection_to_table()
+            
+            # Sync right panel filter scene items
+            self._sync_scene_items_to_filter()
+            
+            # Re-run layout updates
+            self.thumb_area.rearrange_items()
+            
+            self.log_message(f"Successfully loaded project {path}", "success")
+        except Exception as e:
+            self.log_message(f"Failed to load project: {e}", "error")
 
     def _add_to_recent(self, path):
         recent = self.config.get("recent_folders", [])
