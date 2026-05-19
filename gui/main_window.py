@@ -2156,6 +2156,7 @@ class MainWindow(QMainWindow):
             
             # Sync to FilterPanel
             self.filter_panel.select_paths(selected_paths)
+            self._update_video_preview()
         finally:
             self._selection_lock = False
 
@@ -2230,6 +2231,7 @@ class MainWindow(QMainWindow):
             
             # Sync to FilterPanel
             self.filter_panel.select_paths(selected_paths)
+            self._update_video_preview()
         finally:
             self._selection_lock = False
 
@@ -2331,9 +2333,41 @@ class MainWindow(QMainWindow):
                 self.spreadsheet.table.selectionModel().select(selection, QItemSelectionModel.Select)
                 if first_idx:
                     self.spreadsheet.table.scrollTo(first_idx)
-                    
+            self._update_video_preview()
         finally:
             self._selection_lock = False
+
+    def _get_single_selected_item(self):
+        """Get the first selected ImageItem, if any."""
+        # 1. Check spreadsheet selection first
+        if hasattr(self, 'spreadsheet') and self.spreadsheet.table.selectionModel():
+            rows = self.spreadsheet.table.selectionModel().selectedRows()
+            if rows:
+                row = rows[0].row()
+                is_csv = self.spreadsheet._is_csv_mode
+                if is_csv:
+                    if row < len(self.csv_preview_model.tagged_items):
+                        return self.csv_preview_model.tagged_items[row]
+                else:
+                    if row < len(self.model.items):
+                        return self.model.items[row]
+                        
+        # 2. Check thumbnail selection as fallback
+        if hasattr(self, 'thumb_area') and self.thumb_area.scene:
+            selected_items = self.thumb_area.scene.selectedItems()
+            if selected_items:
+                from gui.thumbnail_area import ThumbnailItem
+                # Try to find a ThumbnailItem
+                for it in selected_items:
+                    if isinstance(it, ThumbnailItem):
+                        return it.data
+                    
+        return None
+
+    def _update_video_preview(self):
+        """Forward selection updates to the thumbnail overlay player."""
+        if hasattr(self, 'thumb_area'):
+            self.thumb_area.update_video_overlay_geometry()
 
     def _on_select_all(self):
         """Contextual Select All based on mouse hover."""
@@ -2591,6 +2625,8 @@ class MainWindow(QMainWindow):
         self.config["geometry"] = self.saveGeometry().toHex().data().decode()
         self.config["h_splitter"] = self.h_splitter.saveState().toHex().data().decode()
         self.config["v_splitter"] = self.v_splitter.saveState().toHex().data().decode()
+        if hasattr(self, 'center_top_splitter'):
+            self.config["center_top_splitter"] = self.center_top_splitter.saveState().toHex().data().decode()
         
         self.save_config()
         super().closeEvent(event)

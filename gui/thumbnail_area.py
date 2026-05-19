@@ -541,6 +541,18 @@ class ThumbnailItem(QGraphicsObject):
         self.setCacheMode(QGraphicsItem.NoCache)
         self.tooltip_templates = {}
 
+    def itemChange(self, change, value):
+        if change in (QGraphicsItem.ItemPositionHasChanged, QGraphicsItem.ItemTransformHasChanged):
+            if self.scene():
+                for view in self.scene().views():
+                    parent = view.parent()
+                    while parent:
+                        if hasattr(parent, "update_video_overlay_geometry"):
+                            parent.update_video_overlay_geometry()
+                            break
+                        parent = parent.parent()
+        return super().itemChange(change, value)
+
     def update_tooltip(self, templates, model):
         self.tooltip_templates = templates
         if not templates or not model:
@@ -586,6 +598,45 @@ class ThumbnailItem(QGraphicsObject):
             label_area = line_height * 3.5 + 10
             
         return QRectF(0, 0, self.size + 20, thumb_h + 20 + label_area)
+
+    def get_image_rect(self):
+        """Get the QRectF of the drawn thumbnail image in item coordinates."""
+        show_text = getattr(self.scene(), "show_labels", True) if self.scene() else True
+        label_area = 0
+        if show_text:
+            font_size = getattr(self, 'font_size', 10)
+            line_height = font_size * 1.5
+            label_area = line_height * 3.5 + 10
+
+        br = self.boundingRect()
+        full_h = br.height() - label_area - 10
+        rect = QRectF(5, 5, br.width() - 10, full_h)
+        
+        pixmap = self.data.thumbnail
+        if pixmap:
+            scaled = pixmap.size()
+            scaled.scale(rect.size().toSize(), Qt.KeepAspectRatio)
+            thumb_rect = QRectF(0, 0, scaled.width(), scaled.height())
+        else:
+            w = self.data.metadata.get("width", 1)
+            h = self.data.metadata.get("height", 1)
+            try:
+                fw = float(w) if w is not None else 1.0
+                fh = float(h) if h is not None else 1.0
+                aspect = fw / fh if fh > 0 else 1.0
+            except (ValueError, TypeError):
+                aspect = 1.0
+            
+            if aspect > (rect.width() / rect.height()):
+                nw = rect.width()
+                nh = nw / aspect
+            else:
+                nh = rect.height()
+                nw = nh * aspect
+            thumb_rect = QRectF(0, 0, nw, nh)
+
+        thumb_rect.moveCenter(rect.center())
+        return thumb_rect
 
     def paint(self, painter, option, widget):
         painter.save()
@@ -1082,7 +1133,7 @@ class ArrangeDialog(QDialog):
         sort_layout = QHBoxLayout()
         sort_layout.addWidget(QLabel("Sort By:"))
         self.combo_sort = QComboBox()
-        self.combo_sort.addItems(["File Name", "Label", "Version", "File Size", "Width", "Height", "Age"])
+        self.combo_sort.addItems(["File Name", "Label", "Version", "File Size", "Width", "Height", "Age", "File Type"])
         idx = self.combo_sort.findText(init_sort)
         if idx >= 0: self.combo_sort.setCurrentIndex(idx)
         self.combo_sort.currentIndexChanged.connect(self._emit_changed)
@@ -1298,6 +1349,7 @@ class ThumbnailArea(QWidget):
         self.view.setScene(self.scene)
         self.scene.show_labels = True
         self.scene.selectionChanged.connect(self._on_scene_selection_changed)
+        self.scene.changed.connect(lambda rects: self.update_video_overlay_geometry())
         self.view.setBackgroundBrush(QColor("#1e1e1e"))
         self.view.setDragMode(QGraphicsView.RubberBandDrag)
         self.view.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
@@ -1319,6 +1371,15 @@ class ThumbnailArea(QWidget):
         self.inline_editor = QLineEdit(self.view.viewport())
         self.inline_editor.setAlignment(Qt.AlignCenter)
         self.inline_editor.hide()
+        
+        # Instantiate overlay video player directly on top of viewport
+        from gui.video_player import VideoPlayerOverlay
+        self.video_player = VideoPlayerOverlay(self.view.viewport())
+        self.video_player.hide()
+        
+        # Connect view scrollbars to update video overlay position on the fly
+        self.view.horizontalScrollBar().valueChanged.connect(self.update_video_overlay_geometry)
+        self.view.verticalScrollBar().valueChanged.connect(self.update_video_overlay_geometry)
         
         # Add character validation: A-Z, a-z, 0-9, -, _, ., space
         # regex = QRegularExpression("^[a-zA-Z0-9_\\-\\.\\s]*$")
@@ -1398,10 +1459,52 @@ class ThumbnailArea(QWidget):
             if tip:
                 QToolTip.showText(self._last_tooltip_pos, tip, self.view)
 
+    def update_video_overlay_geometry(self):
+        """Position and size the video player overlay perfectly over the selected thumbnail image."""
+        if not hasattr(self, 'video_player'):
+            return
+            
+        selected = self.scene.selectedItems()
+        selected_thumb = None
+        for it in selected:
+            if isinstance(it, ThumbnailItem) and it.isVisible():
+                selected_thumb = it
+                break
+                
+        if not selected_thumb or not self.model:
+            self.video_player.clear_video()
+            return
+            
+        # Check if selected item has a playable video
+        item_data = selected_thumb.data
+        video_path = None
+        if item_data.file_path.lower().endswith(".mp4"):
+            video_path = item_data.file_path
+        else:
+            try:
+                review_path = self.model._get_prefs_review_path(item_data)
+                if review_path and os.path.exists(review_path) and review_path.lower().endswith(".mp4"):
+                    video_path = review_path
+            except Exception:
+                pass
+                
+        if not video_path or not os.path.exists(video_path):
+            self.video_player.clear_video()
+            return
+            
+        # Map thumbnail drawing rect (get_image_rect) to viewport coordinates
+        image_rect_scene = selected_thumb.mapToScene(selected_thumb.get_image_rect()).boundingRect()
+        viewport_rect = self.view.mapFromScene(image_rect_scene).boundingRect()
+        
+        # Position and play
+        self.video_player.setGeometry(viewport_rect)
+        self.video_player.load_video(video_path, item_data.filename)
+
     def _on_scene_selection_changed(self):
         self._has_selection = bool(self.scene.selectedItems())
         self.scene.update()
         self._update_note_toolbar()
+        self.update_video_overlay_geometry()
 
     def _update_note_toolbar(self):
         selected = self.scene.selectedItems()
@@ -1555,6 +1658,7 @@ class ThumbnailArea(QWidget):
         
         # Use (0,0) as anchor for the main layout
         self._apply_arrangement(visible_items, "grid", vals, anchor=(0, 0), ignore_manual=True)
+        self.update_video_overlay_geometry()
 
     def set_path_filter(self, path):
         self._path_filter = path
@@ -1581,6 +1685,7 @@ class ThumbnailArea(QWidget):
             item.font_size = font_size
             item.cached_label = ""
             item.update()
+        self.update_video_overlay_geometry()
 
     def update_thumb_size(self):
         new_size = self.slider_thumb_size.value()
@@ -1588,6 +1693,7 @@ class ThumbnailArea(QWidget):
             item.prepareGeometryChange()
             item.size = new_size
             item.update()
+        self.update_video_overlay_geometry()
 
     def _update_paste_button_state(self):
         from PySide6.QtWidgets import QApplication
@@ -1626,6 +1732,10 @@ class ThumbnailArea(QWidget):
         if event.type() == QEvent.Enter:
             self.view.setFocus()
             
+        if event.type() == QEvent.Resize:
+            if source in (self.view, self.view.viewport()):
+                QTimer.singleShot(1, self.update_video_overlay_geometry)
+            
         if event.type() == QEvent.Wheel:
             if source in (self.view, self.view.viewport()):
                 self.view.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
@@ -1633,6 +1743,7 @@ class ThumbnailArea(QWidget):
                 factor = 1.15 if angle > 0 else 1 / 1.15
                 self.view.scale(factor, factor)
                 self.update_zoom_indicator()
+                self.update_video_overlay_geometry()
                 return True # Prevent default scrolling/panning
         
         if event.type() == QEvent.MouseMove:
@@ -1642,7 +1753,7 @@ class ThumbnailArea(QWidget):
                 self._tooltip_timer.start(300) # 300ms delay
                 self._last_tooltip_pos = event.globalPos()
                 self._last_tooltip_local_pos = event.pos()
-
+  
                 if self._is_panning:
                     delta = event.pos() - self._last_pan_pos
                     self._last_pan_pos = event.pos()
@@ -1650,6 +1761,7 @@ class ThumbnailArea(QWidget):
                     self.view.setTransformationAnchor(QGraphicsView.NoAnchor)
                     factor = self.view.transform().m11()
                     self.view.translate(delta.x() / factor, delta.y() / factor)
+                    self.update_video_overlay_geometry()
                     return True
 
         if event.type() == QEvent.Leave:
@@ -2044,6 +2156,9 @@ class ThumbnailArea(QWidget):
                 try: return int(d.metadata.get("height", 0))
                 except: return 0
             if sort_by == "Age": return d.modification_time
+            if sort_by == "File Type":
+                _, ext = os.path.splitext(d.file_path.lower())
+                return ext
             return 0
 
         items = sorted(items, key=sort_key, reverse=reverse)
