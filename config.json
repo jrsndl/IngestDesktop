@@ -282,7 +282,7 @@
     "last_ayon_project": "BCV_009_JA_Hiphi",
     "filter_toggles": {
         "files_only": true,
-        "flat": false,
+        "flat": true,
         "v_stack": false,
         "sequences": true
     },
@@ -298,10 +298,10 @@
     "filter_age_value": 0,
     "filter_age_units": "minutes",
     "filter_files_only": true,
-    "filter_flat": false,
+    "filter_flat": true,
     "filter_v_stack": false,
     "filter_sequences": true,
-    "thumbnail_size": 2048,
+    "thumbnail_size": 248,
     "geometry": "01d9d0cb00030000fffff600fffffff8ffffffff0000059ffffff63f000000cbfffffe43000003ea00000001020000000a00fffff60000000017ffffffff0000059f",
     "h_splitter": "000000ff000000010000000300000105000007650000018201ffffffff010000000100",
     "v_splitter": "000000ff0000000100000002000008b8000000ea01ffffffff010000000200",
@@ -315,6 +315,5 @@
         "C:/Users/robur/Desktop/2ayon",
         "C:\\Users\\robur\\Downloads\\IngestDesktop_260518",
         "C:/Users/robur/Desktop/2ayon/sparks_020_pl01"
-    ],
-    "center_top_splitter": "000000ff000000010000000200002d000000011e01ffffffff010000000100"
+    ]
 }

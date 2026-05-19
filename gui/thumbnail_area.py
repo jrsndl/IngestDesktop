@@ -1488,6 +1488,37 @@ class ThumbnailArea(QWidget):
             except Exception:
                 pass
                 
+            # Sequence video fallback search
+            if not video_path:
+                try:
+                    from utils import strip_sequence_counter
+                    base_dir = os.path.dirname(item_data.file_path)
+                    name_no_ext, _ = os.path.splitext(item_data.filename)
+                    base_seq_name = strip_sequence_counter(name_no_ext)
+                    
+                    possible_dirs = [
+                        base_dir,
+                        os.path.join(base_dir, "_reviews"),
+                        os.path.join(base_dir, "reviews"),
+                    ]
+                    possible_basenames = [
+                        base_seq_name,
+                        f"{base_seq_name}_review",
+                        f"{base_seq_name}_review_converted"
+                    ]
+                    
+                    for p_dir in possible_dirs:
+                        if os.path.exists(p_dir):
+                            for p_base in possible_basenames:
+                                test_path = os.path.join(p_dir, f"{p_base}.mp4").replace("\\", "/")
+                                if os.path.exists(test_path):
+                                    video_path = test_path
+                                    break
+                        if video_path:
+                            break
+                except Exception:
+                    pass
+                
         if not video_path or not os.path.exists(video_path):
             self.video_player.clear_video()
             return
