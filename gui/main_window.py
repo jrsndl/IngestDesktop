@@ -441,7 +441,7 @@ class MainWindow(QMainWindow):
         toggles = self.config.get("filter_toggles", {})
         self.filter_panel.set_toggle_states(toggles)
         
-        self.filter_panel.tree.selectionModel().selectionChanged.connect(self._sync_selection_from_filter)
+        self._connect_filter_selection_signal()
         self.filter_panel.rename_to_label_requested.connect(self._on_rename_to_label_requested)
         self.filter_panel.delete_scene_items_requested.connect(self._on_filter_delete_scene_items)
         self.filter_panel.edit_scene_item_requested.connect(self._on_filter_edit_scene_item)
@@ -706,6 +706,8 @@ class MainWindow(QMainWindow):
                 "rep_tags": item.rep_tags,
                 "ayon_path": item.ayon_path,
                 "ayon_task_name": item.ayon_task_name,
+                "conversion_thumb_path": item.conversion_thumb_path,
+                "is_sequence": item.is_sequence,
                 "is_selected": is_selected,
                 "position": item.position,
                 "metadata": item.metadata
@@ -723,7 +725,9 @@ class MainWindow(QMainWindow):
                     "width": graphics_item.width,
                     "height": graphics_item.height,
                     "bg_color": graphics_item.bg_color.name(),
-                    "text": graphics_item.text_item.toPlainText()
+                    "text": graphics_item.text_item.toPlainText(),
+                    "html": graphics_item.text_item.toHtml(),
+                    "default_text_color": graphics_item.text_item.defaultTextColor().name()
                 }
                 project_data["text_notes"].append(note_dict)
             elif isinstance(graphics_item, BackdropItem):
@@ -805,8 +809,11 @@ class MainWindow(QMainWindow):
             
             # 3. Reconstruct items
             from logic.image_model import ImageItem
+            from PySide6.QtGui import QPixmap
+            from utils import generate_thumbnail_image, generate_placeholder_thumbnail_image
             reconstructed_items = []
             
+            thumb_size = self.config.get("thumbnail_size", 150)
             items_list = project_data.get("items", [])
             for it in items_list:
                 item = ImageItem(
@@ -835,8 +842,36 @@ class MainWindow(QMainWindow):
                 # Keep selected flag
                 item.is_selected = it.get("is_selected", False)
                 
+                # Load thumbnail image
+                thumb_source = item.file_path
+                if item.conversion_thumb_path and os.path.exists(item.conversion_thumb_path):
+                    thumb_source = item.conversion_thumb_path
+                elif item.category.lower().startswith("video"):
+                    sidecar = item.file_path + "_thumbnail.png"
+                    if os.path.exists(sidecar):
+                        thumb_source = sidecar
+                    else:
+                        thumb_source = None
+                elif item.is_sequence:
+                    thumb_source = item.metadata.get("seq_thumbnail_path", item.file_path)
+                
+                if thumb_source and os.path.exists(thumb_source):
+                    qimage = generate_thumbnail_image(thumb_source, thumb_size)
+                    if qimage:
+                        item.thumbnail = QPixmap.fromImage(qimage)
+                        
+                if not item.thumbnail:
+                    # Gray placeholder
+                    qimage = generate_placeholder_thumbnail_image(thumb_size, "#555555")
+                    if qimage:
+                        item.thumbnail = QPixmap.fromImage(qimage)
+                
                 reconstructed_items.append(item)
                 
+            # Save the loaded positions and selection states before resetting the model
+            saved_positions = {it.file_path: it.position for it in reconstructed_items}
+            saved_selections = {it.file_path: it.is_selected for it in reconstructed_items}
+
             # Update Model
             self.model.clear()
             self.model.beginResetModel()
@@ -859,6 +894,16 @@ class MainWindow(QMainWindow):
                 note.width = nt.get("width", 400)
                 note.height = nt.get("height", 200)
                 note.bg_color = QColor(nt.get("bg_color", "#1e1e1e"))
+                
+                # Restore HTML rich text and default colors if present
+                if "html" in nt:
+                    note.text_item.setHtml(nt["html"])
+                if "default_text_color" in nt:
+                    note.text_item.setDefaultTextColor(QColor(nt["default_text_color"]))
+                
+                # Apply restored size to text item wrapping
+                note.text_item.setTextWidth(note.width - 20)
+                
                 self.thumb_area.scene.addItem(note)
                 
             # Recreate backdrops
@@ -884,15 +929,19 @@ class MainWindow(QMainWindow):
                 backdrop.uuid = bd.get("uuid", backdrop.uuid)
                 self.thumb_area.scene.addItem(backdrop)
                 
-            # Restore manual positions on reconstructed items in the scene
+            # Restore manual positions on reconstructed items in the scene using saved states
             for item in self.model.items:
                 thumb = self.thumb_area.item_to_thumb.get(item)
                 if thumb:
-                    if item.position != (0, 0):
-                        thumb.setPos(item.position[0], item.position[1])
+                    pos = saved_positions.get(item.file_path)
+                    if pos is not None:
+                        item.position = pos
+                        thumb.setPos(pos[0], pos[1])
                         thumb.is_manually_moved = True
-                    if item.is_selected:
-                        thumb.setSelected(True)
+                    
+                    is_sel = saved_selections.get(item.file_path, False)
+                    item.is_selected = is_sel
+                    thumb.setSelected(is_sel)
                         
             # Sync selection to table
             self._sync_selection_to_table()
@@ -924,23 +973,16 @@ class MainWindow(QMainWindow):
         
         username = os.environ.get("USERNAME", "default_user")
         
-        # Check both presets/user/username.json and presets/users/username.json
-        path_options = [
-            os.path.join("presets", "user", f"{username}.json"),
-            os.path.join("presets", "users", f"{username}.json"),
-        ]
-        
+        path = os.path.join("presets", "users", f"{username}.json")
         user_config_loaded = False
-        for path in path_options:
-            if os.path.exists(path):
-                try:
-                    with open(path, "r") as f:
-                        config = json.load(f)
-                    print(f"[Prefs] Loaded user-centric preferences for '{username}' from {path}")
-                    user_config_loaded = True
-                    break
-                except Exception as e:
-                    print(f"[Prefs] Error loading user preset from {path}: {e}")
+        if os.path.exists(path):
+            try:
+                with open(path, "r") as f:
+                    config = json.load(f)
+                print(f"[Prefs] Loaded user-centric preferences for '{username}' from {path}")
+                user_config_loaded = True
+            except Exception as e:
+                print(f"[Prefs] Error loading user preset from {path}: {e}")
                     
         if not user_config_loaded:
             try:
@@ -1055,6 +1097,7 @@ class MainWindow(QMainWindow):
         self.scanner.finished.connect(self._on_scan_finished)
         self.scanner.item_updated.connect(self.model.update_item)
         self.scanner.status_text.connect(lambda txt: self.statusBar().showMessage(txt))
+        self.scanner.log.connect(self.log_message)
         self.scanner.start()
         self._add_to_recent(directory)
         
@@ -1225,6 +1268,7 @@ class MainWindow(QMainWindow):
         )
         self.scanner.finished.connect(self._on_rescan_finished)
         self.scanner.item_updated.connect(self.model.update_item)
+        self.scanner.log.connect(self.log_message)
         self.scanner.start()
 
     def _on_rescan_finished(self, items):
@@ -1710,16 +1754,14 @@ class MainWindow(QMainWindow):
         import os
         username = os.environ.get("USERNAME", "default_user")
         
-        # Save to both user and users subdirectories for perfect backward/forward compatibility
-        for sub_dir in ["user", "users"]:
-            users_dir = os.path.join(presets_folder, sub_dir)
-            if not os.path.exists(users_dir):
-                try:
-                    os.makedirs(users_dir, exist_ok=True)
-                except Exception as e:
-                    print(f"Error creating user presets directory {users_dir}: {e}")
-                    continue
-            
+        users_dir = os.path.join(presets_folder, "users")
+        if not os.path.exists(users_dir):
+            try:
+                os.makedirs(users_dir, exist_ok=True)
+            except Exception as e:
+                print(f"Error creating user presets directory {users_dir}: {e}")
+        
+        if os.path.exists(users_dir):
             user_pref_path = os.path.join(users_dir, f"{username}.json")
             try:
                 with open(user_pref_path, "w") as f:
@@ -2120,6 +2162,14 @@ class MainWindow(QMainWindow):
     def _save_filter_toggles(self):
         self.config["filter_toggles"] = self.filter_panel.get_toggle_states()
         self.save_config()
+        self._connect_filter_selection_signal()
+
+    def _connect_filter_selection_signal(self):
+        try:
+            self.filter_panel.tree.selectionModel().selectionChanged.disconnect(self._sync_selection_from_filter)
+        except (RuntimeError, TypeError):
+            pass
+        self.filter_panel.tree.selectionModel().selectionChanged.connect(self._sync_selection_from_filter)
 
     def _on_filter_sequences_toggled(self, enabled):
         if self.config.get("detect_sequences") == enabled:
@@ -2190,6 +2240,7 @@ class MainWindow(QMainWindow):
         # Get selected paths from tree
         selected_indexes = self.filter_panel.tree.selectionModel().selectedIndexes()
         paths = set()
+        is_csv = self.spreadsheet._is_csv_mode
         for idx in selected_indexes:
             if idx.column() == 0:
                 source_idx = self.filter_panel.proxy.mapToSource(idx)
@@ -2204,7 +2255,16 @@ class MainWindow(QMainWindow):
                 
                 if path:
                     is_path_model = hasattr(source_model, "filePath")
-                    if isinstance(path, str) and (is_path_model or os.path.isabs(path) or os.path.exists(path)):
+                    is_known_item_path = False
+                    if isinstance(path, str):
+                        norm_p = os.path.normpath(os.path.abspath(path)).lower()
+                        items_list = self.csv_preview_model.tagged_items if is_csv else self.model.items
+                        for it in items_list:
+                            if os.path.normpath(os.path.abspath(it.file_path)).lower() == norm_p:
+                                is_known_item_path = True
+                                break
+                    
+                    if isinstance(path, str) and (is_path_model or os.path.isabs(path) or os.path.exists(path) or is_known_item_path):
                         paths.add(os.path.normpath(os.path.abspath(path)))
                     elif not isinstance(path, dict):
                         # Use only hashable IDs (ints/strings)
@@ -2215,7 +2275,6 @@ class MainWindow(QMainWindow):
         
         if not paths: return
         
-
         self._selection_lock = True
         try:
             # 1. Sync to Table
@@ -2234,11 +2293,13 @@ class MainWindow(QMainWindow):
             
             for i, item in enumerate(items_list):
                 item_abs = os.path.normpath(os.path.abspath(item.file_path))
+                item_abs_lower = item_abs.lower()
                 is_selected = False
                 for p in paths:
                     # Only compare strings as paths
                     if isinstance(p, str):
-                        if item_abs == p or item_abs.startswith(p + os.sep):
+                        p_lower = p.lower()
+                        if item_abs_lower == p_lower or item_abs_lower.startswith(p_lower + os.sep):
                             is_selected = True
                             break
                 

@@ -483,9 +483,16 @@ class FilterPanel(QWidget):
             if hasattr(model, "rootPath"): # QFileSystemModel
                 source_idx = model.index(norm_p)
             else: # QStandardItemModel
+                norm_p_lower = norm_p.lower() if isinstance(norm_p, str) else norm_p
                 for row in range(model.rowCount()):
                     idx = model.index(row, 0)
-                    if idx.data(Qt.UserRole) == norm_p:
+                    val = idx.data(Qt.UserRole)
+                    if isinstance(val, str):
+                        val_norm = os.path.normpath(os.path.abspath(val)).lower()
+                        if val_norm == norm_p_lower:
+                            source_idx = idx
+                            break
+                    elif val == norm_p:
                         source_idx = idx
                         break
                         

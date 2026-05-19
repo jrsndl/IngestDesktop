@@ -16,6 +16,7 @@ class ImageScanner(QThread):
     finished = Signal(list)
     item_updated = Signal(object)
     canceled = Signal()
+    log = Signal(str)
 
     def __init__(self, directory, recursive=True, version_regex="_v(\\d+)", 
                  thumbnail_size=150, age_source="Modification Date",
@@ -333,6 +334,7 @@ class ImageScanner(QThread):
         elapsed = time.perf_counter() - start_time
         print(f"[Timer] Scan files took {elapsed:.4f} seconds.")
         self.status_text.emit(f"Scan files took {elapsed:.4f} seconds.")
+        self.log.emit(f"[Timer] Scan files took {elapsed:.4f} seconds.")
         
         self.finished.emit(final_items)
         
@@ -408,6 +410,7 @@ class ImageScanner(QThread):
         meta_elapsed = time.perf_counter() - meta_start_time
         print(f"[Timer] Metadata fetching took {meta_elapsed:.4f} seconds.")
         self.status_text.emit(f"Metadata fetching took {meta_elapsed:.4f} seconds.")
+        self.log.emit(f"[Timer] Metadata fetching took {meta_elapsed:.4f} seconds.")
 
     def _fill_metadata(self, item, file_path):
         """Helper to fill common metadata for an item."""
@@ -612,7 +615,7 @@ class ThumbnailConversionWorker(QThread):
         elapsed = time.perf_counter() - start_time
         print(f"[Timer] Thumbnail generation took {elapsed:.4f} seconds.")
         self.status_text.emit(f"Thumbnail generation took {elapsed:.4f} seconds.")
-        self.log.emit(f"Thumbnail generation took {elapsed:.4f} seconds.")
+        self.log.emit(f"[Timer] Thumbnail generation took {elapsed:.4f} seconds.")
         self.finished.emit()
 
 class ReviewConversionWorker(QThread):
