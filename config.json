@@ -278,7 +278,7 @@
     "item_info_sequences": "SEQUENCE\n{ayon_folder_path}/{ayon_task_name}\n{metadata.width}x{metadata.height} length={metadata.nb_frames}\n{prefs_thumb_path}",
     "item_info_videos": "VIDEO\n{ayon_folder_path}/{ayon_task_name}\n{metadata.width}x{metadata.height}, ln={metadata.nb_frames}\ntc={metadata.timecode} {frame_start}-{frame_end}\n{prefs_thumb_path}",
     "item_info_other": "OTHER\n{ayon_folder_path}/{task_name}\n",
-    "active_preset": "jedenact",
+    "active_preset": "dvanact",
     "last_ayon_project": "BCV_009_JA_Hiphi",
     "filter_toggles": {
         "files_only": true,
@@ -302,17 +302,18 @@
     "filter_v_stack": false,
     "filter_sequences": true,
     "thumbnail_size": 248,
+    "last_source_folder": "D:/2ayon",
     "geometry": "01d9d0cb00030000fffff600fffffff8ffffffff0000059ffffff63f000000cbfffffd20000003ea00000001020000000a00fffff60000000017ffffffff0000059f",
     "h_splitter": "000000ff000000010000000300000105000006b80000022f01ffffffff010000000100",
     "v_splitter": "000000ff0000000100000002000008b8000000ea01ffffffff010000000200",
     "recent_folders": [
         "D:/2ayon",
+        "D:/_footage",
         "D:/3ayon1",
         "D:/3ayon1/sparks_020_pl01",
         "C:\\Users\\robur\\Downloads\\IngestDesktop_260519",
         "C:/Users/robur/Desktop/2ayon",
         "C:\\Users\\robur\\Downloads\\IngestDesktop_260518",
         "C:/Users/robur/Desktop/2ayon/sparks_020_pl01"
-    ],
-    "last_source_folder": ""
+    ]
 }

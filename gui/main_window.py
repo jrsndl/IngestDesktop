@@ -294,6 +294,7 @@ class MainWindow(QMainWindow):
     log_signal = Signal(str, str) # (message, level)
 
     def __init__(self):
+        self._is_initializing = True
         super().__init__()
         self.setWindowTitle("IngestDesktop - AYON Pipeline Tool")
         self.resize(1200, 800)
@@ -510,7 +511,8 @@ class MainWindow(QMainWindow):
                                self.config.get("seq_thumb_frame", "Middle"),
                                self.config.get("version_regex", ""),
                                json.dumps(self.config.get("extensions", {}), sort_keys=True),
-                               show_message=False)
+                               show_message=False,
+                               save=False)
 
         # 6. Select All Shortcut
         self.shortcut_all = QShortcut(QKeySequence("Ctrl+A"), self)
@@ -659,27 +661,36 @@ class MainWindow(QMainWindow):
         print("[Timer] Starting to read preferences...")
         start_time = time.perf_counter()
         config = {}
-        try:
-            if os.path.exists("config.json"):
-                with open("config.json", "r") as f:
-                    config = json.load(f)
-        except Exception as e:
-            print(f"Error loading config: {e}")
-            
-        active_preset = config.get("active_preset", "")
-        presets_folder = config.get("presets_folder")
-        if presets_folder and active_preset:
-            username = os.environ.get("USERNAME", "default_user")
-            user_pref_path = os.path.join(presets_folder, "users", f"{username}.json")
-            if os.path.exists(user_pref_path):
+        
+        username = os.environ.get("USERNAME", "default_user")
+        
+        # Check both presets/user/username.json and presets/users/username.json
+        path_options = [
+            os.path.join("presets", "user", f"{username}.json"),
+            os.path.join("presets", "users", f"{username}.json"),
+        ]
+        
+        user_config_loaded = False
+        for path in path_options:
+            if os.path.exists(path):
                 try:
-                    with open(user_pref_path, "r") as f:
-                        user_config = json.load(f)
-                        config.update(user_config)
-                        print(f"[Prefs] Loaded user-centric preferences for '{username}' from {user_pref_path}")
+                    with open(path, "r") as f:
+                        config = json.load(f)
+                    print(f"[Prefs] Loaded user-centric preferences for '{username}' from {path}")
+                    user_config_loaded = True
+                    break
                 except Exception as e:
-                    print(f"[Prefs] Error loading user-centric preferences: {e}")
+                    print(f"[Prefs] Error loading user preset from {path}: {e}")
                     
+        if not user_config_loaded:
+            try:
+                if os.path.exists("config.json"):
+                    with open("config.json", "r") as f:
+                        config = json.load(f)
+                    print("[Prefs] Loaded default config.json from app root.")
+            except Exception as e:
+                print(f"Error loading config.json: {e}")
+                
         self.load_prefs_elapsed = time.perf_counter() - start_time
         print(f"[Timer] Reading preferences took {self.load_prefs_elapsed:.4f} seconds.")
         return config
@@ -720,6 +731,8 @@ class MainWindow(QMainWindow):
 
         # Async AYON Load
         self.refresh_ayon_async()
+        
+        self._is_initializing = False
 
         from utils import expand_env_vars
         last_folder = self.config.get("last_source_folder")
@@ -1200,7 +1213,7 @@ class MainWindow(QMainWindow):
             new_config, new_secrets = dialog.get_settings()
             self._apply_preferences(new_config, new_secrets, old_detect, old_thumb, old_regex, old_exts, show_message=True)
 
-    def _apply_preferences(self, new_config, new_secrets, old_detect, old_thumb, old_regex, old_exts, show_message=True):
+    def _apply_preferences(self, new_config, new_secrets, old_detect, old_thumb, old_regex, old_exts, show_message=True, save=True):
         self.config.update(new_config)
         self.secrets.update(new_secrets)
         
@@ -1225,8 +1238,9 @@ class MainWindow(QMainWindow):
             self.config.get("version_regex", r"([._]v|v)(\d+)")
         )
         
-        self.save_config()
-        self.save_secrets()
+        if save:
+            self.save_config()
+            self.save_secrets()
         self._update_model_presets()
         self.update_preset_dropdown()
         
@@ -1414,6 +1428,8 @@ class MainWindow(QMainWindow):
             self.ayon_panel.select_path(folder, task)
 
     def save_config(self):
+        if hasattr(self, "_is_initializing") and self._is_initializing:
+            return
         self._gather_gui_state()
         # Sensitive data should not be in config.json
         clean_config = self.config.copy()
@@ -1430,25 +1446,27 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print(f"Error saving config.json: {e}")
             
-        active_preset = self.config.get("active_preset", "")
-        presets_folder = self.config.get("presets_folder")
-        if presets_folder and active_preset:
-            import os
-            username = os.environ.get("USERNAME", "default_user")
-            users_dir = os.path.join(presets_folder, "users")
+        presets_folder = self.config.get("presets_folder") or "presets"
+        import os
+        username = os.environ.get("USERNAME", "default_user")
+        
+        # Save to both user and users subdirectories for perfect backward/forward compatibility
+        for sub_dir in ["user", "users"]:
+            users_dir = os.path.join(presets_folder, sub_dir)
             if not os.path.exists(users_dir):
                 try:
                     os.makedirs(users_dir, exist_ok=True)
                 except Exception as e:
                     print(f"Error creating user presets directory {users_dir}: {e}")
-                    return
+                    continue
+            
             user_pref_path = os.path.join(users_dir, f"{username}.json")
             try:
                 with open(user_pref_path, "w") as f:
                     json.dump(clean_config, f, indent=4)
                 print(f"Saved user preferences for '{username}' to {user_pref_path}")
             except Exception as e:
-                print(f"Error saving user preferences: {e}")
+                print(f"Error saving user preferences to {user_pref_path}: {e}")
 
     def save_secrets(self):
         with open("secrets.json", "w") as f:
@@ -2874,7 +2892,7 @@ class MainWindow(QMainWindow):
                 h_split = self.config.get("h_splitter")
                 v_split = self.config.get("v_splitter")
                 p_folder = self.config.get("presets_folder")
-                last_folder = self.config.get("last_source_folder")
+                last_folder = config_root.get("last_source_folder") or self.config.get("last_source_folder")
                 recent = self.config.get("recent_folders")
                 
                 # Apply preset
@@ -2894,6 +2912,22 @@ class MainWindow(QMainWindow):
                 
                 # Apply preferences
                 self._apply_preferences(self.config, self.secrets, old_detect, old_thumb, old_regex, old_exts, show_message=False)
+                
+                # Restore GUI state widgets
+                self._restore_gui_state()
+                
+                # Restore folder scan
+                if last_folder and os.path.exists(last_folder):
+                    self.top_bar.path_display.setText(last_folder)
+                    self.start_scan(last_folder)
+                
+                # Restore AYON selection
+                project = self.config.get("ayon_project")
+                if project:
+                    if self.ayon_panel.combo_project.currentText() != project:
+                        self.ayon_panel.combo_project.setCurrentText(project)
+                    else:
+                        self._restore_ayon_selection()
                 
                 self.log_message("Successfully reset to default (None / Active) config.", "success")
             except Exception as e:
@@ -2915,7 +2949,7 @@ class MainWindow(QMainWindow):
                 h_split = self.config.get("h_splitter")
                 v_split = self.config.get("v_splitter")
                 p_folder = self.config.get("presets_folder")
-                last_folder = self.config.get("last_source_folder")
+                last_folder = preset_config.get("last_source_folder") or self.config.get("last_source_folder")
                 recent = self.config.get("recent_folders")
                 
                 # Apply preset
@@ -2934,7 +2968,23 @@ class MainWindow(QMainWindow):
                 self.save_config()
                 
                 # Re-apply config and trigger proper refreshes/rescans
-                self._apply_preferences(self.config, self.secrets, old_detect, old_thumb, old_regex, old_exts, show_message=False)
+                self._apply_preferences(self.config, self.secrets, old_detect, old_thumb, old_regex, old_exts, show_message=False, save=False)
+                
+                # Restore GUI state widgets
+                self._restore_gui_state()
+                
+                # Restore folder scan
+                if last_folder and os.path.exists(last_folder):
+                    self.top_bar.path_display.setText(last_folder)
+                    self.start_scan(last_folder)
+                
+                # Restore AYON selection
+                project = self.config.get("ayon_project")
+                if project:
+                    if self.ayon_panel.combo_project.currentText() != project:
+                        self.ayon_panel.combo_project.setCurrentText(project)
+                    else:
+                        self._restore_ayon_selection()
                 
                 self.log_message(f"Successfully loaded preset '{preset_name}'.", "success")
             except Exception as e:
@@ -2975,7 +3025,7 @@ class MainWindow(QMainWindow):
                 del clean_config["thumbnails_per_row"]
                 
             # Filter out local-only parameters from the saved preset template so they don't lock
-            local_keys = ["geometry", "h_splitter", "v_splitter", "last_source_folder", "recent_folders"]
+            local_keys = ["geometry", "h_splitter", "v_splitter", "recent_folders"]
             for key in local_keys:
                 if key in clean_config:
                     del clean_config[key]
