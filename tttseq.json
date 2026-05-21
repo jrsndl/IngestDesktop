@@ -129,7 +129,7 @@
                 "Variant": "{product_type}{task_name}{label}",
                 "CamelCase": true,
                 "Representation": "exr",
-                "Colorspace": "ACES - ACEScg",
+                "Colorspace": "ACEScg",
                 "Tags": "passing",
                 "FPS": 24.0,
                 "FPS From Metadata": true,
@@ -148,7 +148,7 @@
                 "Review Representation": "h264",
                 "Review Colorspace": "Output - sRGB",
                 "Review Tags": "passing;ftracreview;webreview",
-                "Active": false
+                "Active": true
             },
             {
                 "Name": "any seqence",
@@ -177,7 +177,7 @@
                 "Review Representation": "h264",
                 "Review Colorspace": "Output - sRGB",
                 "Review Tags": "passing;ftracreview;webreview",
-                "Active": true
+                "Active": false
             }
         ],
         "videos": [

@@ -1,3 +1,4 @@
+import os
 from PySide6.QtCore import QAbstractTableModel, Qt, QModelIndex
 
 class CSVPreviewModel(QAbstractTableModel):
@@ -7,12 +8,15 @@ class CSVPreviewModel(QAbstractTableModel):
         self.config = config
         self.column_defs = [] # list of (header, value_template)
         self.tagged_items = []
+        self.is_review_row = [] # list of bools corresponding to tagged_items
         self.refresh_config(config)
         
         # Connect to source model changes
         self.source_model.dataChanged.connect(self._refresh_data)
         self.source_model.layoutChanged.connect(self._refresh_data)
         self.source_model.modelReset.connect(self._refresh_data)
+        self.source_model.rowsInserted.connect(self._refresh_data)
+        self.source_model.rowsRemoved.connect(self._refresh_data)
 
     def refresh_config(self, config):
         self.config = config
@@ -26,12 +30,36 @@ class CSVPreviewModel(QAbstractTableModel):
             elif line.strip():
                 self.column_defs.append((line.strip(), ""))
         
-        self.tagged_items = [item for item in self.source_model.items if item.is_tagged]
+        self.tagged_items = []
+        self.is_review_row = []
+        for item in self.source_model.items:
+            if item.is_tagged:
+                self.tagged_items.append(item)
+                self.is_review_row.append(False)
+                
+                # Check if item has review
+                review_path = self.source_model.expand_tokens("{prefs_review_path}", item)
+                has_review = (item.review_status == "done") or (review_path and os.path.exists(review_path))
+                if has_review:
+                    self.tagged_items.append(item)
+                    self.is_review_row.append(True)
         self.endResetModel()
 
     def _refresh_data(self):
         self.beginResetModel()
-        self.tagged_items = [item for item in self.source_model.items if item.is_tagged]
+        self.tagged_items = []
+        self.is_review_row = []
+        for item in self.source_model.items:
+            if item.is_tagged:
+                self.tagged_items.append(item)
+                self.is_review_row.append(False)
+                
+                # Check if item has review
+                review_path = self.source_model.expand_tokens("{prefs_review_path}", item)
+                has_review = (item.review_status == "done") or (review_path and os.path.exists(review_path))
+                if has_review:
+                    self.tagged_items.append(item)
+                    self.is_review_row.append(True)
         self.endResetModel()
 
     def rowCount(self, parent=QModelIndex()):
@@ -45,12 +73,18 @@ class CSVPreviewModel(QAbstractTableModel):
         if not index.isValid(): return None
         col = index.column()
         row = index.row()
+        if row >= len(self.tagged_items): return None
+        
         item = self.tagged_items[row]
+        is_review = self.is_review_row[row]
 
         is_colliding = getattr(item, "version_collision", False)
         is_duplicate = getattr(item, "is_duplicate", False)
 
         if role == Qt.ForegroundRole:
+            if is_review:
+                from PySide6.QtGui import QColor
+                return QColor("#aaaaaa") # dim review row slightly for visual clarity
             if is_colliding:
                 csv_col = col - 2 # Offset by 2 for Checks and Thumbnail
                 if csv_col >= 0 and csv_col < len(self.column_defs):
@@ -61,7 +95,7 @@ class CSVPreviewModel(QAbstractTableModel):
             return None
 
         if role == Qt.BackgroundRole:
-            if col == 0 and (is_colliding or is_duplicate):
+            if col == 0 and (is_colliding or is_duplicate) and not is_review:
                 from PySide6.QtGui import QColor
                 return QColor("#ff8c00")
             return None
@@ -73,6 +107,8 @@ class CSVPreviewModel(QAbstractTableModel):
 
         if role == Qt.DisplayRole:
             if col == 0:
+                if is_review:
+                    return "review"
                 msgs = []
                 if is_colliding: msgs.append("version_collision")
                 if is_duplicate: msgs.append("duplicate")
@@ -84,6 +120,22 @@ class CSVPreviewModel(QAbstractTableModel):
             csv_col = col - 2
             if csv_col < len(self.column_defs):
                 header, template = self.column_defs[csv_col]
+                
+                if is_review:
+                    header_lower = header.lower()
+                    if header_lower == "file path":
+                        review_path = self.source_model.expand_tokens("{prefs_review_path}", item)
+                        return os.path.abspath(review_path).replace("\\", "/")
+                    elif header_lower == "representation":
+                        p_data = item.preset_data or {}
+                        return p_data.get("Review Representation", "h264")
+                    elif header_lower == "representation colorspace":
+                        p_data = item.preset_data or {}
+                        return p_data.get("Review Colorspace", "Output - sRGB")
+                    elif header_lower == "representation tags":
+                        p_data = item.preset_data or {}
+                        return p_data.get("Review Tags", "passing;ftracreview;webreview")
+                
                 return self.source_model._expand_string(template, item, use_global_camel=True)
         
         return None

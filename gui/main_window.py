@@ -1933,7 +1933,7 @@ class MainWindow(QMainWindow):
                 return
 
         # 2. Proceed with publish
-        project = self.top_bar.combo_project.currentText()
+        project = self.ayon_panel.combo_project.currentText()
         import tempfile
         csv_path = os.path.join(tempfile.gettempdir(), "ayon_ingest.csv")
         
@@ -2124,11 +2124,35 @@ class MainWindow(QMainWindow):
             writer = csv.writer(f, delimiter=delimiter, quotechar=quotechar, quoting=csv.QUOTE_MINIMAL)
             writer.writerow([h for h, t in column_defs])
             for item in items:
+                # 1. Write the main item row
                 row_data = []
                 for h, template in column_defs:
                     val = self.model._expand_string(template, item, use_global_camel=True)
                     row_data.append(val)
                 writer.writerow(row_data)
+                
+                # 2. Write the review row if the item has review
+                review_path = self.model.expand_tokens("{prefs_review_path}", item)
+                has_review = (item.review_status == "done") or (review_path and os.path.exists(review_path))
+                if has_review:
+                    row_data = []
+                    for h, template in column_defs:
+                        h_lower = h.lower()
+                        if h_lower == "file path":
+                            val = os.path.abspath(review_path).replace("\\", "/")
+                        elif h_lower == "representation":
+                            p_data = item.preset_data or {}
+                            val = p_data.get("Review Representation", "h264")
+                        elif h_lower == "representation colorspace":
+                            p_data = item.preset_data or {}
+                            val = p_data.get("Review Colorspace", "Output - sRGB")
+                        elif h_lower == "representation tags":
+                            p_data = item.preset_data or {}
+                            val = p_data.get("Review Tags", "passing;ftracreview;webreview")
+                        else:
+                            val = self.model._expand_string(template, item, use_global_camel=True)
+                        row_data.append(val)
+                    writer.writerow(row_data)
 
     def _on_selection_changed(self, selected, deselected):
         pass # Handle via sync methods now
