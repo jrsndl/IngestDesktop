@@ -1,5 +1,6 @@
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QPushButton, QTreeView, 
-                             QHBoxLayout, QLabel, QMenu, QLineEdit, QComboBox, QSplitter)
+                             QHBoxLayout, QLabel, QMenu, QLineEdit, QComboBox, QSplitter,
+                             QSizePolicy)
 from PySide6.QtGui import QStandardItemModel, QStandardItem, QIcon, QColor, QFont, QAction
 from PySide6.QtCore import Signal, Qt, QSortFilterProxyModel, QEvent
 
@@ -196,6 +197,11 @@ class AyonPanel(QWidget):
         top_layout.addLayout(extra_btn_layout)
         top_layout.addWidget(self.tree)
         
+        self.spacer_widget = QWidget()
+        self.spacer_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.spacer_widget.hide()
+        top_layout.addWidget(self.spacer_widget)
+        
         self.splitter.addWidget(self.top_container)
         
         # Container for Product Info
@@ -293,11 +299,15 @@ class AyonPanel(QWidget):
         if is_connected:
             self.lbl_unreachable.hide()
             self.tree.show()
+            self.product_container.show()
+            self.spacer_widget.hide()
             self.btn_refresh.setEnabled(True)
         else:
             self.lbl_unreachable.setText(f"AYON is unreachable\n\n({server_url})")
             self.lbl_unreachable.show()
             self.tree.hide()
+            self.product_container.hide()
+            self.spacer_widget.show()
             self.btn_refresh.setEnabled(True) # Keep enabled so user can retry after fixing config
 
     def _add_folder_to_tree(self, folder, parent_item):
