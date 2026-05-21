@@ -198,7 +198,9 @@ class AyonPanel(QWidget):
         top_layout.addWidget(self.tree)
         
         self.spacer_widget = QWidget()
-        self.spacer_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        spacer_layout = QVBoxLayout(self.spacer_widget)
+        spacer_layout.setContentsMargins(0, 0, 0, 0)
+        spacer_layout.addStretch(1)
         self.spacer_widget.hide()
         top_layout.addWidget(self.spacer_widget)
         

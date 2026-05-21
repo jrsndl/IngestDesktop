@@ -1058,7 +1058,10 @@ class ThumbnailWorker(QRunnable):
         self.signals = ThumbnailWorkerSignals()
 
     def run(self):
-        image = generate_thumbnail_image(self.item_data.file_path, self.size)
+        source = self.item_data.file_path
+        if self.item_data.conversion_thumb_path and os.path.exists(self.item_data.conversion_thumb_path):
+            source = self.item_data.conversion_thumb_path
+        image = generate_thumbnail_image(source, self.size)
         self.signals.finished.emit(self.item_data, image)
 
 class SequenceRenameDialog(QDialog):
@@ -1336,9 +1339,11 @@ class ThumbnailArea(QWidget):
         self.view = QGraphicsView()
         self.view.setRenderHints(QPainter.Antialiasing | QPainter.SmoothPixmapTransform | QPainter.TextAntialiasing)
         
-        # Use OpenGL for performance
-        self.gl_widget = QOpenGLWidget()
-        self.view.setViewport(self.gl_widget)
+        # Use OpenGL for performance only if inline video is disabled
+        from gui.video_player import is_multimedia_available
+        if not is_multimedia_available():
+            self.gl_widget = QOpenGLWidget()
+            self.view.setViewport(self.gl_widget)
         
         self.view.setViewportUpdateMode(QGraphicsView.FullViewportUpdate)
         self.view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -1462,6 +1467,11 @@ class ThumbnailArea(QWidget):
     def update_video_overlay_geometry(self):
         """Position and size the video player overlay perfectly over the selected thumbnail image."""
         if not hasattr(self, 'video_player'):
+            return
+            
+        from gui.video_player import is_multimedia_available
+        if not is_multimedia_available():
+            self.video_player.clear_video()
             return
             
         selected = self.scene.selectedItems()
@@ -2100,6 +2110,60 @@ class ThumbnailArea(QWidget):
         arrange_action.triggered.connect(lambda: self._on_arrange("grid"))
         menu.addAction(arrange_action)
         
+        # Add open review action if a review video exists
+        video_path = None
+        selected = self.scene.selectedItems()
+        selected_thumb = None
+        for it in selected:
+            if isinstance(it, ThumbnailItem) and it.isVisible():
+                selected_thumb = it
+                break
+        if selected_thumb and self.model:
+            item_data = selected_thumb.data
+            if item_data.file_path.lower().endswith(".mp4"):
+                video_path = item_data.file_path
+            else:
+                try:
+                    name_no_ext, _ = os.path.splitext(os.path.basename(item_data.file_path))
+                    base_dir = os.path.dirname(item_data.file_path)
+                    
+                    from logic.image_model import strip_sequence_counter
+                    base_seq_name = strip_sequence_counter(name_no_ext)
+                    
+                    possible_dirs = [
+                        base_dir,
+                        os.path.join(base_dir, "_reviews"),
+                        os.path.join(base_dir, "reviews"),
+                    ]
+                    possible_basenames = [
+                        base_seq_name,
+                        f"{base_seq_name}_review",
+                        f"{base_seq_name}_review_converted"
+                    ]
+                    
+                    for p_dir in possible_dirs:
+                        if os.path.exists(p_dir):
+                            for p_base in possible_basenames:
+                                test_path = os.path.join(p_dir, f"{p_base}.mp4").replace("\\", "/")
+                                if os.path.exists(test_path):
+                                    video_path = test_path
+                                    break
+                        if video_path:
+                            break
+                except Exception:
+                    pass
+                    
+        if video_path:
+            menu.addSeparator()
+            open_review_action = QAction("Open Review Video in System Player", self)
+            def _open_video():
+                try:
+                    os.startfile(video_path)
+                except Exception as e:
+                    print(f"Error opening review video: {e}")
+            open_review_action.triggered.connect(_open_video)
+            menu.addAction(open_review_action)
+            
         menu.exec(event.globalPos())
 
     def wheelEvent(self, event):

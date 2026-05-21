@@ -27,6 +27,7 @@ class ImageScanner(QThread):
                  ffmpeg_path="ffmpeg.exe", ffprobe_path="ffprobe.exe",
                  oiiotool_path="oiiotool.exe", ocio_config="", stills_thumb_same=True,
                  thumb_suffix="_thumbnail", thumb_format=".jpg",
+                 thumb_location="Relative to Source Folder", thumb_location_path="_thumbs",
                  timeout=6):
         super().__init__()
         self.directory = directory
@@ -49,6 +50,8 @@ class ImageScanner(QThread):
         self.stills_thumb_same = stills_thumb_same
         self.thumb_suffix = thumb_suffix
         self.thumb_format = thumb_format
+        self.thumb_location = thumb_location
+        self.thumb_location_path = thumb_location_path
         self.timeout = timeout
         self._is_canceled = False
 
@@ -365,7 +368,7 @@ class ImageScanner(QThread):
             item.metadata.update(metadata)
             
             # 1. Video Thumbnail Generation
-            if item.category == "Video":
+            if item.category == "Video" and not getattr(item, "conversion_thumb_path", None):
                 thumb_path = item._meta_source + "_thumbnail.png"
                 if not os.path.exists(thumb_path):
                     duration = metadata.get("duration")
@@ -412,19 +415,48 @@ class ImageScanner(QThread):
         self.status_text.emit(f"Metadata fetching took {meta_elapsed:.4f} seconds.")
         self.log.emit(f"[Timer] Metadata fetching took {meta_elapsed:.4f} seconds.")
 
+    def _get_expected_thumb_path(self, item):
+        """Calculate the expected generated thumbnail path based on preferences."""
+        source_file = item.file_path.replace("\\", "/")
+        base_dir = os.path.dirname(source_file)
+        filename = os.path.basename(source_file)
+        name_no_ext, _ = os.path.splitext(filename)
+        
+        if item.is_sequence:
+            name_no_ext = strip_sequence_counter(name_no_ext)
+            
+        # Determine target directory
+        target_dir = base_dir
+        if self.thumb_location == "Relative to Source Folder":
+            if self.directory:
+                target_dir = os.path.join(self.directory, self.thumb_location_path).replace("\\", "/")
+        elif self.thumb_location == "Custom":
+            target_dir = self.thumb_location_path.replace("\\", "/")
+            
+        # Basename with suffix
+        target_filename = f"{name_no_ext}{self.thumb_suffix}{self.thumb_format}"
+        
+        return os.path.join(target_dir, target_filename).replace("\\", "/")
+
     def _fill_metadata(self, item, file_path):
         """Helper to fill common metadata for an item."""
-        # Thumbnail
-        if item.category == "Video":
-            # Check for existing sidecar thumbnail
-            thumb_path = file_path + "_thumbnail.png"
-            if os.path.exists(thumb_path):
-                item.thumbnail_image = generate_thumbnail_image(thumb_path, self.thumbnail_size)
-            else:
-                # Use gray placeholder until background extraction finishes
-                item.thumbnail_image = generate_placeholder_thumbnail_image(self.thumbnail_size, "#555555")
+        # Check if expected generated thumbnail already exists on disk
+        expected_thumb = self._get_expected_thumb_path(item)
+        if os.path.exists(expected_thumb) and os.path.getsize(expected_thumb) > 0:
+            item.conversion_thumb_path = expected_thumb
+            item.thumbnail_image = generate_thumbnail_image(expected_thumb, self.thumbnail_size)
         else:
-            item.thumbnail_image = generate_thumbnail_image(file_path, self.thumbnail_size)
+            # Thumbnail
+            if item.category == "Video":
+                # Check for existing sidecar thumbnail
+                thumb_path = file_path + "_thumbnail.png"
+                if os.path.exists(thumb_path):
+                    item.thumbnail_image = generate_thumbnail_image(thumb_path, self.thumbnail_size)
+                else:
+                    # Use gray placeholder until background extraction finishes
+                    item.thumbnail_image = generate_placeholder_thumbnail_image(self.thumbnail_size, "#555555")
+            else:
+                item.thumbnail_image = generate_thumbnail_image(file_path, self.thumbnail_size)
         
         # Times
         try:

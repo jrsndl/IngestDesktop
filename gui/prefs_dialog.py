@@ -351,12 +351,16 @@ class PreferencesDialog(QDialog):
         self.timeout_seconds.setSuffix(" sec")
         self.timeout_seconds.setValue(self.config.get("timeout_seconds", 6))
 
+        self.disable_inline_video = QCheckBox("Disable Inline Video Player (Always use default system player)")
+        self.disable_inline_video.setChecked(self.config.get("disable_inline_video", False))
+
         self.gui_form.addRow("Default Columns:", self.default_cols)
         self.gui_form.addRow("Default Text Size:", self.default_text_size)
         self.gui_form.addRow("Default Thumbnail Size:", self.default_thumb_size)
         self.gui_form.addRow("Allowed Label Characters:", self.label_regex)
         self.gui_form.addRow("Low-Res Thumbnail Size:", self.low_res_size)
         self.gui_form.addRow("Timeout seconds:", self.timeout_seconds)
+        self.gui_form.addRow("Inline Video Player:", self.disable_inline_video)
 
         self.gui_layout.addLayout(self.gui_form)
         self.gui_layout.addStretch()
@@ -673,6 +677,7 @@ class PreferencesDialog(QDialog):
         new_config = {
             "ayon_server_url": self.server_url.text(),
             "version_regex": self.version_regex.text(),
+            "disable_inline_video": self.disable_inline_video.isChecked(),
             "default_columns": self.default_cols.value(),
             "default_text_size": self.default_text_size.value(),
             "default_thumb_size": self.default_thumb_size.value(),

@@ -1091,6 +1091,8 @@ class MainWindow(QMainWindow):
             stills_thumb_same=self.config.get("stills_thumb_same", True),
             thumb_suffix=self.config.get("thumb_suffix", "_thumbnail"),
             thumb_format=self.config.get("thumb_format", ".jpg"),
+            thumb_location=self.config.get("thumb_location", "Relative to Source Folder"),
+            thumb_location_path=self.config.get("thumb_location_path", "_thumbs"),
             timeout=self.config.get("timeout_seconds", 6)
         )
         self.scanner.finished.connect(lambda items: self.log_message(f"Scan complete. Found {len(items)} items. Fetching metadata in background...", "success"))
@@ -1264,6 +1266,10 @@ class MainWindow(QMainWindow):
             oiiotool_path=expand_env_vars(self.config.get("oiiotool_path", "oiiotool.exe")),
             ocio_config=expand_env_vars(self.config.get("ocio_config", "")),
             stills_thumb_same=self.config.get("stills_thumb_same", True),
+            thumb_suffix=self.config.get("thumb_suffix", "_thumbnail"),
+            thumb_format=self.config.get("thumb_format", ".jpg"),
+            thumb_location=self.config.get("thumb_location", "Relative to Source Folder"),
+            thumb_location_path=self.config.get("thumb_location_path", "_thumbs"),
             timeout=self.config.get("timeout_seconds", 6)
         )
         self.scanner.finished.connect(self._on_rescan_finished)

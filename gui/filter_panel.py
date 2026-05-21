@@ -2,10 +2,46 @@ import os
 import re
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QPushButton, QLineEdit, 
                              QHBoxLayout, QLabel, QSpinBox, QTreeView, QFileSystemModel, 
-                             QButtonGroup, QComboBox, QAbstractItemView, QCheckBox)
-from PySide6.QtCore import Signal, Qt, QDir, QSortFilterProxyModel, QItemSelectionModel, QModelIndex
-from PySide6.QtGui import QColor, QStandardItemModel, QStandardItem
+                             QButtonGroup, QComboBox, QAbstractItemView, QCheckBox,
+                             QStyledItemDelegate, QStyleOptionViewItem, QStyle, QApplication)
+from PySide6.QtCore import Signal, Qt, QDir, QSortFilterProxyModel, QItemSelectionModel, QModelIndex, QRect
+from PySide6.QtGui import QColor, QStandardItemModel, QStandardItem, QPalette, QFont, QPen, QIcon, QPixmap, QPainter
 from utils import strip_sequence_counter, get_version_from_name
+
+def get_review_icon(review_status):
+    if not hasattr(get_review_icon, "_cache"):
+        get_review_icon._cache = {}
+    if review_status in get_review_icon._cache:
+        return get_review_icon._cache[review_status]
+        
+    color_map = {
+        "done": QColor("#44ff44"), # green
+        "failed": QColor("#ff4444"), # red
+        "processing": QColor("#ffaa00"), # orange
+        "waiting": QColor("#ffaa00"), # orange
+    }
+    r_color = QColor("#888888") # default gray
+    for status, color in color_map.items():
+        if review_status == status or (isinstance(review_status, str) and review_status.startswith(status)):
+            r_color = color
+            break
+            
+    pixmap = QPixmap(16, 16)
+    pixmap.fill(Qt.transparent)
+    
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.Antialiasing)
+    painter.setRenderHint(QPainter.TextAntialiasing)
+    
+    font = QFont("Arial", 11, QFont.Bold)
+    painter.setFont(font)
+    painter.setPen(r_color)
+    painter.drawText(0, 0, 16, 16, Qt.AlignCenter, "R")
+    painter.end()
+    
+    icon = QIcon(pixmap)
+    get_review_icon._cache[review_status] = icon
+    return icon
 
 class TagColorProxyModel(QSortFilterProxyModel):
     def __init__(self, main_model, parent=None):
@@ -52,7 +88,7 @@ class TagColorProxyModel(QSortFilterProxyModel):
         
         for item in self.main_model.items:
             abs_path = os.path.normpath(os.path.abspath(item.file_path))
-            self._path_info[abs_path] = (item.is_tagged, item.age_minutes, item.label)
+            self._path_info[abs_path] = (item.is_tagged, item.age_minutes, item.label, item.review_status)
             
             directory = os.path.dirname(abs_path)
             filename = os.path.basename(abs_path)
@@ -159,6 +195,16 @@ class TagColorProxyModel(QSortFilterProxyModel):
                     # Nuke notation: filename[first-last].extension
                     return f"{display_name}[{item.frame_start}-{item.frame_end}]{ext}"
 
+        if role == Qt.DecorationRole:
+            source_index = self.mapToSource(index)
+            abs_path, is_dir, is_scene = self._get_item_info(source_index)
+            if abs_path and not is_dir and not is_scene:
+                info = self._path_info.get(abs_path)
+                if info and len(info) >= 4:
+                    review_status = info[3]
+                    if review_status and review_status != "do not convert":
+                        return get_review_icon(review_status)
+
         if role == Qt.ForegroundRole:
             source_index = self.mapToSource(index)
             abs_path, is_dir, is_scene = self._get_item_info(source_index)
@@ -167,7 +213,8 @@ class TagColorProxyModel(QSortFilterProxyModel):
                 return QColor("#00bcd4") # Cyan for scene items
             
             if abs_path and abs_path in self._path_info:
-                is_tagged, age_min, label = self._path_info[abs_path]
+                info = self._path_info[abs_path]
+                is_tagged, age_min, label = info[0], info[1], info[2]
                 
                 # Check filter match
                 matches_search = not self._search_text or self._search_text in label.lower()
@@ -189,6 +236,8 @@ class TagColorProxyModel(QSortFilterProxyModel):
                 return QColor("#aaaaaa")
         
         return super().data(index, role)
+
+
 
 class FilterPanel(QWidget):
     search_changed = Signal(str)

@@ -13,6 +13,20 @@ except ImportError as e:
     logging.warning(f"QtMultimedia not available in PySide6: {e}")
     MULTIMEDIA_AVAILABLE = False
 
+def is_multimedia_available():
+    if not MULTIMEDIA_AVAILABLE:
+        return False
+    try:
+        import json
+        if os.path.exists("config.json"):
+            with open("config.json", "r") as f:
+                cfg = json.load(f)
+                if cfg.get("disable_inline_video", False):
+                    return False
+    except Exception:
+        pass
+    return True
+
 logger = logging.getLogger("IngestDesktop.VideoPlayer")
 
 
@@ -140,7 +154,7 @@ class VideoPlayerPanel(QWidget):
         self.setup_placeholder()
         
         # 2. Setup Player (Inline or Fallback)
-        if MULTIMEDIA_AVAILABLE:
+        if is_multimedia_available():
             self.setup_multimedia_player()
         else:
             self.setup_fallback_player()
@@ -316,7 +330,7 @@ class VideoPlayerPanel(QWidget):
             
         self.video_path = video_path
         
-        if MULTIMEDIA_AVAILABLE:
+        if is_multimedia_available():
             self.stop_video()
             self.lbl_title.setText(name or os.path.basename(video_path))
             self.player.setSource(QUrl.fromLocalFile(video_path))
@@ -331,7 +345,7 @@ class VideoPlayerPanel(QWidget):
     def clear_video(self):
         """Clears current active video and returns to placeholder state."""
         self.video_path = None
-        if MULTIMEDIA_AVAILABLE:
+        if is_multimedia_available():
             self.stop_video()
             self.player.setSource(QUrl())
             self.lbl_title.setText("No Video Loaded")
@@ -340,7 +354,7 @@ class VideoPlayerPanel(QWidget):
     @Slot()
     def play_video(self):
         """Plays or pauses the currently active video."""
-        if not MULTIMEDIA_AVAILABLE or not self.video_path:
+        if not is_multimedia_available() or not self.video_path:
             return
             
         if self.is_playing:
@@ -357,7 +371,7 @@ class VideoPlayerPanel(QWidget):
     @Slot()
     def stop_video(self):
         """Stops video playback and resets playhead to start."""
-        if not MULTIMEDIA_AVAILABLE:
+        if not is_multimedia_available():
             return
         self.player.stop()
         self.btn_play.setText("▶")
@@ -369,7 +383,7 @@ class VideoPlayerPanel(QWidget):
     @Slot()
     def toggle_mute(self):
         """Mutes/unmutes audio output."""
-        if not MULTIMEDIA_AVAILABLE:
+        if not is_multimedia_available():
             return
         muted = self.audio_output.isMuted()
         self.audio_output.setMuted(not muted)
@@ -378,7 +392,7 @@ class VideoPlayerPanel(QWidget):
     @Slot(int)
     def set_volume(self, value):
         """Sets playback audio volume (0-100)."""
-        if not MULTIMEDIA_AVAILABLE:
+        if not is_multimedia_available():
             return
         vol = float(value / 100.0)
         self.audio_output.setVolume(vol)
@@ -388,7 +402,7 @@ class VideoPlayerPanel(QWidget):
     @Slot(int)
     def set_position(self, position):
         """Seeks to the given millisecond position in the timeline."""
-        if not MULTIMEDIA_AVAILABLE:
+        if not is_multimedia_available():
             return
         self.player.setPosition(position)
 
@@ -478,7 +492,7 @@ class VideoPlayerOverlay(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         
-        if MULTIMEDIA_AVAILABLE:
+        if is_multimedia_available():
             self.video_widget = QVideoWidget(self)
             self.video_widget.setAttribute(Qt.WA_TransparentForMouseEvents, False)
             layout.addWidget(self.video_widget)
@@ -488,6 +502,7 @@ class VideoPlayerOverlay(QWidget):
             self.audio_output = QAudioOutput(self)
             self.player.setAudioOutput(self.audio_output)
             self.player.setVideoOutput(self.video_widget)
+            self.player.errorOccurred.connect(self._on_player_error)
             
             # Set to infinite looping!
             if hasattr(QMediaPlayer, 'Infinite'):
@@ -512,14 +527,14 @@ class VideoPlayerOverlay(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        if MULTIMEDIA_AVAILABLE and hasattr(self, 'btn_mute'):
+        if is_multimedia_available() and hasattr(self, 'btn_mute'):
             # Place button in top-right corner with a small margin
             self.btn_mute.move(self.width() - self.btn_mute.width() - 6, 6)
             self.btn_mute.raise_()
 
     @Slot()
     def toggle_mute(self):
-        if not MULTIMEDIA_AVAILABLE:
+        if not is_multimedia_available() or not hasattr(self, 'audio_output'):
             return
         muted = self.audio_output.isMuted()
         self.audio_output.setMuted(not muted)
@@ -535,7 +550,7 @@ class VideoPlayerOverlay(QWidget):
             
         self.video_path = video_path
         
-        if MULTIMEDIA_AVAILABLE:
+        if is_multimedia_available() and hasattr(self, 'player'):
             self.player.stop()
             self.player.setSource(QUrl.fromLocalFile(video_path))
             self.show()
@@ -548,7 +563,7 @@ class VideoPlayerOverlay(QWidget):
 
     def clear_video(self):
         self.video_path = None
-        if MULTIMEDIA_AVAILABLE:
+        if is_multimedia_available() and hasattr(self, 'player'):
             self.player.stop()
             self.player.setSource(QUrl())
         self.is_playing = False
@@ -557,7 +572,7 @@ class VideoPlayerOverlay(QWidget):
     def mousePressEvent(self, event):
         # Toggle play/pause on click
         if event.button() == Qt.LeftButton:
-            if MULTIMEDIA_AVAILABLE:
+            if is_multimedia_available() and hasattr(self, 'player'):
                 if self.is_playing:
                     self.player.pause()
                     self.is_playing = False
@@ -567,3 +582,6 @@ class VideoPlayerOverlay(QWidget):
             event.accept()
         else:
             super().mousePressEvent(event)
+
+    def _on_player_error(self, error, error_string):
+        print(f"[VideoPlayerOverlay Error] QMediaPlayer Error ({error}): {error_string}")
