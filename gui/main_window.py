@@ -372,7 +372,7 @@ class MainWindow(QMainWindow):
         self.main_layout.setContentsMargins(5, 5, 5, 5)
         self.main_layout.setSpacing(5)
 
-        self.top_bar = TopBar()
+        self.top_bar = TopBar(self)
         self.top_bar.setObjectName("TopBar")
         self.top_bar.folder_selected.connect(self.start_scan)
         self.top_bar.prefs_requested.connect(self.show_preferences)
@@ -385,7 +385,7 @@ class MainWindow(QMainWindow):
         self.h_splitter = QSplitter(Qt.Horizontal)
         
         # 2. Left Panel (AYON)
-        self.ayon_panel = AyonPanel()
+        self.ayon_panel = AyonPanel(self)
         self.ayon_panel.project_changed.connect(self._on_project_changed)
         self.ayon_panel.task_selected.connect(self._on_ayon_task_selected)
         self.ayon_panel.product_double_clicked.connect(self._on_ayon_product_selected)
@@ -401,7 +401,7 @@ class MainWindow(QMainWindow):
         # 3. Center Area (Thumbnails + Spreadsheet)
         self.v_splitter = QSplitter(Qt.Vertical)
         
-        self.thumb_area = ThumbnailArea()
+        self.thumb_area = ThumbnailArea(self)
         self.thumb_area.setModel(self.model)
         self.thumb_area.tag_toggle_requested.connect(self._on_tag_selection)
         self.thumb_area.label_action_requested.connect(self._on_label_action)
@@ -411,7 +411,7 @@ class MainWindow(QMainWindow):
         self.thumb_area.scene_items_changed.connect(self._sync_scene_items_to_filter)
         self.v_splitter.addWidget(self.thumb_area)
         
-        self.spreadsheet = SpreadsheetPanel()
+        self.spreadsheet = SpreadsheetPanel(self)
         self.spreadsheet.set_model(self.model)
         self.spreadsheet.set_csv_model(self.csv_preview_model)
         self.spreadsheet.btn_tag_sel.clicked.connect(self._on_tag_selection)
@@ -432,7 +432,7 @@ class MainWindow(QMainWindow):
         self.h_splitter.addWidget(self.v_splitter)
 
         # 4. Right Panel (Filtering)
-        self.filter_panel = FilterPanel(self.model)
+        self.filter_panel = FilterPanel(self.model, self)
         self.filter_panel.age_changed.connect(self._on_age_filter_changed)
         self.filter_panel.search_changed.connect(self._on_filter_search_changed)
         self.filter_panel.sequences_toggled.connect(self._on_filter_sequences_toggled)

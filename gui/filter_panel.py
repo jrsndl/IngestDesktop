@@ -619,7 +619,7 @@ class FilterPanel(QWidget):
                         scene_ids.append(scene_id)
                         
         if scene_ids:
-            menu = QMenu(self)
+            menu = QMenu(self.window())
             
             act_edit = QAction("Edit", self)
             act_edit.setEnabled(len(scene_ids) == 1)
@@ -649,7 +649,7 @@ class FilterPanel(QWidget):
         
         if not paths: return
         
-        menu = QMenu(self)
+        menu = QMenu(self.window())
         
         act_reveal = QAction("Reveal in Filesystem", self)
         act_reveal.triggered.connect(lambda: self._on_action_reveal(paths))

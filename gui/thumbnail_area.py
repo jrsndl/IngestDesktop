@@ -2040,7 +2040,7 @@ class ThumbnailArea(QWidget):
                 current_row += 1
 
     def contextMenuEvent(self, event):
-        menu = QMenu(self)
+        menu = QMenu(self.window())
         
         add_note_action = QAction("Add Text Note", self)
         add_note_action.triggered.connect(self.add_text_note)

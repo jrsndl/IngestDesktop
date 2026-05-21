@@ -323,7 +323,7 @@ class SpreadsheetPanel(QWidget):
             pass
 
     def _on_context_menu(self, pos):
-        menu = QMenu(self)
+        menu = QMenu(self.window())
         
         tag_action = QAction("Tag/Untag Selected", self)
         tag_action.triggered.connect(lambda: self.label_action_requested.emit("tag", None))
@@ -364,7 +364,7 @@ class SpreadsheetPanel(QWidget):
         menu.exec(self.table.viewport().mapToGlobal(pos))
 
     def _on_header_context_menu(self, pos):
-        menu = QMenu(self)
+        menu = QMenu(self.window())
         model = self.table.model()
         if not model: return
         

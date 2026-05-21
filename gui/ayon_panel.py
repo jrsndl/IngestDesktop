@@ -216,9 +216,9 @@ class AyonPanel(QWidget):
         header_layout.addWidget(QLabel("<b>Task Products:</b>"))
         header_layout.addStretch()
         
-        self.btn_show_representations = QPushButton("Show Reps")
+        self.btn_show_representations = QPushButton("Show Representations")
         self.btn_show_representations.setCheckable(True)
-        self.btn_show_representations.setFixedWidth(75)
+        self.btn_show_representations.setFixedWidth(130)
         self.btn_show_representations.setStyleSheet("font-size: 10px; padding: 2px;")
         self.btn_show_representations.toggled.connect(self._on_show_representations_toggled)
         header_layout.addWidget(self.btn_show_representations)
@@ -265,6 +265,8 @@ class AyonPanel(QWidget):
         self.repre_view.setModel(self.repre_model)
         self.repre_view.setHeaderHidden(False)
         self.repre_view.setEditTriggers(QTreeView.NoEditTriggers)
+        self.repre_view.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.repre_view.customContextMenuRequested.connect(self._on_repre_context_menu)
         self.repre_layout.addWidget(self.repre_view)
         
         self.splitter.addWidget(self.repre_container)
@@ -277,6 +279,8 @@ class AyonPanel(QWidget):
         self.splitter.setStretchFactor(1, 1)
         self.splitter.setStretchFactor(2, 1)
         self.splitter.setSizes([700, 300, 0])
+        
+        self.btn_show_representations.setChecked(True)
 
         # Unreachable Warning Label
         self.lbl_unreachable = QLabel("AYON Unreachable")
@@ -636,6 +640,95 @@ class AyonPanel(QWidget):
         # Give path column a reasonable starting width
         self.repre_view.setColumnWidth(3, 400)
 
+    def _on_repre_context_menu(self, pos):
+        index = self.repre_view.indexAt(pos)
+        if not index.isValid():
+            return
+            
+        selection_model = self.repre_view.selectionModel()
+        selected_indexes = selection_model.selectedIndexes()
+        
+        clicked_row = index.row()
+        selected_rows = sorted(list(set(idx.row() for idx in selected_indexes)))
+        
+        paths = []
+        if clicked_row in selected_rows:
+            for r in selected_rows:
+                path_idx = self.repre_model.index(r, 3)
+                path = path_idx.data()
+                if path and isinstance(path, str):
+                    paths.append(path)
+        else:
+            path_idx = self.repre_model.index(clicked_row, 3)
+            path = path_idx.data()
+            if path and isinstance(path, str):
+                paths.append(path)
+                
+        if not paths:
+            return
+            
+        menu = QMenu(self.window())
+        
+        act_reveal = QAction("Reveal in Filesystem", self)
+        act_reveal.triggered.connect(lambda checked=False: self._on_repre_reveal(paths))
+        menu.addAction(act_reveal)
+        
+        act_open = QAction("OS Open", self)
+        act_open.triggered.connect(lambda checked=False: self._on_repre_open(paths))
+        menu.addAction(act_open)
+        
+        menu.exec(self.repre_view.viewport().mapToGlobal(pos))
+
+    def _on_repre_reveal(self, paths):
+        import subprocess
+        import os
+        from PySide6.QtWidgets import QMessageBox
+        
+        revealed = False
+        for path in paths:
+            path = os.path.normpath(path)
+            if os.path.exists(path):
+                subprocess.run(['explorer', '/select,', path])
+                revealed = True
+                break
+            else:
+                parent_dir = os.path.dirname(path)
+                if os.path.exists(parent_dir):
+                    subprocess.run(['explorer', parent_dir])
+                    revealed = True
+                    break
+                    
+        if not revealed and paths:
+            QMessageBox.warning(
+                self.window(),
+                "Path Not Found",
+                f"The path or its parent directory does not exist on disk:\n\n{paths[0]}"
+            )
+
+    def _on_repre_open(self, paths):
+        import os
+        from PySide6.QtWidgets import QMessageBox
+        
+        opened = False
+        for path in paths:
+            if os.path.exists(path):
+                os.startfile(path)
+                opened = True
+                break
+            else:
+                parent_dir = os.path.dirname(path)
+                if os.path.exists(parent_dir):
+                    os.startfile(parent_dir)
+                    opened = True
+                    break
+                    
+        if not opened and paths:
+            QMessageBox.warning(
+                self.window(),
+                "Path Not Found",
+                f"The path or its parent directory does not exist on disk:\n\n{paths[0]}"
+            )
+
     def _on_hide_products_toggled(self, checked):
         if checked:
             self.combo_product_types.hide()
@@ -681,7 +774,7 @@ class AyonPanel(QWidget):
     def _on_header_context_menu(self, pos):
         """Context menu to toggle column visibility."""
         header = self.tree.header()
-        menu = QMenu(self)
+        menu = QMenu(self.window())
         
         # We start from index 1 because index 0 (Name) should always be visible
         for i in range(1, self.model.columnCount()):
@@ -727,7 +820,7 @@ class AyonPanel(QWidget):
         if not data or 'full_ayon_path' not in data:
             return
 
-        menu = QMenu(self)
+        menu = QMenu(self.window())
         ayon_path = data['full_ayon_path']
         is_assigned = ayon_path in self.assigned_paths
         
