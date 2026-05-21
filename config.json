@@ -280,18 +280,18 @@
     "item_info_videos": "VIDEO\n{ayon_folder_path}/{ayon_task_name}\n{metadata.width}x{metadata.height}, ln={metadata.nb_frames}\ntc={metadata.timecode} {frame_start}-{frame_end}\n{prefs_thumb_path}",
     "item_info_other": "OTHER\n{ayon_folder_path}/{task_name}\n",
     "active_preset": "jedenact",
-    "last_ayon_project": "BCV_009_JA_Hiphi",
+    "last_ayon_project": "Sparks",
     "filter_toggles": {
         "files_only": true,
         "flat": false,
         "v_stack": false,
         "sequences": true
     },
-    "ayon_project": "BCV_009_JA_Hiphi",
+    "ayon_project": "Sparks",
     "ayon_search_text": "",
     "ayon_search_column": 0,
-    "ayon_selected_folder": "/shots/HPH_00040",
-    "ayon_selected_task": "comp",
+    "ayon_selected_folder": "",
+    "ayon_selected_task": "",
     "thumbnails_show_text": true,
     "filter_search_enabled": true,
     "filter_search_text": "",
@@ -318,5 +318,7 @@
         "C:\\Users\\robur\\Downloads\\IngestDesktop_260519",
         "C:/Users/robur/Desktop/2ayon",
         "C:\\Users\\robur\\Downloads\\IngestDesktop_260518"
-    ]
+    ],
+    "fixed_task_name_enabled": true,
+    "fixed_task_name": "comp"
 }

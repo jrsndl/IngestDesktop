@@ -138,12 +138,20 @@ class PreferencesDialog(QDialog):
         self.version_regex = QLineEdit(self.config.get("version_regex", r"([._]v|v)(\d+)"))
         self.folder_regex = QLineEdit(self.config.get("folder_regex", r"^([^_]*_[^_]*)_.*$"))
         self.task_regex = QLineEdit(self.config.get("task_regex", r"^[^_]*_[^_]*_([^_]*).*$"))
+        
+        self.fixed_task_name_enabled = QCheckBox("Fixed Task Name")
+        self.fixed_task_name_enabled.setChecked(self.config.get("fixed_task_name_enabled", False))
+        self.fixed_task_name = QLineEdit(self.config.get("fixed_task_name", ""))
+        self.fixed_task_name.setEnabled(self.fixed_task_name_enabled.isChecked())
+        self.fixed_task_name_enabled.toggled.connect(self.fixed_task_name.setEnabled)
+        
         self.sequence_regex = QLineEdit(self.config.get("sequence_regex", r"^[^_]*_([^_]*)_[^_]*.*$"))
         self.episode_regex = QLineEdit(self.config.get("episode_regex", r"^[^_]*_([^_]*)_[^_]*.*$"))
 
         self.auto_assign_form.addRow("Version Regex:", self.version_regex)
         self.auto_assign_form.addRow("Folder Regex {folder_name}:", self.folder_regex)
         self.auto_assign_form.addRow("Task Regex {task_name}:", self.task_regex)
+        self.auto_assign_form.addRow(self.fixed_task_name_enabled, self.fixed_task_name)
         self.auto_assign_form.addRow("Sequence Regex {sequence}:", self.sequence_regex)
         self.auto_assign_form.addRow("Episode Regex {episode}:", self.episode_regex)
         
@@ -721,6 +729,8 @@ class PreferencesDialog(QDialog):
             "version_collision": "lowest" if self.ver_collision_lowest.isChecked() else "fail",
             "auto_assign_multi_match": self.auto_assign_multi_match.isChecked(),
             "auto_assign_fallback_task": self.auto_assign_fallback_task.isChecked(),
+            "fixed_task_name_enabled": self.fixed_task_name_enabled.isChecked(),
+            "fixed_task_name": self.fixed_task_name.text(),
             "folder_regex": self.folder_regex.text(),
             "task_regex": self.task_regex.text(),
             "sequence_regex": self.sequence_regex.text(),

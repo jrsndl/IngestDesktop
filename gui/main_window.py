@@ -2971,6 +2971,12 @@ class MainWindow(QMainWindow):
         }
         
         for tag, pattern in tag_regexes.items():
+            if tag == "task_name" and self.config.get("fixed_task_name_enabled", False):
+                val = self.config.get("fixed_task_name", "")
+                item.metadata["task_name"] = val
+                logging.info(f"Using fixed task_name={val} for {filename}")
+                continue
+                
             if not pattern: continue
             try:
                 match = re.search(pattern, filename)
@@ -3026,7 +3032,10 @@ class MainWindow(QMainWindow):
             if not folder_name:
                 continue
                 
-            task_name = item.metadata.get("task_name")
+            if self.config.get("fixed_task_name_enabled", False):
+                task_name = self.config.get("fixed_task_name", "")
+            else:
+                task_name = item.metadata.get("task_name")
                 
             match = self.ayon_panel.find_best_match(
                 folder_name, 

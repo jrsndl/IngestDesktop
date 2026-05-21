@@ -406,3 +406,7 @@ for all the paths that can be modified by user in gui, support environment varia
 * if the environment variable is not present, replace it with empty string
 * cache the environment variables from the system at the app start, for speedup
 * patsh: "Default Scan Folder", "AYON COnsole Path", "FFmpeg Path", "FFprobe Path", "OIIOTool Path", "OCIO Config", "Default Temp Root"
+
+
+Preferences: AutoAssign
+add checkbox "Fixed Task Name", defaults to off, followed by the text box for user settable task name
