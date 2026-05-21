@@ -109,9 +109,23 @@ class AyonClient:
 
     def get_products_for_folder(self, project_name, folder_id):
         """Get all products and their latest versions for a folder."""
-        versions = self.get_last_versions(project_name, [folder_id])
-        res = []
-        for key, v in versions.items():
-            f_id, name, p_type = key.split("|")
-            res.append({"name": name, "type": p_type, "version": v})
-        return res
+        if not self.is_connected: return []
+        try:
+            products = list(ayon_api.get_products(project_name, folder_ids=[folder_id]))
+            res = []
+            for prod in products:
+                # Get last version
+                last_v = ayon_api.get_last_version_by_product_id(project_name, prod["id"])
+                v_num = last_v["version"] if last_v else 0
+                p_name = prod["name"]
+                p_type = prod.get("productType") or prod.get("type")
+                res.append({
+                    "id": str(prod["id"]),
+                    "name": p_name,
+                    "type": p_type,
+                    "version": v_num
+                })
+            return res
+        except Exception as e:
+            self.log.error(f"Error fetching products for folder {folder_id}: {e}")
+            return []

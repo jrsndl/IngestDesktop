@@ -107,6 +107,7 @@ class AyonPanel(QWidget):
     product_double_clicked = Signal(str, str, str, str) # (folder_path, task_name, task_type, variant)
     auto_assign_requested = Signal()
     project_changed = Signal(str)
+    representations_requested = Signal(str, str) # (project_name, product_id)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -215,6 +216,13 @@ class AyonPanel(QWidget):
         header_layout.addWidget(QLabel("<b>Task Products:</b>"))
         header_layout.addStretch()
         
+        self.btn_show_representations = QPushButton("Show Reps")
+        self.btn_show_representations.setCheckable(True)
+        self.btn_show_representations.setFixedWidth(75)
+        self.btn_show_representations.setStyleSheet("font-size: 10px; padding: 2px;")
+        self.btn_show_representations.toggled.connect(self._on_show_representations_toggled)
+        header_layout.addWidget(self.btn_show_representations)
+        
         self.btn_hide_products = QPushButton("Hide")
         self.btn_hide_products.setCheckable(True)
         self.btn_hide_products.setFixedWidth(50)
@@ -236,15 +244,39 @@ class AyonPanel(QWidget):
         self.product_view.setHeaderHidden(False)
         self.product_view.setEditTriggers(QTreeView.NoEditTriggers)
         self.product_view.doubleClicked.connect(self._on_product_double_click)
+        self.product_view.selectionModel().selectionChanged.connect(self._on_product_selection_changed)
         self.product_layout.addWidget(self.product_view)
         
         self.splitter.addWidget(self.product_container)
+        
+        # Container for Representations
+        self.repre_container = QWidget()
+        self.repre_layout = QVBoxLayout(self.repre_container)
+        self.repre_layout.setContentsMargins(0, 5, 0, 0)
+        
+        repre_header_layout = QHBoxLayout()
+        repre_header_layout.addWidget(QLabel("<b>Representations:</b>"))
+        repre_header_layout.addStretch()
+        self.repre_layout.addLayout(repre_header_layout)
+        
+        self.repre_view = QTreeView()
+        self.repre_model = QStandardItemModel()
+        self.repre_model.setHorizontalHeaderLabels(["Name", "Version", "Status", "Path"])
+        self.repre_view.setModel(self.repre_model)
+        self.repre_view.setHeaderHidden(False)
+        self.repre_view.setEditTriggers(QTreeView.NoEditTriggers)
+        self.repre_layout.addWidget(self.repre_view)
+        
+        self.splitter.addWidget(self.repre_container)
+        self.repre_container.hide() # Hidden by default
+        
         self.layout.addWidget(self.splitter)
         
         # Initial splitter sizes
         self.splitter.setStretchFactor(0, 3)
         self.splitter.setStretchFactor(1, 1)
-        self.splitter.setSizes([700, 300])
+        self.splitter.setStretchFactor(2, 1)
+        self.splitter.setSizes([700, 300, 0])
 
         # Unreachable Warning Label
         self.lbl_unreachable = QLabel("AYON Unreachable")
@@ -524,11 +556,14 @@ class AyonPanel(QWidget):
 
     def _refresh_product_list(self):
         self.product_model.removeRows(0, self.product_model.rowCount())
+        # Also clear representations when list is refreshed
+        self.repre_model.removeRows(0, self.repre_model.rowCount())
         checked_types = self.combo_product_types.get_checked_items()
         
         for p in self.all_products:
             if p['type'] in checked_types:
                 name_item = QStandardItem(p['name'])
+                name_item.setData(p, Qt.UserRole) # Store full product dictionary containing 'id'
                 type_item = QStandardItem(p['type'])
                 ver_item = QStandardItem(f"v{p['version']:03d}")
                 ver_item.setTextAlignment(Qt.AlignCenter)
@@ -537,19 +572,86 @@ class AyonPanel(QWidget):
         self.product_view.resizeColumnToContents(0)
         self.product_view.resizeColumnToContents(1)
 
+    def _on_product_selection_changed(self, selected, deselected):
+        self._refresh_representations()
+
+    def _on_show_representations_toggled(self, checked):
+        if checked:
+            self.repre_container.show()
+            self.splitter.setSizes([600, 200, 200])
+            self._refresh_representations()
+        else:
+            self.repre_container.hide()
+            self.splitter.setSizes([700, 300, 0])
+
+    def _refresh_representations(self):
+        if not self.btn_show_representations.isChecked():
+            return
+            
+        indexes = self.product_view.selectionModel().selectedIndexes()
+        if not indexes:
+            self.repre_model.removeRows(0, self.repre_model.rowCount())
+            return
+            
+        # Get selected product's ID
+        first_col_index = self.product_model.index(indexes[0].row(), 0)
+        name_item = self.product_model.itemFromIndex(first_col_index)
+        if not name_item:
+            return
+            
+        p_data = name_item.data(Qt.UserRole)
+        if p_data and "id" in p_data:
+            project = self.combo_project.currentText()
+            self.representations_requested.emit(project, p_data["id"])
+
+    def set_representations(self, repres):
+        """Populate the representations tree view."""
+        self.repre_model.removeRows(0, self.repre_model.rowCount())
+        
+        # Sort representations by version number (descending) and name (ascending)
+        def sort_key(r):
+            v_num = r.get("context", {}).get("version", 0)
+            name = r.get("name", "")
+            return (-v_num, name)
+            
+        sorted_reps = sorted(repres, key=sort_key)
+        
+        for rep in sorted_reps:
+            name_item = QStandardItem(rep.get("name", ""))
+            
+            ver = rep.get("context", {}).get("version", 0)
+            ver_item = QStandardItem(f"v{ver:03d}" if ver else "")
+            ver_item.setTextAlignment(Qt.AlignCenter)
+            
+            status_item = QStandardItem(rep.get("status", ""))
+            
+            path = rep.get("attrib", {}).get("path", "")
+            path_item = QStandardItem(path)
+            
+            self.repre_model.appendRow([name_item, ver_item, status_item, path_item])
+            
+        self.repre_view.resizeColumnToContents(0)
+        self.repre_view.resizeColumnToContents(1)
+        self.repre_view.resizeColumnToContents(2)
+        # Give path column a reasonable starting width
+        self.repre_view.setColumnWidth(3, 400)
+
     def _on_hide_products_toggled(self, checked):
         if checked:
             self.combo_product_types.hide()
             self.product_view.hide()
             self.btn_hide_products.setText("Show")
             # Shrink the product container in the splitter
-            self.splitter.setSizes([1000, 30])
+            self.splitter.setSizes([1000, 30, 0])
         else:
             self.combo_product_types.show()
             self.product_view.show()
             self.btn_hide_products.setText("Hide")
             # Restore some size
-            self.splitter.setSizes([700, 300])
+            if self.btn_show_representations.isChecked():
+                self.splitter.setSizes([600, 200, 200])
+            else:
+                self.splitter.setSizes([700, 300, 0])
 
     def update_assigned_status(self, assigned_paths):
         """Iterate through the tree and bold tasks that are assigned to items."""

@@ -395,6 +395,7 @@ class MainWindow(QMainWindow):
         self.ayon_panel.auto_assign_requested.connect(self.perform_auto_assign)
         self.ayon_panel.btn_refresh.clicked.connect(self.refresh_ayon)
         self.ayon_panel.info_requested.connect(self._on_ayon_info_requested)
+        self.ayon_panel.representations_requested.connect(self._on_ayon_representations_requested)
         self.h_splitter.addWidget(self.ayon_panel)
 
         # 3. Center Area (Thumbnails + Spreadsheet)
@@ -2868,6 +2869,56 @@ class MainWindow(QMainWindow):
         self._prod_thread = ProductThread(self.ayon, project, folder_id)
         self._prod_thread.finished.connect(self.ayon_panel.set_products)
         self._prod_thread.start()
+
+    def _on_ayon_representations_requested(self, project, product_id):
+        """Asynchronously load representations for the selected product."""
+        if not project or not product_id:
+            return
+            
+        if hasattr(self, "_repre_thread") and self._repre_thread.isRunning():
+            try:
+                self._repre_thread.finished.disconnect()
+            except Exception:
+                pass
+            self._repre_thread.terminate()
+            if not hasattr(self, "_old_threads"):
+                self._old_threads = []
+            self._old_threads = [t for t in self._old_threads if t.isRunning()]
+            self._old_threads.append(self._repre_thread)
+
+        class RepreThread(QThread):
+            finished = Signal(list)
+            def __init__(self, ayon, project, prod_id):
+                super().__init__()
+                self.ayon = ayon
+                self.project = project
+                self.prod_id = prod_id
+            def run(self):
+                import time
+                import ayon_api
+                try:
+                    start_t = time.perf_counter()
+                    print(f"[Timer] Starting to pull representations for product ID '{self.prod_id}' in project '{self.project}' from AYON...")
+                    
+                    # 1. Fetch versions for this product
+                    versions = list(ayon_api.get_versions(self.project, product_ids=[self.prod_id]))
+                    v_ids = [v.get('id') for v in versions]
+                    
+                    # 2. Fetch representations
+                    repres = []
+                    if v_ids:
+                        repres = list(ayon_api.get_representations(self.project, version_ids=v_ids))
+                        
+                    elapsed = time.perf_counter() - start_t
+                    print(f"[Timer] Pulling representations took {elapsed:.4f} seconds.")
+                    self.finished.emit(repres)
+                except Exception as e:
+                    print(f"Error fetching representations in thread: {e}")
+                    self.finished.emit([])
+
+        self._repre_thread = RepreThread(self.ayon, project, product_id)
+        self._repre_thread.finished.connect(self.ayon_panel.set_representations)
+        self._repre_thread.start()
 
     def _parse_item_tags(self, item):
         """Parse filename using regexes and store in item.metadata."""
