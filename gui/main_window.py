@@ -999,6 +999,15 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 print(f"Error loading config.json: {e}")
                 
+        # Inject standard defaults for still & video thumbnail commands if missing
+        default_stills_cmd = '{ffmpeg} -i "{filename}" -vf "scale=if(gte(iw\\,ih)\\,min({prefs_highres_thumb_size}\\,iw)\\,-4):if(lt(iw\\,ih)\\,min({prefs_highres_thumb_size}\\,ih)\\,-4)" -y "{prefs_thumb_path}"'
+        default_videos_cmd = '{ffmpeg} -ss {metadata.thumbnail_time} -i "{filename}" -vframes 1 -vf "scale=if(gte(iw\\,ih)\\,min({prefs_highres_thumb_size}\\,iw)\\,-4):if(lt(iw\\,ih)\\,min({prefs_highres_thumb_size}\\,ih)\\,-4)" -y "{prefs_thumb_path}"'
+        
+        if "cmd_stills" not in config:
+            config["cmd_stills"] = default_stills_cmd
+        if "cmd_videos" not in config:
+            config["cmd_videos"] = default_videos_cmd
+
         self._migrate_keys_to_secrets(config)
         self.load_prefs_elapsed = time.perf_counter() - start_time
         print(f"[Timer] Reading preferences took {self.load_prefs_elapsed:.4f} seconds.")

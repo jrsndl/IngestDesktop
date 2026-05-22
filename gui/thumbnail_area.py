@@ -1706,7 +1706,9 @@ class ThumbnailArea(QWidget):
             elif self._tag_filter_state == "disabled": show_by_tag = not is_tagged
             
             is_young_enough = not age_enabled or (item_data.age_minutes <= age_val)
-            matches_search = not search_term or search_term in item_data.label.lower()
+            matches_search = (not search_term or 
+                              search_term in item_data.label.lower() or 
+                              search_term in item_data.filename.lower())
             
             if show_by_tag and in_path and is_young_enough and matches_search:
                 item.show()

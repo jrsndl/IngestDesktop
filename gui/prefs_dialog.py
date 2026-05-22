@@ -708,6 +708,8 @@ class PreferencesDialog(QDialog):
             "thumb_format": self.thumb_format.currentText(),
             "thumb_quality": self.thumb_quality.value(),
             "cmd_sequences": self.cmd_sequences.toPlainText(),
+            "cmd_stills": self.cmd_stills.toPlainText(),
+            "cmd_videos": self.cmd_videos.toPlainText(),
             "run_thumb_after_scan": self.run_thumb_after_scan.isChecked(),
             "run_review_after_scan": self.run_review_after_scan.isChecked(),
             "skip_existing_thumbs": self.skip_existing_thumbs.isChecked(),

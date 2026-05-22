@@ -88,7 +88,7 @@ class TagColorProxyModel(QSortFilterProxyModel):
         
         for item in self.main_model.items:
             abs_path = os.path.normpath(os.path.abspath(item.file_path))
-            self._path_info[abs_path] = (item.is_tagged, item.age_minutes, item.label, item.review_status)
+            self._path_info[abs_path] = (item.is_tagged, item.age_minutes, item.label, item.review_status, item.filename)
             
             directory = os.path.dirname(abs_path)
             filename = os.path.basename(abs_path)
@@ -214,10 +214,12 @@ class TagColorProxyModel(QSortFilterProxyModel):
             
             if abs_path and abs_path in self._path_info:
                 info = self._path_info[abs_path]
-                is_tagged, age_min, label = info[0], info[1], info[2]
+                is_tagged, age_min, label, review_status, filename = info[0], info[1], info[2], info[3], info[4]
                 
-                # Check filter match
-                matches_search = not self._search_text or self._search_text in label.lower()
+                # Check filter match: search label or whole file name (including extension)
+                matches_search = (not self._search_text or 
+                                  self._search_text in label.lower() or 
+                                  self._search_text in filename.lower())
                 matches_age = not self._age_enabled or (age_min <= self._age_limit)
                 matches_filters = matches_search and matches_age
                 

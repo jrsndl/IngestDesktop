@@ -262,7 +262,9 @@ class SpreadsheetPanel(QWidget):
             is_selected = selection_model.isRowSelected(row, QModelIndex())
             is_tagged = item.is_tagged
             is_young_enough = not age_enabled or (item.age_minutes <= age_val)
-            matches_search = not search_term or search_term in item.label.lower()
+            matches_search = (not search_term or 
+                              search_term in item.label.lower() or 
+                              search_term in item.filename.lower())
             
             hidden = False
             if selected_only and not is_selected:
