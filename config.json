@@ -2,7 +2,7 @@
     "version_regex": "_v(\\d+)",
     "disable_inline_video": false,
     "default_columns": 11,
-    "default_text_size": 40,
+    "default_text_size": 30,
     "default_thumb_size": 1024,
     "timeout_seconds": 6,
     "age_source": "Modification Date",
@@ -280,11 +280,11 @@
         "v_stack": false,
         "sequences": true
     },
-    "ayon_project": "",
+    "ayon_project": "Sparks",
     "ayon_search_text": "",
     "ayon_search_column": 0,
-    "ayon_selected_folder": "",
-    "ayon_selected_task": "",
+    "ayon_selected_folder": "/shots/sparks_030",
+    "ayon_selected_task": "comp",
     "thumbnails_show_text": true,
     "filter_search_enabled": true,
     "filter_search_text": "",
@@ -297,10 +297,11 @@
     "filter_sequences": true,
     "thumbnail_size": 1024,
     "geometry": "01d9d0cb00030000fffff600fffffff8ffffffff0000059ffffff601000000e8fffffe050000040700000001020000000a00fffff60000000017ffffffff0000059f",
-    "h_splitter": "000000ff0000000100000003000001e0000006d30000013901ffffffff010000000100",
+    "h_splitter": "000000ff0000000100000003000001e0000005970000027501ffffffff010000000100",
     "v_splitter": "000000ff0000000100000002000002880000027f01ffffffff010000000200",
-    "last_source_folder": "C:/Users/robur/Desktop/seqs",
+    "last_source_folder": "Z:/Sparks/edit/ingest/publish",
     "recent_folders": [
+        "Z:/Sparks/edit/ingest/publish",
         "C:/Users/robur/Desktop/seqs",
         "C:/Users/robur/Desktop/3ayon",
         "C:/Users/robur/Desktop/5ayon",
@@ -309,8 +310,7 @@
         "D:/3ayon1",
         "D:/3ayon1/sparks_020_pl01",
         "C:\\Users\\robur\\Downloads\\IngestDesktop_260519",
-        "C:/Users/robur/Desktop/2ayon",
-        "C:\\Users\\robur\\Downloads\\IngestDesktop_260518"
+        "C:/Users/robur/Desktop/2ayon"
     ],
     "fixed_task_name_enabled": true,
     "fixed_task_name": "comp"

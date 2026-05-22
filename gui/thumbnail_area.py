@@ -1479,6 +1479,55 @@ class ThumbnailArea(QWidget):
             if tip:
                 QToolTip.showText(self._last_tooltip_pos, tip, self.view)
 
+    def find_media_path(self, item_data):
+        """Finds any playable review video or media file for the given item."""
+        if not item_data:
+            return None
+            
+        MEDIA_EXTENSIONS = (".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".mpg", ".mpeg", ".wmv", ".ogg", ".ogv", ".mxf")
+        
+        # 1. Direct path check
+        if item_data.file_path.lower().endswith(MEDIA_EXTENSIONS):
+            return item_data.file_path
+            
+        # 2. Check preset review path
+        try:
+            review_path = self.model._get_prefs_review_path(item_data)
+            if review_path and os.path.exists(review_path) and review_path.lower().endswith(MEDIA_EXTENSIONS):
+                return review_path
+        except Exception:
+            pass
+            
+        # 3. Sequence fallback search
+        try:
+            from logic.image_model import strip_sequence_counter
+            name_no_ext, _ = os.path.splitext(item_data.filename)
+            base_seq_name = strip_sequence_counter(name_no_ext)
+            base_dir = os.path.dirname(item_data.file_path)
+            
+            possible_dirs = [
+                base_dir,
+                os.path.join(base_dir, "_reviews"),
+                os.path.join(base_dir, "reviews"),
+            ]
+            possible_basenames = [
+                base_seq_name,
+                f"{base_seq_name}_review",
+                f"{base_seq_name}_review_converted"
+            ]
+            
+            for p_dir in possible_dirs:
+                if os.path.exists(p_dir):
+                    for p_base in possible_basenames:
+                        for ext in MEDIA_EXTENSIONS:
+                            test_path = os.path.join(p_dir, f"{p_base}{ext}").replace("\\", "/")
+                            if os.path.exists(test_path):
+                                return test_path
+        except Exception:
+            pass
+            
+        return None
+
     def update_video_overlay_geometry(self):
         """Position and size the video player overlay perfectly over the selected thumbnail image."""
         if not hasattr(self, 'video_player'):
@@ -1502,47 +1551,7 @@ class ThumbnailArea(QWidget):
             
         # Check if selected item has a playable video
         item_data = selected_thumb.data
-        video_path = None
-        if item_data.file_path.lower().endswith(".mp4"):
-            video_path = item_data.file_path
-        else:
-            try:
-                review_path = self.model._get_prefs_review_path(item_data)
-                if review_path and os.path.exists(review_path) and review_path.lower().endswith(".mp4"):
-                    video_path = review_path
-            except Exception:
-                pass
-                
-            # Sequence video fallback search
-            if not video_path:
-                try:
-                    from utils import strip_sequence_counter
-                    base_dir = os.path.dirname(item_data.file_path)
-                    name_no_ext, _ = os.path.splitext(item_data.filename)
-                    base_seq_name = strip_sequence_counter(name_no_ext)
-                    
-                    possible_dirs = [
-                        base_dir,
-                        os.path.join(base_dir, "_reviews"),
-                        os.path.join(base_dir, "reviews"),
-                    ]
-                    possible_basenames = [
-                        base_seq_name,
-                        f"{base_seq_name}_review",
-                        f"{base_seq_name}_review_converted"
-                    ]
-                    
-                    for p_dir in possible_dirs:
-                        if os.path.exists(p_dir):
-                            for p_base in possible_basenames:
-                                test_path = os.path.join(p_dir, f"{p_base}.mp4").replace("\\", "/")
-                                if os.path.exists(test_path):
-                                    video_path = test_path
-                                    break
-                        if video_path:
-                            break
-                except Exception:
-                    pass
+        video_path = self.find_media_path(item_data)
                 
         if not video_path or not os.path.exists(video_path):
             self.video_player.clear_video()
@@ -2134,39 +2143,7 @@ class ThumbnailArea(QWidget):
                 selected_thumb = it
                 break
         if selected_thumb and self.model:
-            item_data = selected_thumb.data
-            if item_data.file_path.lower().endswith(".mp4"):
-                video_path = item_data.file_path
-            else:
-                try:
-                    name_no_ext, _ = os.path.splitext(os.path.basename(item_data.file_path))
-                    base_dir = os.path.dirname(item_data.file_path)
-                    
-                    from logic.image_model import strip_sequence_counter
-                    base_seq_name = strip_sequence_counter(name_no_ext)
-                    
-                    possible_dirs = [
-                        base_dir,
-                        os.path.join(base_dir, "_reviews"),
-                        os.path.join(base_dir, "reviews"),
-                    ]
-                    possible_basenames = [
-                        base_seq_name,
-                        f"{base_seq_name}_review",
-                        f"{base_seq_name}_review_converted"
-                    ]
-                    
-                    for p_dir in possible_dirs:
-                        if os.path.exists(p_dir):
-                            for p_base in possible_basenames:
-                                test_path = os.path.join(p_dir, f"{p_base}.mp4").replace("\\", "/")
-                                if os.path.exists(test_path):
-                                    video_path = test_path
-                                    break
-                        if video_path:
-                            break
-                except Exception:
-                    pass
+            video_path = self.find_media_path(selected_thumb.data)
                     
         if video_path:
             menu.addSeparator()
