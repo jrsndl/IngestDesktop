@@ -24,7 +24,7 @@
     "thumb_quality": 80,
     "cmd_sequences": "{ffmpeg} -i \"{metadata.seq_thumbnail_path}\" -vf \"scale=if(gte(iw\\,ih)\\,min({prefs_highres_thumb_size}\\,iw)\\,-4):if(lt(iw\\,ih)\\,min({prefs_highres_thumb_size}\\,ih)\\,-4)\" -y \"{prefs_thumb_path}\"",
     "run_thumb_after_scan": true,
-    "run_review_after_scan": false,
+    "run_review_after_scan": true,
     "skip_existing_thumbs": true,
     "skip_existing_reviews": true,
     "presets": {
@@ -145,7 +145,7 @@
                 "Review Representation": "h264",
                 "Review Colorspace": "Output - sRGB",
                 "Review Tags": "passing;ftracreview;webreview",
-                "Active": true
+                "Active": false
             },
             {
                 "Name": "any seqence",
@@ -174,7 +174,7 @@
                 "Review Representation": "h264",
                 "Review Colorspace": "Output - sRGB",
                 "Review Tags": "passing;ftracreview;webreview",
-                "Active": false
+                "Active": true
             }
         ],
         "videos": [
@@ -275,15 +275,15 @@
     "last_ayon_project": "BCV_009_JA_Hiphi",
     "filter_toggles": {
         "files_only": true,
-        "flat": true,
+        "flat": false,
         "v_stack": false,
         "sequences": true
     },
     "ayon_project": "BCV_009_JA_Hiphi",
     "ayon_search_text": "",
     "ayon_search_column": 0,
-    "ayon_selected_folder": "",
-    "ayon_selected_task": "",
+    "ayon_selected_folder": "/shots/HPH_00040",
+    "ayon_selected_task": "comp",
     "thumbnails_show_text": true,
     "filter_search_enabled": true,
     "filter_search_text": "",
@@ -291,13 +291,13 @@
     "filter_age_value": 0,
     "filter_age_units": "minutes",
     "filter_files_only": true,
-    "filter_flat": true,
+    "filter_flat": false,
     "filter_v_stack": false,
     "filter_sequences": true,
     "thumbnail_size": 248,
     "geometry": "01d9d0cb00030000fffff600fffffff8ffffffff0000059ffffff63f000000cbfffffe0c000003ea00000001020000000a00fffff60000000017ffffffff0000059f",
     "h_splitter": "000000ff000000010000000300000176000006b80000022f01ffffffff010000000100",
-    "v_splitter": "000000ff0000000100000002000008b8000000ea01ffffffff010000000200",
+    "v_splitter": "000000ff0000000100000002000003af0000015801ffffffff010000000200",
     "last_source_folder": "D:/2ayon",
     "recent_folders": [
         "D:/2ayon",
