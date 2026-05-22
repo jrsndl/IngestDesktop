@@ -101,6 +101,7 @@ class HelpContentWidget(QWidget):
         painter.drawText(col1_rect.adjusted(0, y, 0, 0), Qt.AlignLeft, "GENERAL")
         y += 30
         y = draw_shortcut(painter, col1_rect, "Ctrl + A", "Select All (contextual)", y)
+        y = draw_shortcut(painter, col1_rect, "Ctrl + D", "Toggle Enable/Disable selected", y)
         y = draw_shortcut(painter, col1_rect, "F2", "Rename selected item", y)
         y = draw_shortcut(painter, col1_rect, "Space", "Toggle Maximize view", y)
         y = draw_shortcut(painter, col1_rect, "Esc", "Close this guide", y)
@@ -302,8 +303,8 @@ class MainWindow(QMainWindow):
         self.setAcceptDrops(True)
 
         # Load Config and Secrets
-        self.config = self.load_config()
         self.secrets = self.load_secrets()
+        self.config = self.load_config()
 
         # Migration: Move API key to secrets if found in config but not in secrets
         if "ayon_api_key" in self.config:
@@ -321,7 +322,7 @@ class MainWindow(QMainWindow):
         self.csv_preview_model = CSVPreviewModel(self.model, self.config)
         
         # Clean credentials - prioritize secrets
-        server_url = self.config.get("ayon_server_url", "").strip()
+        server_url = self.secrets.get("ayon_server_url", "").strip()
         api_key = self.secrets.get("ayon_api_key", "").strip()
         if not api_key: # Fallback to config during transition
             api_key = self.config.get("ayon_api_key", "").strip()
@@ -519,6 +520,10 @@ class MainWindow(QMainWindow):
         # 6. Select All Shortcut
         self.shortcut_all = QShortcut(QKeySequence("Ctrl+A"), self)
         self.shortcut_all.activated.connect(self._on_select_all)
+        
+        self.shortcut_toggle_enable = QShortcut(QKeySequence("Ctrl+D"), self)
+        self.shortcut_toggle_enable.setContext(Qt.ApplicationShortcut)
+        self.shortcut_toggle_enable.activated.connect(self._on_tag_selection)
         
         self.shortcut_f2 = QShortcut(QKeySequence("F2"), self)
         self.shortcut_f2.setContext(Qt.ApplicationShortcut)
@@ -994,17 +999,54 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 print(f"Error loading config.json: {e}")
                 
+        self._migrate_keys_to_secrets(config)
         self.load_prefs_elapsed = time.perf_counter() - start_time
         print(f"[Timer] Reading preferences took {self.load_prefs_elapsed:.4f} seconds.")
         return config
 
+    def _migrate_keys_to_secrets(self, config_dict):
+        """Move shifted keys from the given config dict to self.secrets and remove them from the dict."""
+        shifted_keys = [
+            "presets_folder",
+            "ayon_server_url",
+            "traypublisher_path",
+            "ffmpeg_path",
+            "ffprobe_path",
+            "oiiotool_path",
+            "ocio_config",
+            "ayon_api_key"
+        ]
+        migrated = False
+        for key in shifted_keys:
+            if key in config_dict:
+                val = config_dict[key]
+                if key not in self.secrets or not self.secrets[key]:
+                    self.secrets[key] = val
+                    migrated = True
+                del config_dict[key]
+                migrated = True
+        if migrated:
+            self.save_secrets()
+
     def load_secrets(self):
         try:
-            if os.path.exists("secrets.json"):
-                with open("secrets.json", "r") as f:
+            if os.path.exists("install.json"):
+                with open("install.json", "r") as f:
                     return json.load(f)
+            elif os.path.exists("secrets.json"):
+                with open("secrets.json", "r") as f:
+                    data = json.load(f)
+                # Save to install.json
+                with open("install.json", "w") as f:
+                    json.dump(data, f, indent=4)
+                # Remove secrets.json
+                try:
+                    os.remove("secrets.json")
+                except Exception as e:
+                    print(f"Error removing secrets.json: {e}")
+                return data
         except Exception as e:
-            print(f"Error loading secrets: {e}")
+            print(f"Error loading install config: {e}")
         return {}
 
     def load_initial_data(self):
@@ -1085,10 +1127,10 @@ class MainWindow(QMainWindow):
             stills_end_frame=self.config.get("stills_end_frame", 1001),
             video_start_from_tc=self.config.get("video_start_from_tc", False),
             video_start_frame=self.config.get("video_start_frame", 1001),
-            ffmpeg_path=expand_env_vars(self.config.get("ffmpeg_path", "ffmpeg.exe")),
-            ffprobe_path=expand_env_vars(self.config.get("ffprobe_path", "ffprobe.exe")),
-            oiiotool_path=expand_env_vars(self.config.get("oiiotool_path", "oiiotool.exe")),
-            ocio_config=expand_env_vars(self.config.get("ocio_config", "")),
+            ffmpeg_path=expand_env_vars(self.secrets.get("ffmpeg_path", "ffmpeg.exe")),
+            ffprobe_path=expand_env_vars(self.secrets.get("ffprobe_path", "ffprobe.exe")),
+            oiiotool_path=expand_env_vars(self.secrets.get("oiiotool_path", "oiiotool.exe")),
+            ocio_config=expand_env_vars(self.secrets.get("ocio_config", "")),
             stills_thumb_same=self.config.get("stills_thumb_same", True),
             thumb_suffix=self.config.get("thumb_suffix", "_thumbnail"),
             thumb_format=self.config.get("thumb_format", ".jpg"),
@@ -1262,10 +1304,10 @@ class MainWindow(QMainWindow):
             stills_end_frame=self.config.get("stills_end_frame", 1001),
             video_start_from_tc=self.config.get("video_start_from_tc", False),
             video_start_frame=self.config.get("video_start_frame", 1001),
-            ffmpeg_path=expand_env_vars(self.config.get("ffmpeg_path", "ffmpeg.exe")),
-            ffprobe_path=expand_env_vars(self.config.get("ffprobe_path", "ffprobe.exe")),
-            oiiotool_path=expand_env_vars(self.config.get("oiiotool_path", "oiiotool.exe")),
-            ocio_config=expand_env_vars(self.config.get("ocio_config", "")),
+            ffmpeg_path=expand_env_vars(self.secrets.get("ffmpeg_path", "ffmpeg.exe")),
+            ffprobe_path=expand_env_vars(self.secrets.get("ffprobe_path", "ffprobe.exe")),
+            oiiotool_path=expand_env_vars(self.secrets.get("oiiotool_path", "oiiotool.exe")),
+            ocio_config=expand_env_vars(self.secrets.get("ocio_config", "")),
             stills_thumb_same=self.config.get("stills_thumb_same", True),
             thumb_suffix=self.config.get("thumb_suffix", "_thumbnail"),
             thumb_format=self.config.get("thumb_format", ".jpg"),
@@ -1427,7 +1469,7 @@ class MainWindow(QMainWindow):
                 print(f"[Timer] Pulling projects list from AYON took {elapsed:.4f} seconds.")
                 self.finished.emit(self.ayon.is_connected, projects)
 
-        server_url = self.config.get("ayon_server_url", "").strip()
+        server_url = self.secrets.get("ayon_server_url", "").strip()
         api_key = self.secrets.get("ayon_api_key", "").strip()
         if not api_key: # Fallback
             api_key = self.config.get("ayon_api_key", "").strip()
@@ -1567,9 +1609,9 @@ class MainWindow(QMainWindow):
         self.model.thumb_format = self.config.get("thumb_format", ".jpg")
         
         from utils import expand_env_vars
-        self.model.ffmpeg_path = expand_env_vars(self.config.get("ffmpeg_path", "ffmpeg.exe"))
-        self.model.ffprobe_path = expand_env_vars(self.config.get("ffprobe_path", "ffprobe.exe"))
-        self.model.oiiotool_path = expand_env_vars(self.config.get("oiiotool_path", "oiiotool.exe"))
+        self.model.ffmpeg_path = expand_env_vars(self.secrets.get("ffmpeg_path", "ffmpeg.exe"))
+        self.model.ffprobe_path = expand_env_vars(self.secrets.get("ffprobe_path", "ffprobe.exe"))
+        self.model.oiiotool_path = expand_env_vars(self.secrets.get("oiiotool_path", "oiiotool.exe"))
         
         self.csv_preview_model.refresh_config(self.config)
         
@@ -1744,8 +1786,20 @@ class MainWindow(QMainWindow):
         self._gather_gui_state()
         # Sensitive data should not be in config.json
         clean_config = self.config.copy()
-        if "ayon_api_key" in clean_config:
-            del clean_config["ayon_api_key"]
+        
+        shifted_keys = [
+            "presets_folder",
+            "ayon_server_url",
+            "traypublisher_path",
+            "ffmpeg_path",
+            "ffprobe_path",
+            "oiiotool_path",
+            "ocio_config",
+            "ayon_api_key"
+        ]
+        for key in shifted_keys:
+            if key in clean_config:
+                del clean_config[key]
             
         # Remove redundant keys
         if "thumbnails_per_row" in clean_config:
@@ -1757,7 +1811,7 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print(f"Error saving config.json: {e}")
             
-        presets_folder = self.config.get("presets_folder") or "presets"
+        presets_folder = self.secrets.get("presets_folder") or "presets"
         import os
         username = os.environ.get("USERNAME", "default_user")
         
@@ -1778,7 +1832,7 @@ class MainWindow(QMainWindow):
                 print(f"Error saving user preferences to {user_pref_path}: {e}")
 
     def save_secrets(self):
-        with open("secrets.json", "w") as f:
+        with open("install.json", "w") as f:
             json.dump(self.secrets, f, indent=4)
 
     def perform_export_csv(self):
@@ -1945,7 +1999,7 @@ class MainWindow(QMainWindow):
             return
         
         from utils import expand_env_vars
-        tray_path = expand_env_vars(self.config.get("traypublisher_path", "ayon_console.exe"))
+        tray_path = expand_env_vars(self.secrets.get("traypublisher_path", "ayon_console.exe"))
         ingest_folder = self.config.get("ayon_csv_ingest_folder", "/edit/csvingest")
         ingest_task = self.config.get("ayon_csv_ingest_task", "csvingest")
         ingest_preset = self.config.get("ayon_csv_preset", "Default")
@@ -1976,7 +2030,6 @@ class MainWindow(QMainWindow):
             # Show log console and inform user
             self.log_console.show()
             self.btn_toggle_log.setChecked(True)
-            self.btn_toggle_log.setText("Hide Log")
             self.log_message("Starting Ayon Publish process...", "info")
 
             class PublishWorker(QThread):
@@ -2419,33 +2472,36 @@ class MainWindow(QMainWindow):
             # Selection sync will handle Thumbnails and FilterPanel
 
     def _on_f2_pressed(self):
-        """F2 Rename for the currently selected item."""
+        """F2 Rename for the currently selected item(s)."""
         # Get selected items
         selection_model = self.spreadsheet.table.selectionModel()
         selected_indexes = selection_model.selectedIndexes()
         
-        # Get unique rows
+        # Get unique rows from spreadsheet selection
         unique_rows = sorted(list(set(idx.row() for idx in selected_indexes)))
         
-        if len(unique_rows) != 1:
-            # Fallback: check thumbnail area directly in case of sync lag
-            selected_thumbs = self.thumb_area.scene.selectedItems()
-            if len(selected_thumbs) == 1:
-                item_data = selected_thumbs[0].data
+        # Check thumbnail area directly
+        selected_thumbs = self.thumb_area.scene.selectedItems()
+        
+        if not unique_rows and selected_thumbs:
+            for thumb in selected_thumbs:
                 try:
-                    row = self.model.items.index(item_data)
-                    unique_rows = [row]
+                    row = self.model.items.index(thumb.data)
+                    unique_rows.append(row)
                 except ValueError:
                     pass
-                    
-        if len(unique_rows) != 1:
+            unique_rows = sorted(list(set(unique_rows)))
+            
+        if len(unique_rows) > 1:
+            # Multiselection rename: trigger sequence rename in thumbnail area
+            self.thumb_area._on_sequence_rename()
             return
             
-        row = unique_rows[0]
-        item_data = self.model.items[row]
-        
-        # Trigger the rename action with the specific row index
-        self._on_label_action("rename", (row, item_data))
+        if len(unique_rows) == 1:
+            row = unique_rows[0]
+            item_data = self.model.items[row]
+            # Trigger the rename action with the specific row index
+            self._on_label_action("rename", (row, item_data))
 
     def _on_add_comment(self, comment):
         if not comment: return
@@ -2551,7 +2607,7 @@ class MainWindow(QMainWindow):
             
 
     def _on_label_action(self, action, data):
-        if action == "tag":
+        if action in ["tag", "enable"]:
             self._on_tag_selection()
             return
 
@@ -2647,7 +2703,7 @@ class MainWindow(QMainWindow):
         count = len(rows)
         # Check current state of first item to report action
         sample_item = self.model.items[rows[0]]
-        action_str = "Tagged (Selected for ingest)" if sample_item.is_tagged else "Untagged (Excluded from ingest)"
+        action_str = "Enabled (Selected for ingest)" if sample_item.is_tagged else "Disabled (Excluded from ingest)"
         level = "success" if sample_item.is_tagged else "info"
         self.log_message(f"{action_str}: {count} items.", level)
 
@@ -3262,10 +3318,8 @@ class MainWindow(QMainWindow):
     def _toggle_log(self, checked):
         if checked:
             self.log_console.show()
-            self.btn_toggle_log.setText("Hide Log")
         else:
             self.log_console.hide()
-            self.btn_toggle_log.setText("Log History")
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
@@ -3298,7 +3352,7 @@ class MainWindow(QMainWindow):
         self.top_bar.combo_preset.clear()
         self.top_bar.combo_preset.addItem("(None / Active)")
         
-        presets_folder = self.config.get("presets_folder")
+        presets_folder = self.secrets.get("presets_folder")
         if presets_folder and os.path.exists(presets_folder):
             try:
                 for filename in os.listdir(presets_folder):
@@ -3334,11 +3388,13 @@ class MainWindow(QMainWindow):
                     with open("config.json", "r") as f:
                         config_root = json.load(f)
                 
+                # Migrate any keys if present
+                self._migrate_keys_to_secrets(config_root)
+                
                 # Retain session-specific/local-only settings
                 geom = self.config.get("geometry")
                 h_split = self.config.get("h_splitter")
                 v_split = self.config.get("v_splitter")
-                p_folder = self.config.get("presets_folder")
                 last_folder = config_root.get("last_source_folder") or self.config.get("last_source_folder")
                 recent = self.config.get("recent_folders")
                 
@@ -3350,7 +3406,6 @@ class MainWindow(QMainWindow):
                 if geom: self.config["geometry"] = geom
                 if h_split: self.config["h_splitter"] = h_split
                 if v_split: self.config["v_splitter"] = v_split
-                if p_folder: self.config["presets_folder"] = p_folder
                 if last_folder: self.config["last_source_folder"] = last_folder
                 if recent: self.config["recent_folders"] = recent
                 
@@ -3381,7 +3436,7 @@ class MainWindow(QMainWindow):
                 self.log_message(f"Error resetting to default config: {e}", "error")
             return
             
-        presets_folder = self.config.get("presets_folder")
+        presets_folder = self.secrets.get("presets_folder")
         if not presets_folder:
             return
             
@@ -3390,12 +3445,14 @@ class MainWindow(QMainWindow):
             try:
                 with open(preset_path, "r") as f:
                     preset_config = json.load(f)
+                
+                # Migrate any keys if present
+                self._migrate_keys_to_secrets(preset_config)
                     
                 # Retain session-specific/local-only settings
                 geom = self.config.get("geometry")
                 h_split = self.config.get("h_splitter")
                 v_split = self.config.get("v_splitter")
-                p_folder = self.config.get("presets_folder")
                 last_folder = preset_config.get("last_source_folder") or self.config.get("last_source_folder")
                 recent = self.config.get("recent_folders")
                 
@@ -3407,7 +3464,6 @@ class MainWindow(QMainWindow):
                 if geom: self.config["geometry"] = geom
                 if h_split: self.config["h_splitter"] = h_split
                 if v_split: self.config["v_splitter"] = v_split
-                if p_folder: self.config["presets_folder"] = p_folder
                 if last_folder: self.config["last_source_folder"] = last_folder
                 if recent: self.config["recent_folders"] = recent
                 
@@ -3438,7 +3494,7 @@ class MainWindow(QMainWindow):
                 self.log_message(f"Error loading preset '{preset_name}': {e}", "error")
 
     def save_preset_as(self):
-        presets_folder = self.config.get("presets_folder")
+        presets_folder = self.secrets.get("presets_folder")
         if not presets_folder:
             QMessageBox.warning(self, "Save Preset", "Presets Folder is not configured in Preferences -> General Tab.")
             return
@@ -3466,8 +3522,21 @@ class MainWindow(QMainWindow):
             
             # Keep identical structure to config.json
             clean_config = self.config.copy()
-            if "ayon_api_key" in clean_config:
-                del clean_config["ayon_api_key"]
+            
+            shifted_keys = [
+                "presets_folder",
+                "ayon_server_url",
+                "traypublisher_path",
+                "ffmpeg_path",
+                "ffprobe_path",
+                "oiiotool_path",
+                "ocio_config",
+                "ayon_api_key"
+            ]
+            for key in shifted_keys:
+                if key in clean_config:
+                    del clean_config[key]
+                    
             if "thumbnails_per_row" in clean_config:
                 del clean_config["thumbnails_per_row"]
                 

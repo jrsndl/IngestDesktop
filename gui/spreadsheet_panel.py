@@ -59,12 +59,12 @@ class SpreadsheetPanel(QWidget):
         self.btn_selected_only.setCheckable(True)
         self.btn_selected_only.toggled.connect(lambda: self.update_filtering())
         
-        self.btn_tagged_only = QPushButton("Tagged only")
+        self.btn_tagged_only = QPushButton("Enabled Only")
         self.btn_tagged_only.setCheckable(True)
         self.btn_tagged_only.toggled.connect(lambda: self.update_filtering())
         self.btn_check_ver = QPushButton("Version check")
         self.btn_check_dup = QPushButton("Check duplicates")
-        self.btn_tag_sel = QPushButton("Tag/Untag Selected")
+        self.btn_tag_sel = QPushButton("Enable/Disable Selected")
         
         self.btn_csv = QPushButton("CSV")
         self.btn_csv.setCheckable(True)
@@ -153,7 +153,7 @@ class SpreadsheetPanel(QWidget):
         # Set columns to Interactive to allow user adjustment
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.Interactive)
-        header.setSectionResizeMode(0, QHeaderView.Fixed) # Tag
+        header.setSectionResizeMode(0, QHeaderView.Fixed) # Enable
         header.setSectionResizeMode(2, QHeaderView.Interactive) # Label
         header.setSectionResizeMode(3, QHeaderView.Interactive) # Variant
         header.setSectionResizeMode(4, QHeaderView.Interactive) # Product Name
@@ -325,7 +325,7 @@ class SpreadsheetPanel(QWidget):
     def _on_context_menu(self, pos):
         menu = QMenu(self.window())
         
-        tag_action = QAction("Tag/Untag Selected", self)
+        tag_action = QAction("Enable/Disable Selected", self)
         tag_action.triggered.connect(lambda: self.label_action_requested.emit("tag", None))
         menu.addAction(tag_action)
         

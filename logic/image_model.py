@@ -51,7 +51,7 @@ class ImageTableModel(QAbstractTableModel):
     data_changed = Signal()
 
     COLUMNS = [
-        "Tag", "Thumbnail", "Label", "Variant", "Product Name", "Category", "Preset", "Version", 
+        "Enable", "Thumbnail", "Label", "Variant", "Product Name", "Category", "Preset", "Version", 
         "Last Version", "Age", "Review", "AYON Path", "Key Value Pairs"
     ]
 

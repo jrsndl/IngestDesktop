@@ -1074,6 +1074,11 @@ class SequenceRenameDialog(QDialog):
         form = QFormLayout()
         
         self.prefix = QLineEdit("img")
+        
+        self.chk_add_counter = QCheckBox("Add Counter")
+        self.chk_add_counter.setChecked(True)
+        self.chk_add_counter.toggled.connect(self._on_toggle_counter)
+        
         self.counter_start = QSpinBox()
         self.counter_start.setRange(0, 999999)
         self.counter_start.setValue(1)
@@ -1085,6 +1090,7 @@ class SequenceRenameDialog(QDialog):
         self.suffix = QLineEdit("")
         
         form.addRow("Prefix:", self.prefix)
+        form.addRow("", self.chk_add_counter)
         form.addRow("Counter Start:", self.counter_start)
         form.addRow("Counter Zeroes:", self.counter_zeroes)
         form.addRow("Suffix:", self.suffix)
@@ -1105,12 +1111,17 @@ class SequenceRenameDialog(QDialog):
         btns.addWidget(self.btn_cancel)
         layout.addLayout(btns)
 
+    def _on_toggle_counter(self, checked):
+        self.counter_start.setEnabled(checked)
+        self.counter_zeroes.setEnabled(checked)
+
     def get_values(self):
         return {
             "prefix": self.prefix.text().strip(),
             "start": self.counter_start.value(),
             "zeroes": self.counter_zeroes.value(),
-            "suffix": self.suffix.text().strip()
+            "suffix": self.suffix.text().strip(),
+            "add_counter": self.chk_add_counter.isChecked()
         }
 
 class ArrangeDialog(QDialog):
@@ -1281,7 +1292,7 @@ class ThumbnailArea(QWidget):
 
         self.btn_tag_filter = QPushButton("Filter: All")
         self.btn_tag_filter.clicked.connect(self._cycle_tag_filter)
-        self._tag_filter_state = "all" # all, tagged, untagged
+        self._tag_filter_state = "all" # all, enabled, disabled
 
         self.btn_paste = QPushButton("Paste Image")
         self.btn_paste.clicked.connect(self.paste_requested.emit)
@@ -1442,10 +1453,14 @@ class ThumbnailArea(QWidget):
             start = vals["start"]
             zeroes = vals["zeroes"]
             suffix = vals["suffix"]
+            add_counter = vals.get("add_counter", True)
             
             for i, thumb in enumerate(sorted_thumbs):
-                counter = start + i
-                new_label = f"{prefix}{counter:0{zeroes}d}{suffix}"
+                if add_counter:
+                    counter = start + i
+                    new_label = f"{prefix}{counter:0{zeroes}d}{suffix}"
+                else:
+                    new_label = f"{prefix}{suffix}"
                 
                 try:
                     row = self.model.items.index(thumb.data)
@@ -1678,8 +1693,8 @@ class ThumbnailArea(QWidget):
             in_path = not self._path_filter or (item_abs == filter_abs or item_abs.startswith(filter_abs + os.sep))
             
             show_by_tag = True
-            if self._tag_filter_state == "tagged": show_by_tag = is_tagged
-            elif self._tag_filter_state == "untagged": show_by_tag = not is_tagged
+            if self._tag_filter_state == "enabled": show_by_tag = is_tagged
+            elif self._tag_filter_state == "disabled": show_by_tag = not is_tagged
             
             is_young_enough = not age_enabled or (item_data.age_minutes <= age_val)
             matches_search = not search_term or search_term in item_data.label.lower()
@@ -1706,7 +1721,7 @@ class ThumbnailArea(QWidget):
         self.rearrange_items()
 
     def _cycle_tag_filter(self):
-        states = ["all", "tagged", "untagged"]
+        states = ["all", "enabled", "disabled"]
         curr_idx = states.index(self._tag_filter_state)
         self._tag_filter_state = states[(curr_idx + 1) % len(states)]
         self.btn_tag_filter.setText(f"Filter: {self._tag_filter_state.capitalize()}")
@@ -2066,7 +2081,7 @@ class ThumbnailArea(QWidget):
 
         menu.addSeparator()
         
-        tag_action = QAction("Tag/Untag Selected", self)
+        tag_action = QAction("Enable/Disable Selected", self)
         tag_action.triggered.connect(self.tag_toggle_requested.emit)
         menu.addAction(tag_action)
         

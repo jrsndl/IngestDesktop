@@ -26,7 +26,7 @@ class PreferencesDialog(QDialog):
         self.form = QFormLayout()
         
         # AYON Settings
-        self.server_url = QLineEdit(self.config.get("ayon_server_url", ""))
+        self.server_url = QLineEdit(self.secrets.get("ayon_server_url", ""))
         
         # Scanner Settings
         self.product_name = QLineEdit(self.config.get("product_name", "{label}"))
@@ -41,7 +41,7 @@ class PreferencesDialog(QDialog):
         self.detect_sequences = QCheckBox("Detect Image Sequences")
         self.detect_sequences.setChecked(self.config.get("detect_sequences", True))
         
-        self.traypublisher_path = QLineEdit(self.config.get("traypublisher_path", "ayon_console.exe"))
+        self.traypublisher_path = QLineEdit(self.secrets.get("traypublisher_path", "ayon_console.exe"))
         self.btn_browse_console = QPushButton("Browse...")
         self.btn_browse_console.clicked.connect(self._on_browse_console)
         
@@ -57,7 +57,7 @@ class PreferencesDialog(QDialog):
         self.scan_folder_layout.addWidget(self.default_scan_folder)
         self.scan_folder_layout.addWidget(self.btn_browse_scan)
         
-        self.presets_folder = QLineEdit(self.config.get("presets_folder", ""))
+        self.presets_folder = QLineEdit(self.secrets.get("presets_folder", ""))
         self.btn_browse_presets = QPushButton("Browse...")
         self.btn_browse_presets.clicked.connect(self._on_browse_presets_folder)
         
@@ -269,7 +269,7 @@ class PreferencesDialog(QDialog):
         self.thumbs_form.addRow("Sequences: Thumbnail Command:", self.cmd_sequences)
 
         # Tool Paths (Moved from General)
-        self.ffmpeg_path = QLineEdit(self.config.get("ffmpeg_path", "ffmpeg.exe"))
+        self.ffmpeg_path = QLineEdit(self.secrets.get("ffmpeg_path", "ffmpeg.exe"))
         self.btn_browse_ffmpeg = QPushButton("Browse...")
         self.btn_browse_ffmpeg.clicked.connect(lambda: self._on_browse_file(self.ffmpeg_path, "FFmpeg Executable", "Executable Files (*.exe);;All Files (*)"))
         ffmpeg_lay = QHBoxLayout()
@@ -277,7 +277,7 @@ class PreferencesDialog(QDialog):
         ffmpeg_lay.addWidget(self.btn_browse_ffmpeg)
         self.thumbs_form.addRow("FFmpeg Path:", ffmpeg_lay)
 
-        self.ffprobe_path = QLineEdit(self.config.get("ffprobe_path", "ffprobe.exe"))
+        self.ffprobe_path = QLineEdit(self.secrets.get("ffprobe_path", "ffprobe.exe"))
         self.btn_browse_ffprobe = QPushButton("Browse...")
         self.btn_browse_ffprobe.clicked.connect(lambda: self._on_browse_file(self.ffprobe_path, "FFprobe Executable", "Executable Files (*.exe);;All Files (*)"))
         ffprobe_lay = QHBoxLayout()
@@ -285,7 +285,7 @@ class PreferencesDialog(QDialog):
         ffprobe_lay.addWidget(self.btn_browse_ffprobe)
         self.thumbs_form.addRow("FFprobe Path:", ffprobe_lay)
 
-        self.oiiotool_path = QLineEdit(self.config.get("oiiotool_path", "oiiotool.exe"))
+        self.oiiotool_path = QLineEdit(self.secrets.get("oiiotool_path", "oiiotool.exe"))
         self.btn_browse_oiio = QPushButton("Browse...")
         self.btn_browse_oiio.clicked.connect(lambda: self._on_browse_file(self.oiiotool_path, "OIIOTool Executable", "Executable Files (*.exe);;All Files (*)"))
         oiio_lay = QHBoxLayout()
@@ -293,7 +293,7 @@ class PreferencesDialog(QDialog):
         oiio_lay.addWidget(self.btn_browse_oiio)
         self.thumbs_form.addRow("OIIOTool Path:", oiio_lay)
 
-        self.ocio_config = QLineEdit(self.config.get("ocio_config", ""))
+        self.ocio_config = QLineEdit(self.secrets.get("ocio_config", ""))
         self.btn_browse_ocio = QPushButton("Browse...")
         self.btn_browse_ocio.clicked.connect(lambda: self._on_browse_file(self.ocio_config, "OCIO Config", "OCIO Config (*.ocio);;All Files (*)"))
         ocio_lay = QHBoxLayout()
@@ -683,7 +683,6 @@ class PreferencesDialog(QDialog):
                 stills_thumb_same = stills_thumb_cb.isChecked()
 
         new_config = {
-            "ayon_server_url": self.server_url.text(),
             "version_regex": self.version_regex.text(),
             "disable_inline_video": self.disable_inline_video.isChecked(),
             "default_columns": self.default_cols.value(),
@@ -694,9 +693,7 @@ class PreferencesDialog(QDialog):
             "label_allowed_chars": self.label_regex.text(),
             "detect_sequences": self.detect_sequences.isChecked(),
             "seq_thumb_frame": self.seq_thumb_frame.currentText(),
-            "traypublisher_path": self.traypublisher_path.text(),
             "default_scan_folder": self.default_scan_folder.text(),
-            "presets_folder": self.presets_folder.text(),
             "product_name": self.product_name.text(),
             "product_name_camel": self.product_name_camel.isChecked(),
             "csv_delimiter": self.csv_delimiter.text(),
@@ -722,10 +719,6 @@ class PreferencesDialog(QDialog):
             "video_start_from_tc": video_tc,
             "video_start_frame": video_start,
             "stills_thumb_same": stills_thumb_same,
-            "ffmpeg_path": self.ffmpeg_path.text(),
-            "ffprobe_path": self.ffprobe_path.text(),
-            "oiiotool_path": self.oiiotool_path.text(),
-            "ocio_config": self.ocio_config.text(),
             "version_collision": "lowest" if self.ver_collision_lowest.isChecked() else "fail",
             "auto_assign_multi_match": self.auto_assign_multi_match.isChecked(),
             "auto_assign_fallback_task": self.auto_assign_fallback_task.isChecked(),
@@ -750,6 +743,13 @@ class PreferencesDialog(QDialog):
             "ayon_api_key": self.api_key.text(),
             "ftrack_server": self.ftrack_server.text(),
             "ftrack_api_user": self.ftrack_user.text(),
-            "ftrack_api_key": self.ftrack_key.text()
+            "ftrack_api_key": self.ftrack_key.text(),
+            "presets_folder": self.presets_folder.text(),
+            "ayon_server_url": self.server_url.text(),
+            "traypublisher_path": self.traypublisher_path.text(),
+            "ffmpeg_path": self.ffmpeg_path.text(),
+            "ffprobe_path": self.ffprobe_path.text(),
+            "oiiotool_path": self.oiiotool_path.text(),
+            "ocio_config": self.ocio_config.text()
         }
         return new_config, new_secrets
