@@ -88,6 +88,8 @@ class TagColorProxyModel(QSortFilterProxyModel):
         
         self.main_model.dataChanged.connect(self._on_model_data_changed)
         self.main_model.modelReset.connect(self._rebuild_cache)
+        self.main_model.rowsInserted.connect(self._rebuild_cache)
+        self.main_model.rowsRemoved.connect(self._rebuild_cache)
 
     def set_filters(self, search_text, age_limit, age_enabled):
         self._search_text = search_text.lower()
@@ -326,6 +328,13 @@ class FilterPanel(QWidget):
         self.tree.clicked.connect(self._on_folder_click)
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._on_context_menu)
+        
+        # Connect main model signals to automatically refresh views when items change
+        self.main_model.rowsInserted.connect(self.refresh_views_if_active)
+        self.main_model.rowsRemoved.connect(self.refresh_views_if_active)
+        self.main_model.modelReset.connect(self.refresh_views_if_active)
+        self.main_model.layoutChanged.connect(self.refresh_views_if_active)
+        
         self.layout.addWidget(self.tree)
 
         self._scene_items = [] # List of dicts with {name, label, type, etc}
@@ -357,6 +366,13 @@ class FilterPanel(QWidget):
         toggles_layout.addWidget(self.btn_v_stack)
         toggles_layout.addWidget(self.btn_sequences)
         self.layout.addLayout(toggles_layout)
+
+    def refresh_views_if_active(self):
+        """Rebuild/refresh the active flat or hierarchical scene view models."""
+        if self.btn_flat.isChecked():
+            self._enable_flat_view()
+        elif not self.btn_files_only.isChecked():
+            self._enable_hierarchical_scene_view()
 
     def _on_toggles_changed(self):
         # Check if sequence toggle changed to trigger global rescan if needed

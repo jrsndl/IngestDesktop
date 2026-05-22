@@ -108,6 +108,7 @@ class AyonPanel(QWidget):
     auto_assign_requested = Signal()
     project_changed = Signal(str)
     representations_requested = Signal(str, str) # (project_name, product_id)
+    show_thumbs_toggled = Signal(bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -128,6 +129,7 @@ class AyonPanel(QWidget):
         self.btn_refresh = QPushButton("Refresh")
         self.btn_auto = QPushButton("Auto-Assign")
         self.btn_auto.setObjectName("IngestButton")
+        self.btn_auto.setStyleSheet("font-weight: normal;")
         self.btn_auto.clicked.connect(self.auto_assign_requested.emit)
         
         btn_layout.addWidget(self.btn_refresh)
@@ -152,10 +154,16 @@ class AyonPanel(QWidget):
         self.btn_assigned_only.setCheckable(True)
         self.btn_assigned_only.toggled.connect(self._on_assigned_only_toggled)
         
+        self.btn_show_thumbs = QPushButton("Show Thumbs")
+        self.btn_show_thumbs.setCheckable(True)
+        self.btn_show_thumbs.setChecked(False)
+        self.btn_show_thumbs.toggled.connect(self.show_thumbs_toggled.emit)
+        
         self.btn_clear_all = QPushButton("Clear All Assignments")
         self.btn_clear_all.clicked.connect(self.clear_all_requested.emit)
         
         extra_btn_layout.addWidget(self.btn_assigned_only)
+        extra_btn_layout.addWidget(self.btn_show_thumbs)
         extra_btn_layout.addWidget(self.btn_clear_all)
 
         # Tree View

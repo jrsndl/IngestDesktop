@@ -338,6 +338,14 @@ class PreferencesDialog(QDialog):
         oiio_lay.addWidget(self.btn_browse_oiio)
         self.thumbs_form.addRow("OIIOTool Path:", oiio_lay)
 
+        self.vfxtranscode = QLineEdit(self.secrets.get("vfxtranscode", ""))
+        self.btn_browse_vfx = QPushButton("Browse...")
+        self.btn_browse_vfx.clicked.connect(lambda: self._on_browse_file(self.vfxtranscode, "VFX Transcode Executable", "Executable Files (*.exe);;All Files (*)"))
+        vfx_lay = QHBoxLayout()
+        vfx_lay.addWidget(self.vfxtranscode)
+        vfx_lay.addWidget(self.btn_browse_vfx)
+        self.thumbs_form.addRow("VFX Transcode Path:", vfx_lay)
+
         self.ocio_config = QLineEdit(self.secrets.get("ocio_config", ""))
         self.btn_browse_ocio = QPushButton("Browse...")
         self.btn_browse_ocio.clicked.connect(lambda: self._on_browse_file(self.ocio_config, "OCIO Config", "OCIO Config (*.ocio);;All Files (*)"))
@@ -814,6 +822,7 @@ class PreferencesDialog(QDialog):
             "ffmpeg_path": self.ffmpeg_path.text(),
             "ffprobe_path": self.ffprobe_path.text(),
             "oiiotool_path": self.oiiotool_path.text(),
+            "vfxtranscode": self.vfxtranscode.text(),
             "ocio_config": self.ocio_config.text(),
             "ingest_log_folder": self.ingest_log_folder.text(),
             "per_project_logging": self.per_project_logging.isChecked()

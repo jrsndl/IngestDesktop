@@ -73,6 +73,8 @@ class ImageTableModel(QAbstractTableModel):
         self.ffmpeg_path = "ffmpeg.exe"
         self.ffprobe_path = "ffprobe.exe"
         self.oiiotool_path = "oiiotool.exe"
+        self.vfxtranscode = ""
+        self.show_thumbs = False
 
     def set_presets(self, presets):
         self.presets = presets
@@ -165,6 +167,10 @@ class ImageTableModel(QAbstractTableModel):
             return Qt.Checked if item.is_tagged else Qt.Unchecked
 
         elif role == Qt.DecorationRole and col == 1:
+            if getattr(self, "show_thumbs", False):
+                ayon_thumb = getattr(item, "ayon_thumbnail", None)
+                if ayon_thumb:
+                    return ayon_thumb
             return item.thumbnail
 
         elif role == Qt.BackgroundRole:
@@ -428,6 +434,7 @@ class ImageTableModel(QAbstractTableModel):
             "{ffmpeg}": self.ffmpeg_path,
             "{ffprobe}": self.ffprobe_path,
             "{oiiotool}": self.oiiotool_path,
+            "{vfxtranscode}": self.vfxtranscode,
             "{ingest_status}": getattr(item, "ingest_status", "unknown"),
             "{INGEST_STATUS}": getattr(item, "ingest_status", "unknown"),
         }

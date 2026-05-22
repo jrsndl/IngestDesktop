@@ -330,6 +330,9 @@ class MainWindow(QMainWindow):
         # Instantiate parameterless to prevent synchronous startup connection blocking the GUI thread.
         # The background ConnectionThread will handle the actual connection asynchronously.
         self.ayon = AyonClient()
+        self.ayon_thumb_cache = {}
+        self.ayon_thumb_downloading = set()
+        self._thumb_threads = []
         
         # Configure logging to console
         self.log_signal.connect(self.log_message)
@@ -397,6 +400,7 @@ class MainWindow(QMainWindow):
         self.ayon_panel.btn_refresh.clicked.connect(self.refresh_ayon)
         self.ayon_panel.info_requested.connect(self._on_ayon_info_requested)
         self.ayon_panel.representations_requested.connect(self._on_ayon_representations_requested)
+        self.ayon_panel.show_thumbs_toggled.connect(self._on_show_thumbs_toggled)
         self.h_splitter.addWidget(self.ayon_panel)
 
         # 3. Center Area (Thumbnails + Spreadsheet)
@@ -716,7 +720,8 @@ class MainWindow(QMainWindow):
                 "is_sequence": item.is_sequence,
                 "is_selected": is_selected,
                 "position": item.position,
-                "metadata": item.metadata
+                "metadata": item.metadata,
+                "ingest_status": item.ingest_status
             }
             project_data["items"].append(item_dict)
             
@@ -840,6 +845,7 @@ class MainWindow(QMainWindow):
                 item.ayon_task_name = it.get("ayon_task_name", "")
                 item.position = tuple(it.get("position", (0, 0)))
                 item.metadata = it.get("metadata", {})
+                item.ingest_status = it.get("ingest_status", "unknown")
                 
                 # Check for standard model keys
                 item.is_sequence = it.get("is_sequence", False)
@@ -1022,6 +1028,7 @@ class MainWindow(QMainWindow):
             "ffmpeg_path",
             "ffprobe_path",
             "oiiotool_path",
+            "vfxtranscode",
             "ocio_config",
             "ayon_api_key",
             "ingest_log_folder",
@@ -1623,6 +1630,7 @@ class MainWindow(QMainWindow):
         self.model.ffmpeg_path = expand_env_vars(self.secrets.get("ffmpeg_path", "ffmpeg.exe"))
         self.model.ffprobe_path = expand_env_vars(self.secrets.get("ffprobe_path", "ffprobe.exe"))
         self.model.oiiotool_path = expand_env_vars(self.secrets.get("oiiotool_path", "oiiotool.exe"))
+        self.model.vfxtranscode = expand_env_vars(self.secrets.get("vfxtranscode", ""))
         
         self.csv_preview_model.refresh_config(self.config)
         
@@ -1805,6 +1813,7 @@ class MainWindow(QMainWindow):
             "ffmpeg_path",
             "ffprobe_path",
             "oiiotool_path",
+            "vfxtranscode",
             "ocio_config",
             "ayon_api_key",
             "ingest_log_folder",
@@ -3195,9 +3204,11 @@ class MainWindow(QMainWindow):
         """Highlight assigned tasks in the AYON panel."""
         assigned_paths = set(item.ayon_path for item in self.model.items if item.ayon_path)
         if hasattr(self, "_last_assigned_paths") and self._last_assigned_paths == assigned_paths:
+            self.update_ayon_thumbnails()
             return
         self._last_assigned_paths = assigned_paths
         self.ayon_panel.update_assigned_status(assigned_paths)
+        self.update_ayon_thumbnails()
 
     def _on_ayon_unassign(self, ayon_path):
         """Clear AYON path for all items assigned to this path."""
@@ -3300,6 +3311,125 @@ class MainWindow(QMainWindow):
         self._prod_thread = ProductThread(self.ayon, project, folder_id)
         self._prod_thread.finished.connect(self.ayon_panel.set_products)
         self._prod_thread.start()
+
+    def _on_show_thumbs_toggled(self, checked):
+        print(f"[Debug] Show Thumbs toggled: {checked}")
+        self.log_message(f"[Debug] Show Thumbs toggled: {checked}", "info")
+        self.model.show_thumbs = checked
+        if checked:
+            self.update_ayon_thumbnails()
+        self.model.layoutChanged.emit()
+
+
+    def update_ayon_thumbnails(self):
+        if not getattr(self.model, "show_thumbs", False):
+            return
+            
+        project = self.ayon_panel.combo_project.currentText()
+        if not project:
+            return
+            
+        path_map = self.ayon_panel.get_path_to_id_map()
+        if not path_map:
+            return
+            
+        for item in self.model.items:
+            if not item.ayon_path:
+                print(f"debug: ayon_path is empty for item: {item}")
+                continue
+                
+            # ayon_path is /Project/Folder/Task - we need the folder path
+            folder_path = "/".join(item.ayon_path.split("/")[:-1])
+            f_id = path_map.get(folder_path)
+            
+            if not f_id:
+                print(f"debug: f_id not found for folder path '{folder_path}' in path_map")
+                continue
+                
+            if f_id in self.ayon_thumb_cache:
+                print(f"debug: f_id '{f_id}' found in ayon_thumb_cache for item: {item}")
+                item.ayon_thumbnail = self.ayon_thumb_cache[f_id]
+                continue
+                
+            # If not cached and not currently downloading, start download
+            if f_id not in self.ayon_thumb_downloading:
+                print(f"Downloading thumbnail for folder ID '{f_id}' in project '{project}' from AYON...")
+                self.ayon_thumb_downloading.add(f_id)
+                
+                # Start background thread
+                thread = AyonFolderThumbnailThread(self.ayon, project, f_id)
+                thread.download_finished.connect(self._on_ayon_thumbnail_downloaded)
+                # Keep thread reference
+                self._thumb_threads.append(thread)
+                thread.start()
+
+    def _get_ayon_thumb_path(self, item):
+        """Construct a thumbnail path using AYON folder path, replacing slashes with dashes, adding suffix '_thumbAyon'."""
+        import os
+        source_file = item.file_path.replace("\\", "/")
+        base_dir = os.path.dirname(source_file)
+        
+        target_dir = base_dir
+        thumb_loc = self.config.get("thumb_location", "Relative to Source Folder")
+        thumb_loc_path = self.config.get("thumb_location_path", "_thumbs")
+        
+        if thumb_loc == "Relative to Source Folder":
+            if self.model.source_folder:
+                target_dir = os.path.join(self.model.source_folder, thumb_loc_path).replace("\\", "/")
+        elif thumb_loc == "Custom":
+            target_dir = thumb_loc_path.replace("\\", "/")
+            
+        # Get AYON folder path
+        folder_path = "/".join(item.ayon_path.split("/")[:-1])
+        clean_path = folder_path.strip("/")
+        dashed_path = clean_path.replace("/", "-")
+        
+        # Suffix and format
+        ext = self.config.get("thumb_format", ".jpg")
+        target_filename = f"{dashed_path}_thumbAyon{ext}"
+        
+        return os.path.join(target_dir, target_filename).replace("\\", "/")
+
+    def _on_ayon_thumbnail_downloaded(self, folder_id, data):
+        # Remove completed threads from tracking
+        self._thumb_threads = [t for t in self._thumb_threads if t.isRunning()]
+        
+        if folder_id in self.ayon_thumb_downloading:
+            self.ayon_thumb_downloading.remove(folder_id)
+            
+        if data:
+            from PySide6.QtGui import QImage, QPixmap
+            image = QImage()
+            if image.loadFromData(data):
+                pixmap = QPixmap.fromImage(image)
+                # Cache it
+                self.ayon_thumb_cache[folder_id] = pixmap
+                
+                # Assign to all items with matching folder path
+                path_map = self.ayon_panel.get_path_to_id_map()
+                if path_map:
+                    for item in self.model.items:
+                        if item.ayon_path:
+                            folder_path = "/".join(item.ayon_path.split("/")[:-1])
+                            f_id = path_map.get(folder_path)
+                            if f_id == folder_id:
+                                item.ayon_thumbnail = pixmap
+                                try:
+                                    local_thumb_path = self._get_ayon_thumb_path(item)
+                                    import os
+                                    os.makedirs(os.path.dirname(local_thumb_path), exist_ok=True)
+                                    print(f"[Debug] Storing AYON thumbnail locally to: {local_thumb_path}")
+                                    self.log_message(f"[Debug] Storing AYON thumbnail locally to: {local_thumb_path}", "info")
+                                    with open(local_thumb_path, "wb") as f:
+                                        f.write(data)
+                                    item.thumbnail = pixmap
+                                except Exception as e:
+                                    print(f"Failed to save AYON thumbnail locally: {e}")
+                
+                # Refresh views
+                self.model.layoutChanged.emit()
+                if self.spreadsheet._is_csv_mode:
+                    self.csv_preview_model._refresh_data()
 
     def _on_ayon_representations_requested(self, project, product_id):
         """Asynchronously load representations for the selected product."""
@@ -3901,6 +4031,7 @@ class MainWindow(QMainWindow):
                 "ffmpeg_path",
                 "ffprobe_path",
                 "oiiotool_path",
+                "vfxtranscode",
                 "ocio_config",
                 "ayon_api_key",
                 "ingest_log_folder",
@@ -3931,4 +4062,27 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Save Preset", f"Preset '{safe_name}' successfully saved and set as active.")
         except Exception as e:
             QMessageBox.critical(self, "Save Preset Error", f"Error saving preset: {e}")
+
+
+class AyonFolderThumbnailThread(QThread):
+    download_finished = Signal(str, bytes)  # (folder_id, image_bytes)
+
+    def __init__(self, ayon, project, folder_id):
+        super().__init__()
+        self.ayon = ayon
+        self.project = project
+        self.folder_id = folder_id
+
+    def run(self):
+        try:
+            import ayon_api
+            thumb = ayon_api.get_folder_thumbnail(self.project, self.folder_id)
+            if thumb and thumb.is_valid and thumb.content:
+                self.download_finished.emit(self.folder_id, thumb.content)
+            else:
+                self.download_finished.emit(self.folder_id, b"")
+        except Exception as e:
+            print(f"Error fetching thumbnail for folder {self.folder_id}: {e}")
+            self.download_finished.emit(self.folder_id, b"")
+
 

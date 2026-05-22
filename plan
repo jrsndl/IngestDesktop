@@ -455,3 +455,47 @@ Thumb View: Add overlay top left corner triangle overlay (triangle size 20% of t
 - if the ingest check failed, red triangle
 Spreadsheet view: Add "Ingest Status" column
 Filter View: add tiny green checkmark or red cross icon before the R symbol of each item
+
+
+
+Feature: AYON Panel Thumbnails:
+To the top control part, same row as Assigned Only, add toggle buttom "Show Thumbs". Default off
+If "Show Thumbs" is on, app will download the "leaf folder" thumbnail from AYON server and display it in the spreadsheet
+
+
+
+
+
+* Ayon Panel: Auto-Assign button: do not use bold text style on label
+* Thumbnail view: Double clicking the thumbnail will not do a rename, instead it will change the zoom and pan to "frame selection" where selection is the doubleclicked thumbnail
+* Preferences: Conversions: Add "VFX Transcode Path" after "OIIOTool Path". set the value to the key {vfxtranscode}
+* Filter Panel: make sure the panel initializes properly when in flat mode. The flat toggle now needs to be user switched off and on again for proper file display
+* Saving Project: make sure to store the ingest status of the items (unknown / OK / Failed ...)
+
+Feature: Deadline Processing:
+Allow user to send the processing to the deadline farm.
+* Bottom Buttons: Change the "Publish Ayon Deadline" to "Process Reviews on Deadline"
+* Detect the deadlinecommand.exe, use environment variable "DEADLINE_PATH".
+* Preferences: Add "Deadline" tab:
+- "Primary Pool", default="all"
+- "Secondary Pool", default="all"
+- "Group", default="2d_studio"
+- "Priority", default=50
+- "Depatrment", default="io"
+- "MachineLimit", default=1
+- "ConcurrentTasks", default=1
+- "Name": default="Encoding {label} Review for {ayon_path}/{ayon_task_name}"
+* implement sending the Review Conversion to Deadline, one review - one deadline job, with one cmd task
+
+
+Feature: Ingest Check Report:
+* Preferences - General: Add checkbox "Create Ingest Report", default on. followed by "Timezone Offset A" and "Timezone Offset B"
+* After running the Ingest Check, Create good looking, simple report PDF file, that is easy to print. Only include ingested Rows. Name it the same as report csv file.
+- title "Ingest Report"
+- subtitle : date and time A: YYYY-MM-DD HH:MM {timezone_offset_a} (this is the local time zone of the app)
+- subtitle : date and time B: YYYY-MM-DD HH:MM {timezone_offset_b} (this is the client time when the report was created)
+- Spreadsheet with: decent sized thumbnail, File Name, Ayon Folder, Version, length (frames), frame start, frame end
+- Formated to A4, portrait
+
+
+

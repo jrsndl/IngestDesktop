@@ -1894,9 +1894,21 @@ class ThumbnailArea(QWidget):
                             return False
                         temp = temp.parentItem()
 
-                    # Slightly longer delay to ensure the dblclick sequence is fully processed
-                    QTimer.singleShot(50, lambda: self._start_inline_rename(item))
-                    return True
+                    # Find the ThumbnailItem
+                    thumb_item = item
+                    while thumb_item and not hasattr(thumb_item, 'get_label_top'):
+                        thumb_item = thumb_item.parentItem()
+
+                    if thumb_item:
+                        # Clear current selection first
+                        self.scene.clearSelection()
+                        # Select only this thumbnail item
+                        thumb_item.setSelected(True)
+                        # Frame selection
+                        self.frame_selection()
+                        return True
+                    else:
+                        return True
                 else:
                     self.frame_all()
                     return True

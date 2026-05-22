@@ -102,6 +102,10 @@ class CSVPreviewModel(QAbstractTableModel):
 
         if role == Qt.DecorationRole:
             if col == 1:
+                if getattr(self.source_model, "show_thumbs", False):
+                    ayon_thumb = getattr(item, "ayon_thumbnail", None)
+                    if ayon_thumb:
+                        return ayon_thumb
                 return item.thumbnail
             return None
 
