@@ -638,6 +638,16 @@ class MainWindow(QMainWindow):
         act_keys = QAction("Key List", self)
         act_keys.triggered.connect(self.show_help)
         help_menu.addAction(act_keys)
+        
+        help_menu.addSeparator()
+        
+        act_guide = QAction("User Guide", self)
+        act_guide.triggered.connect(self.open_help_guide)
+        help_menu.addAction(act_guide)
+        
+        act_reference = QAction("System Reference", self)
+        act_reference.triggered.connect(self.open_help_reference)
+        help_menu.addAction(act_reference)
 
     def _update_recent_menu(self):
         self.recent_menu.clear()
@@ -1562,6 +1572,26 @@ class MainWindow(QMainWindow):
 
     def show_help(self):
         self.help_overlay.show_help()
+
+    def open_help_guide(self):
+        import os
+        from PySide6.QtGui import QDesktopServices
+        from PySide6.QtCore import QUrl
+        doc_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "docs", "help_guide.md")
+        if os.path.exists(doc_path):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(doc_path))
+        else:
+            self.log_message(f"Help Guide file not found at: {doc_path}", "error")
+
+    def open_help_reference(self):
+        import os
+        from PySide6.QtGui import QDesktopServices
+        from PySide6.QtCore import QUrl
+        doc_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "docs", "help_reference.md")
+        if os.path.exists(doc_path):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(doc_path))
+        else:
+            self.log_message(f"Help Reference file not found at: {doc_path}", "error")
 
     def show_preferences(self):
         # Store old values to check if re-scan is needed

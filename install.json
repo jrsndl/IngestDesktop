@@ -13,7 +13,7 @@
     "ingest_log_folder": "D:\\_code\\IngestDesktop\\ingestLog",
     "per_project_logging": true,
     "vfxtranscode": "",
-    "deadline_job_name": "Encoding {label} Review for {ayon_path}/{ayon_task_name}",
+    "deadline_job_name": "Encoding {label} Review for {ayon_folder_path}/{ayon_task_name}",
     "deadline_department": "io",
     "deadline_pool": "all",
     "deadline_secondary_pool": "all",

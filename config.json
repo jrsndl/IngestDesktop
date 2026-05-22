@@ -275,7 +275,7 @@
     "last_ayon_project": "BCV_009_JA_Hiphi",
     "filter_toggles": {
         "files_only": true,
-        "flat": false,
+        "flat": true,
         "v_stack": false,
         "sequences": true
     },
@@ -291,12 +291,12 @@
     "filter_age_value": 0,
     "filter_age_units": "minutes",
     "filter_files_only": true,
-    "filter_flat": false,
+    "filter_flat": true,
     "filter_v_stack": false,
     "filter_sequences": true,
     "thumbnail_size": 248,
     "geometry": "01d9d0cb00030000fffff600fffffff8ffffffff0000059ffffff63f000000cbfffffe0c000003ea00000001020000000a00fffff60000000017ffffffff0000059f",
-    "h_splitter": "000000ff000000010000000300000176000006b80000022f01ffffffff010000000100",
+    "h_splitter": "000000ff000000010000000300000176000007350000014101ffffffff010000000100",
     "v_splitter": "000000ff0000000100000002000003af0000015801ffffffff010000000200",
     "last_source_folder": "D:/2ayon",
     "recent_folders": [
