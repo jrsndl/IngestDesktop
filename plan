@@ -410,3 +410,21 @@ for all the paths that can be modified by user in gui, support environment varia
 
 Preferences: AutoAssign
 add checkbox "Fixed Task Name", defaults to off, followed by the text box for user settable task name
+
+
+Feature: Ingest Log
+* Preferences: General: after "Preset Folder", add new "Ingest Log Folder", followed by checkbox "Per Project Logging" - default on
+* When creating the CSV file for AYON traypublisher, save it to the "Ingest Log Folder". Add AYON project subfolder if "Per Project Logging" is on.
+
+Feature: Ingest Check
+* Preferences: AYON: add new "Ingest Check" checkbox - default on
+* After the AYON Traypublisher command finishes, and Ingest Logging finishes:
+- Refresh Ayon Panel, so it can show the freshly ingested products and representations
+- For the Ingest Log file, add "Check" column, go row by row, and check:
+  - the required product, representation and version exists in AYON database, write "OK" or "Failed" to the Check column. Set new key {ingest_status} with default "unknown", set to OK or Failed
+- after checking all the rows:
+  - save (overwrite) the file with new Check column filled
+  - decide on suffix: if all rows OK, suffix = "_checkedOK", if all rows Failed, suffix = "_checkedFailed", if some rows failed, suffix = "_checkedMixed"
+  - renamme the file with originalname_suffix.csv
+  
+Store the Preferences: General: "Ingest Log Folder" and "Per Project Logging" in install.json, not other jsons

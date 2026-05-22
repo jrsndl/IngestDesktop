@@ -1,3 +1,4 @@
+import os
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, 
                              QPushButton, QFormLayout, QSpinBox, QComboBox, QFileDialog, 
                              QTabWidget, QScrollArea, QWidget, QCheckBox, QPlainTextEdit,
@@ -65,8 +66,21 @@ class PreferencesDialog(QDialog):
         self.presets_folder_layout.addWidget(self.presets_folder)
         self.presets_folder_layout.addWidget(self.btn_browse_presets)
 
+        self.ingest_log_folder = QLineEdit(self.secrets.get("ingest_log_folder", ""))
+        self.btn_browse_log = QPushButton("Browse...")
+        self.btn_browse_log.clicked.connect(self._on_browse_log_folder)
+        
+        self.log_folder_layout = QHBoxLayout()
+        self.log_folder_layout.addWidget(self.ingest_log_folder)
+        self.log_folder_layout.addWidget(self.btn_browse_log)
+        
+        self.per_project_logging = QCheckBox("Per Project Logging")
+        self.per_project_logging.setChecked(self.secrets.get("per_project_logging", True))
+
         self.form.addRow("Default Scan Folder:", self.scan_folder_layout)
         self.form.addRow("Presets Folder:", self.presets_folder_layout)
+        self.form.addRow("Ingest Log Folder:", self.log_folder_layout)
+        self.form.addRow("", self.per_project_logging)
         self.form.addRow("Age Calculation Source:", self.age_source)
         self.form.addRow("Sequence Detection:", self.detect_sequences)
         
@@ -112,12 +126,22 @@ class PreferencesDialog(QDialog):
         self.csv_preset = QLineEdit(self.config.get("ayon_csv_preset", "Default"))
         self.ignore_validators = QCheckBox("Ignore Validators")
         self.ignore_validators.setChecked(self.config.get("ayon_ignore_validators", True))
+        
+        self.ingest_check = QCheckBox("Ingest Check")
+        self.ingest_check.setChecked(self.config.get("ayon_ingest_check", True))
+        
+        self.ayon_version_status = QLineEdit(self.config.get("ayon_version_status", "Pending Review"))
+        self.set_version_status_after_check = QCheckBox("Set version status after Ingest Check")
+        self.set_version_status_after_check.setChecked(self.config.get("set_version_status_after_check", True))
 
         self.ayon_form.addRow("Project {ayon_project_name}:", self.ayon_project_name)
         self.ayon_form.addRow("CSV Ingest Folder:", self.csv_ingest_folder)
         self.ayon_form.addRow("CSV Ingest Task:", self.csv_ingest_task)
         self.ayon_form.addRow("CSV Preset:", self.csv_preset)
         self.ayon_form.addRow(self.ignore_validators)
+        self.ayon_form.addRow(self.ingest_check)
+        self.ayon_form.addRow("Ingested Version Status:", self.ayon_version_status)
+        self.ayon_form.addRow(self.set_version_status_after_check)
 
         self.ayon_layout.addLayout(self.ayon_form)
         self.ayon_layout.addStretch()
@@ -643,6 +667,13 @@ class PreferencesDialog(QDialog):
         if dir_path:
             self.presets_folder.setText(os.path.normpath(dir_path))
 
+    def _on_browse_log_folder(self):
+        from utils import expand_env_vars
+        init_dir = expand_env_vars(self.ingest_log_folder.text())
+        dir_path = QFileDialog.getExistingDirectory(self, "Select Ingest Log Folder", init_dir)
+        if dir_path:
+            self.ingest_log_folder.setText(os.path.normpath(dir_path))
+
     def _on_thumb_location_changed(self, text):
         is_custom_or_rel = text in ["Relative to Source Folder", "Custom"]
         self.thumb_location_path.setVisible(is_custom_or_rel)
@@ -735,6 +766,9 @@ class PreferencesDialog(QDialog):
             "ayon_csv_ingest_task": self.csv_ingest_task.text(),
             "ayon_csv_preset": self.csv_preset.text(),
             "ayon_ignore_validators": self.ignore_validators.isChecked(),
+            "ayon_ingest_check": self.ingest_check.isChecked(),
+            "ayon_version_status": self.ayon_version_status.text(),
+            "set_version_status_after_check": self.set_version_status_after_check.isChecked(),
             "clip_temp_root": self.clip_temp_root.text(),
             "clip_folder_template": self.clip_folder_template.text(),
             "clip_file_prefix": self.clip_file_prefix.text(),
@@ -752,6 +786,8 @@ class PreferencesDialog(QDialog):
             "ffmpeg_path": self.ffmpeg_path.text(),
             "ffprobe_path": self.ffprobe_path.text(),
             "oiiotool_path": self.oiiotool_path.text(),
-            "ocio_config": self.ocio_config.text()
+            "ocio_config": self.ocio_config.text(),
+            "ingest_log_folder": self.ingest_log_folder.text(),
+            "per_project_logging": self.per_project_logging.isChecked()
         }
         return new_config, new_secrets

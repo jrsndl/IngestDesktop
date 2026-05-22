@@ -46,6 +46,7 @@ class ImageItem:
         self.is_duplicate = False
         self.version_collision = None
         self.comment = comment
+        self.ingest_status = "unknown"
 
 class ImageTableModel(QAbstractTableModel):
     data_changed = Signal()
@@ -420,6 +421,8 @@ class ImageTableModel(QAbstractTableModel):
             "{ffmpeg}": self.ffmpeg_path,
             "{ffprobe}": self.ffprobe_path,
             "{oiiotool}": self.oiiotool_path,
+            "{ingest_status}": getattr(item, "ingest_status", "unknown"),
+            "{INGEST_STATUS}": getattr(item, "ingest_status", "unknown"),
         }
         return replacements
 

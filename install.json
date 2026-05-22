@@ -9,5 +9,7 @@
     "ffmpeg_path": "${IngestDesktop}/ffmpeg/ffmpeg.exe",
     "ffprobe_path": "${IngestDesktop}/ffmpeg/ffprobe.exe",
     "oiiotool_path": "oiiotool.exe",
-    "ocio_config": ""
+    "ocio_config": "",
+    "ingest_log_folder": "D:\\_code\\IngestDesktop\\ingestLog",
+    "per_project_logging": true
 }

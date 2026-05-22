@@ -15,5 +15,6 @@ secrets.json
 _reviews/
 ffmpeg/
 presets/
+ingestLog/
 
 $\{IngestDesktop\}/users/

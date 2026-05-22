@@ -1023,7 +1023,9 @@ class MainWindow(QMainWindow):
             "ffprobe_path",
             "oiiotool_path",
             "ocio_config",
-            "ayon_api_key"
+            "ayon_api_key",
+            "ingest_log_folder",
+            "per_project_logging"
         ]
         migrated = False
         for key in shifted_keys:
@@ -1804,7 +1806,9 @@ class MainWindow(QMainWindow):
             "ffprobe_path",
             "oiiotool_path",
             "ocio_config",
-            "ayon_api_key"
+            "ayon_api_key",
+            "ingest_log_folder",
+            "per_project_logging"
         ]
         for key in shifted_keys:
             if key in clean_config:
@@ -1997,8 +2001,27 @@ class MainWindow(QMainWindow):
 
         # 2. Proceed with publish
         project = self.ayon_panel.combo_project.currentText()
-        import tempfile
-        csv_path = os.path.join(tempfile.gettempdir(), "ayon_ingest.csv")
+        
+        # Determine target CSV log path
+        log_folder = self.secrets.get("ingest_log_folder", "").strip()
+        if log_folder:
+            per_project = self.secrets.get("per_project_logging", True)
+            if per_project and project:
+                log_dir = os.path.join(log_folder, project)
+            else:
+                log_dir = log_folder
+            try:
+                os.makedirs(log_dir, exist_ok=True)
+                import datetime
+                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                csv_path = os.path.normpath(os.path.join(log_dir, f"ayon_ingest_{timestamp}.csv"))
+            except Exception as e:
+                self.log_message(f"Failed to create Ingest Log Folder structure: {e}. Falling back to temp directory.", "warning")
+                import tempfile
+                csv_path = os.path.normpath(os.path.join(tempfile.gettempdir(), "ayon_ingest.csv"))
+        else:
+            import tempfile
+            csv_path = os.path.normpath(os.path.join(tempfile.gettempdir(), "ayon_ingest.csv"))
         
         try:
             self._write_csv_from_preview(valid_items, csv_path)
@@ -2043,7 +2066,6 @@ class MainWindow(QMainWindow):
 
             class PublishWorker(QThread):
                 line_received = Signal(str)
-                finished = Signal()
                 
                 def __init__(self, cmd, env):
                     super().__init__()
@@ -2064,16 +2086,232 @@ class MainWindow(QMainWindow):
                     for line in process.stdout:
                         self.line_received.emit(line.strip())
                     process.wait()
-                    self.finished.emit()
 
             self._publish_worker = PublishWorker(cmd, env)
             self._publish_worker.line_received.connect(lambda line: self.log_message(f"[TrayPublisher] {line}"))
-            self._publish_worker.finished.connect(lambda: self.log_message("Publish process finished.", "success"))
-            self._publish_worker.finished.connect(self.refresh_ayon)
+            self._publish_worker.finished.connect(lambda: self._on_publish_finished(csv_path, valid_items))
             self._publish_worker.start()
 
         except Exception as e:
             self.log_message(f"Failed to start TrayPublisher: {e}", "error")
+
+    def _on_publish_finished(self, csv_path, valid_items):
+        self.log_message("Publish process finished.", "success")
+        self.refresh_ayon()
+        
+        # Check if Ingest Check is enabled
+        if not self.config.get("ayon_ingest_check", True):
+            return
+            
+        self.log_message("Starting Ingest Check verification...", "info")
+        
+        import csv
+        import shutil
+        import datetime
+        import ayon_api
+        
+        if not self.ayon.is_connected:
+            self.log_message("AYON is not connected. Ingest Check cannot run.", "error")
+            return
+            
+        project = self.ayon_panel.combo_project.currentText()
+        if not project:
+            self.log_message("No project selected for Ingest Check.", "error")
+            return
+            
+        if not csv_path or not os.path.exists(csv_path):
+            self.log_message(f"Ingest Log file not found at: {csv_path}", "error")
+            return
+            
+        delimiter = self.config.get("csv_delimiter", ",")
+        quotechar = self.config.get("csv_quotechar", '"')
+        
+        rows = []
+        headers = []
+        try:
+            with open(csv_path, "r", newline="", encoding="utf-8") as f:
+                reader = csv.reader(f, delimiter=delimiter, quotechar=quotechar)
+                headers = next(reader, [])
+                for r in reader:
+                    if r:
+                        rows.append(r)
+        except Exception as e:
+            self.log_message(f"Error reading Ingest Log file: {e}", "error")
+            return
+            
+        # Find critical columns by checking headers case-insensitively
+        file_path_col = -1
+        ayon_path_col = -1
+        product_name_col = -1
+        version_col = -1
+        repre_col = -1
+        
+        for idx, h in enumerate(headers):
+            h_lower = h.lower().strip()
+            if h_lower in ["file path", "filepath"]:
+                file_path_col = idx
+            elif h_lower in ["ayon path", "folder path", "folder_path"]:
+                ayon_path_col = idx
+            elif h_lower in ["product name", "product", "subset"]:
+                product_name_col = idx
+            elif h_lower in ["version", "v"]:
+                version_col = idx
+            elif h_lower in ["representation", "repre"]:
+                repre_col = idx
+                
+        def normalize_version(v_str):
+            if not v_str: return None
+            try:
+                return int(v_str)
+            except ValueError:
+                pass
+            import re
+            m = re.search(r'\d+', str(v_str))
+            if m:
+                return int(m.group())
+            return None
+            
+        checked_rows = []
+        check_results = []
+        
+        # Map item path (normalized, absolute) -> item to update ingest_status
+        item_map = {}
+        for item in valid_items:
+            norm_main = os.path.normpath(os.path.abspath(item.file_path)).lower()
+            item_map[norm_main] = item
+            review_path = self.model.expand_tokens("{prefs_review_path}", item)
+            if review_path:
+                norm_review = os.path.normpath(os.path.abspath(review_path)).lower()
+                item_map[norm_review] = item
+                
+        for row in rows:
+            while len(row) < len(headers):
+                row.append("")
+                
+            file_path_val = row[file_path_col] if file_path_col >= 0 else ""
+            ayon_path_val = row[ayon_path_col] if ayon_path_col >= 0 else ""
+            version_val = row[version_col] if version_col >= 0 else ""
+            
+            matched_item = None
+            if file_path_val:
+                norm_f = os.path.normpath(os.path.abspath(file_path_val)).lower()
+                matched_item = item_map.get(norm_f)
+                
+            product_name_val = ""
+            if matched_item:
+                product_name_val = self.model._expand_string(self.model.product_name_template, matched_item, use_global_camel=True)
+            if not product_name_val and product_name_col >= 0 and product_name_col < len(row):
+                product_name_val = row[product_name_col]
+                
+            if not product_name_val:
+                p_type_val = ""
+                variant_val = ""
+                for idx, h in enumerate(headers):
+                    h_lower = h.lower().strip()
+                    if "product type" in h_lower or "product_type" in h_lower:
+                        p_type_val = row[idx] if idx < len(row) else ""
+                    elif "variant" in h_lower:
+                        variant_val = row[idx] if idx < len(row) else ""
+                if p_type_val or variant_val:
+                    camel = self.config.get("product_name_camel", True)
+                    if camel:
+                        if p_type_val: p_type_val = p_type_val[0].upper() + p_type_val[1:]
+                        if variant_val: variant_val = variant_val[0].upper() + variant_val[1:]
+                    product_name_val = f"{p_type_val}{variant_val}"
+            
+            repre_name = ""
+            if repre_col >= 0 and repre_col < len(row):
+                repre_name = row[repre_col]
+            if not repre_name and file_path_val:
+                repre_name = os.path.splitext(file_path_val)[1].replace(".", "").lower()
+
+            print(f"Found {matched_item}")
+            print(f" AYON product name: {product_name_val}")
+            print(f" Representation name: {repre_name}")
+            print(f" Version: {version_val}")
+            print(f" normalized Version: {normalize_version(version_val)}")
+                
+            status_str = "OK"
+            try:
+                folder = ayon_api.get_folder_by_path(project, ayon_path_val)
+                if not folder:
+                    status_str = f"Failed: AYON Folder {ayon_path_val} not found"
+                else:
+                    products = list(ayon_api.get_products(project, folder_ids=[folder["id"]]))
+                    product = next((p for p in products if p["name"].lower() == product_name_val.lower()), None)
+                    if not product:
+                        status_str = f"Failed: Product name \"{product_name_val}\" not found"
+                    else:
+                        versions = list(ayon_api.get_versions(project, product_ids=[product["id"]]))
+                        target_v_num = normalize_version(version_val)
+                        version_obj = next((v for v in versions if normalize_version(v.get("version")) == target_v_num), None)
+                        if not version_obj:
+                            status_str = f"Failed: version {version_val} of product \"{product['name']}\" not found"
+                        else:
+                            repres = list(ayon_api.get_representations(project, version_ids=[version_obj["id"]]))
+                            repre_obj = next((r for r in repres if (
+                                r["name"].lower() == repre_name.lower() or
+                                repre_name.lower() in r["name"].lower() or
+                                r["name"].lower() in repre_name.lower()
+                            )), None)
+                            if not repre_obj:
+                                status_str = f"Failed: version {version_val} of repre \"{repre_name}\" of product \"{product['name']}\" not found"
+                            else:
+                                if self.config.get("set_version_status_after_check", True):
+                                    target_status = self.config.get("ayon_version_status", "Pending Review")
+                                    try:
+                                        ayon_api.update_version(project, version_id=version_obj["id"], status=target_status)
+                                        self.log_message(f"Updated AYON version {version_val} (ID: {version_obj['id']}) status to: {target_status}", "success")
+                                    except Exception as e:
+                                        self.log_message(f"Failed to update AYON version status for version {version_val}: {e}", "warning")
+            except Exception as e:
+                self.log_message(f"Error checking AYON database for product '{product_name_val}': {e}", "warning")
+                status_str = f"Failed: Error checking AYON database: {e}"
+                
+            check_results.append(status_str)
+            
+            if file_path_val:
+                norm_f = os.path.normpath(os.path.abspath(file_path_val)).lower()
+                matched_item = item_map.get(norm_f)
+                if matched_item:
+                    if status_str != "OK":
+                        matched_item.ingest_status = "Failed"
+                    else:
+                        if getattr(matched_item, "ingest_status", "unknown") != "Failed":
+                            matched_item.ingest_status = "OK"
+            
+            checked_row = list(row)
+            checked_row.append(status_str)
+            checked_rows.append(checked_row)
+            
+        checked_headers = list(headers)
+        checked_headers.append("Check")
+        
+        try:
+            with open(csv_path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f, delimiter=delimiter, quotechar=quotechar, quoting=csv.QUOTE_MINIMAL)
+                writer.writerow(checked_headers)
+                writer.writerows(checked_rows)
+        except Exception as e:
+            self.log_message(f"Failed to overwrite checked CSV file: {e}", "error")
+            return
+            
+        if all(res == "OK" for res in check_results):
+            suffix = "_checkedOK"
+        elif all(res.startswith("Failed") for res in check_results):
+            suffix = "_checkedFailed"
+        else:
+            suffix = "_checkedMixed"
+            
+        base_no_ext, ext = os.path.splitext(csv_path)
+        new_csv_path = f"{base_no_ext}{suffix}{ext}"
+        try:
+            shutil.move(csv_path, new_csv_path)
+            self.log_message(f"Ingest Check completed! Result suffix: {suffix}. File renamed to: {os.path.basename(new_csv_path)}", "success")
+        except Exception as e:
+            self.log_message(f"Failed to rename Ingest Log CSV: {e}", "error")
+            
+        self.model.layoutChanged.emit()
 
     def perform_paste_image(self):
         from PySide6.QtWidgets import QApplication
@@ -3540,7 +3778,9 @@ class MainWindow(QMainWindow):
                 "ffprobe_path",
                 "oiiotool_path",
                 "ocio_config",
-                "ayon_api_key"
+                "ayon_api_key",
+                "ingest_log_folder",
+                "per_project_logging"
             ]
             for key in shifted_keys:
                 if key in clean_config:
