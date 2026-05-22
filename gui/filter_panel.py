@@ -90,6 +90,7 @@ class TagColorProxyModel(QSortFilterProxyModel):
         self.main_model.modelReset.connect(self._rebuild_cache)
         self.main_model.rowsInserted.connect(self._rebuild_cache)
         self.main_model.rowsRemoved.connect(self._rebuild_cache)
+        self.main_model.layoutChanged.connect(self._rebuild_cache)
 
     def set_filters(self, search_text, age_limit, age_enabled):
         self._search_text = search_text.lower()

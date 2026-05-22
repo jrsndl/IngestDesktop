@@ -472,7 +472,7 @@ class MainWindow(QMainWindow):
         self.btn_publish_local.clicked.connect(self.perform_publish_local)
         ingest_row_layout.addWidget(self.btn_publish_local, 1)
 
-        self.btn_publish_deadline = QPushButton("Publish Ayon Deadline")
+        self.btn_publish_deadline = QPushButton("Process Reviews on Deadline")
         self.btn_publish_deadline.setObjectName("IngestButton")
         self.btn_publish_deadline.setMinimumHeight(50)
         self.btn_publish_deadline.clicked.connect(self.perform_publish_deadline)
@@ -2360,6 +2360,11 @@ class MainWindow(QMainWindow):
             self.log_message(f"Ingest Check completed! Result suffix: {suffix}. File renamed to: {os.path.basename(new_csv_path)}", "success")
         except Exception as e:
             self.log_message(f"Failed to rename Ingest Log CSV: {e}", "error")
+
+        # Generate PDF Ingest Report if configured
+        if self.config.get("create_ingest_report", True):
+            pdf_path = f"{base_no_ext}{suffix}.pdf"
+            self.generate_ingest_pdf_report(pdf_path, checked_rows, checked_headers, file_path_col, ayon_path_col, version_col, item_map)
             
         # Clearly communicate to the user that the item was ingested (OK/FAIL)
         ok_count = check_results.count("OK")
@@ -2424,7 +2429,231 @@ class MainWindow(QMainWindow):
 
         msg.exec()
 
+        # Hide the LOG window when pressing OK / closing the summary popup
+        self.log_console.hide()
+        self.btn_toggle_log.setChecked(False)
+
         self.model.layoutChanged.emit()
+
+    def generate_ingest_pdf_report(self, pdf_path, checked_rows, headers, file_path_col, ayon_path_col, version_col, item_map):
+        self.log_message(f"Generating Ingest PDF report: {os.path.basename(pdf_path)}...", "info")
+        
+        try:
+            import datetime
+            from datetime import timezone, timedelta
+            
+            # 1. Parse timezone offsets
+            def parse_offset_to_hours(offset_str):
+                import re
+                if not offset_str:
+                    return 0.0
+                offset_str = str(offset_str).strip()
+                match = re.match(r'^([+-]?)(\d+)(?::(\d+))?$', offset_str)
+                if match:
+                    sign = -1 if match.group(1) == '-' else 1
+                    hours = int(match.group(2))
+                    minutes = int(match.group(3)) if match.group(3) else 0
+                    return sign * (hours + minutes / 60.0)
+                try:
+                    return float(offset_str)
+                except ValueError:
+                    return 0.0
+
+            tz_a = self.config.get("timezone_offset_a", "+00:00")
+            tz_b = self.config.get("timezone_offset_b", "+00:00")
+            
+            # Local time A: do not subtract the offset A, just display the local system time of the app
+            local_now = datetime.datetime.now()
+            date_time_a = local_now.strftime("%Y-%m-%d %H:%M") + f" {tz_a}"
+            
+            # Client time B: convert to UTC, then apply client offset B
+            utc_now = datetime.datetime.now(timezone.utc)
+            hours_b = parse_offset_to_hours(tz_b)
+            time_b = utc_now + timedelta(hours=hours_b)
+            date_time_b = time_b.strftime("%Y-%m-%d %H:%M") + f" {tz_b}"
+
+            # 2. Filter for only successfully ingested rows (Check == "OK")
+            ingested_rows = [r for r in checked_rows if r and r[-1] == "OK"]
+            
+            if not ingested_rows:
+                self.log_message("No successfully ingested rows to include in PDF report.", "warning")
+                return
+
+            # Find Variant column in headers case-insensitively
+            variant_col = -1
+            for idx, h in enumerate(headers):
+                if h.lower().strip() == "variant":
+                    variant_col = idx
+                    break
+
+            # 3. Build HTML
+            html_rows = []
+            for row in ingested_rows:
+                file_path_val = row[file_path_col] if file_path_col >= 0 else ""
+                ayon_path_val = row[ayon_path_col] if ayon_path_col >= 0 else ""
+                version_val = row[version_col] if version_col >= 0 else ""
+                
+                filename = os.path.basename(file_path_val) if file_path_val else ""
+                
+                # Fetch matched item properties
+                matched_item = None
+                if file_path_val:
+                    norm_f = os.path.normpath(os.path.abspath(file_path_val)).lower()
+                    matched_item = item_map.get(norm_f)
+                
+                variant_val = ""
+                if matched_item and matched_item.variant:
+                    variant_val = matched_item.variant
+                elif variant_col >= 0 and variant_col < len(row):
+                    variant_val = row[variant_col]
+                
+                # Substitute {label} template with matched_item's actual label if present
+                if matched_item and matched_item.label:
+                    variant_val = variant_val.replace("{label}", matched_item.label)
+
+                length = "1"
+                frame_start = "-"
+                frame_end = "-"
+                b64_image = ""
+                
+                if matched_item:
+                    # Get frame ranges
+                    if matched_item.is_sequence:
+                        if matched_item.frame_start is not None and matched_item.frame_end is not None:
+                            frame_start = str(matched_item.frame_start)
+                            frame_end = str(matched_item.frame_end)
+                            length = str(matched_item.frame_end - matched_item.frame_start + 1)
+                    else:
+                        length = "1"
+                        frame_start = "-"
+                        frame_end = "-"
+                    
+                    # Convert thumbnail to base64 preserving aspect ratio
+                    if matched_item.thumbnail and not matched_item.thumbnail.isNull():
+                        from PySide6.QtCore import QByteArray, QBuffer, QIODevice, Qt
+                        scaled_thumb = matched_item.thumbnail.scaled(75, 75, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                        byte_array = QByteArray()
+                        buffer = QBuffer(byte_array)
+                        buffer.open(QIODevice.WriteOnly)
+                        scaled_thumb.save(buffer, "PNG")
+                        b64_image = byte_array.toBase64().data().decode("utf-8")
+                
+                # Render Thumbnail cell
+                if b64_image:
+                    thumb_html = f'<img src="data:image/png;base64,{b64_image}" style="border: 1px solid #cccccc; border-radius: 4px;" />'
+                else:
+                    thumb_html = '<div style="width: 75px; height: 75px; background-color: #eaeaea; border: 1px solid #cccccc; border-radius: 4px; text-align: center; line-height: 75px; color: #888888; font-size: 10px;">No Image</div>'
+                
+                html_rows.append(f"""
+                <tr>
+                    <td style="padding: 8px; text-align: center; border-bottom: 1px solid #eeeeee;">{thumb_html}</td>
+                    <td style="padding: 8px; border-bottom: 1px solid #eeeeee; word-break: break-all;">{filename}</td>
+                    <td style="padding: 8px; border-bottom: 1px solid #eeeeee;">{variant_val}</td>
+                    <td style="padding: 8px; border-bottom: 1px solid #eeeeee;">{ayon_path_val}</td>
+                    <td style="padding: 8px; border-bottom: 1px solid #eeeeee; text-align: center;">v{version_val}</td>
+                    <td style="padding: 8px; border-bottom: 1px solid #eeeeee; text-align: center;">{length}</td>
+                    <td style="padding: 8px; border-bottom: 1px solid #eeeeee; text-align: center;">{frame_start}</td>
+                    <td style="padding: 8px; border-bottom: 1px solid #eeeeee; text-align: center;">{frame_end}</td>
+                </tr>
+                """)
+            
+            rows_html = "\n".join(html_rows)
+            
+            html_content = f"""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="utf-8">
+                <style>
+                    body {{
+                        font-family: 'Segoe UI', Arial, sans-serif;
+                        color: #333333;
+                        margin: 0;
+                        padding: 0;
+                    }}
+                    h1 {{
+                        font-size: 24pt;
+                        color: #111111;
+                        margin: 0 0 8px 0;
+                    }}
+                    .subtitle {{
+                        font-size: 11pt;
+                        color: #666666;
+                        margin: 0 0 20px 0;
+                        line-height: 1.4;
+                    }}
+                    table {{
+                        width: 100%;
+                        border-collapse: collapse;
+                        margin-top: 10px;
+                    }}
+                    th {{
+                        background-color: #f7f7f7;
+                        border-bottom: 2px solid #dddddd;
+                        color: #222222;
+                        font-weight: bold;
+                        font-size: 11pt;
+                        padding: 8px;
+                        text-align: left;
+                    }}
+                    td {{
+                        font-size: 10pt;
+                        padding: 8px;
+                        border-bottom: 1px solid #eeeeee;
+                        vertical-align: middle;
+                    }}
+                </style>
+            </head>
+            <body>
+                <h1>Ingest Report</h1>
+                <div class="subtitle">
+                    <strong>Local:</strong> {date_time_a}<br/>
+                    <strong>Client:</strong> {date_time_b}
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th style="width: 85px; text-align: center;">Thumbnail</th>
+                            <th>File Name</th>
+                            <th>Variant</th>
+                            <th>Ayon Folder</th>
+                            <th style="width: 55px; text-align: center;">Version</th>
+                            <th style="width: 70px; text-align: center;">Length (frames)</th>
+                            <th style="width: 65px; text-align: center;">Frame Start</th>
+                            <th style="width: 65px; text-align: center;">Frame End</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {rows_html}
+                    </tbody>
+                </table>
+            </body>
+            </html>
+            """
+            
+            # 4. Write to PDF using QPdfWriter
+            from PySide6.QtGui import QPdfWriter, QTextDocument, QPageLayout, QPageSize
+            from PySide6.QtCore import QMarginsF
+            
+            writer = QPdfWriter(pdf_path)
+            writer.setPageSize(QPageSize(QPageSize.A4))
+            
+            # Landscape orientation with half-sized margins (7.5mm)
+            layout = QPageLayout(
+                QPageSize(QPageSize.A4),
+                QPageLayout.Landscape,
+                QMarginsF(7.5, 7.5, 7.5, 7.5),
+                QPageLayout.Millimeter
+            )
+            writer.setPageLayout(layout)
+            
+            doc = QTextDocument()
+            doc.setHtml(html_content)
+            doc.print_(writer)
+            
+            self.log_message(f"Ingest PDF report generated successfully: {os.path.basename(pdf_path)}", "success")
+        except Exception as e:
+            self.log_message(f"Failed to generate Ingest PDF report: {e}", "error")
 
     def perform_paste_image(self):
         from PySide6.QtWidgets import QApplication
@@ -2500,12 +2729,221 @@ class MainWindow(QMainWindow):
         self.start_scan(target_dir)
 
     def perform_publish_deadline(self):
-        tagged_items = self._get_tagged_for_ingest()
-        if not tagged_items: return
+        # Stop all playback before sending items to deadline
+        if hasattr(self, "thumb_area") and hasattr(self.thumb_area, "video_player"):
+            try:
+                self.thumb_area.video_player.clear_video()
+            except Exception:
+                pass
+
+        # 1. Detect deadlinecommand
+        import os
+        import shutil
+        import subprocess
         
-        # Placeholder for deadline submission
-        self.log_message("Publish to Deadline is currently a placeholder. No job submitted.", "warning")
-        QMessageBox.information(self, "Deadline", "Deadline submission logic is not yet implemented.")
+        deadline_path = os.environ.get("DEADLINE_PATH", "")
+        deadline_bin = None
+        if deadline_path:
+            exe_name = "deadlinecommand.exe" if os.name == 'nt' else "deadlinecommand"
+            candidate = os.path.join(deadline_path, exe_name)
+            if os.path.exists(candidate):
+                deadline_bin = candidate
+                
+        if not deadline_bin:
+            deadline_bin = shutil.which("deadlinecommand")
+            
+        if not deadline_bin:
+            self.log_message("Error: deadlinecommand executable not found. Make sure DEADLINE_PATH environment variable is set.", "error")
+            QMessageBox.critical(self, "Deadline Error", "deadlinecommand.exe not found! Please check your DEADLINE_PATH environment variable.")
+            return
+
+        # 2. Gather selected items
+        selected_items = []
+        selected_thumbs = self.thumb_area.scene.selectedItems()
+        if selected_thumbs:
+            selected_items = [thumb.data for thumb in selected_thumbs]
+        else:
+            selection_model = self.spreadsheet.table.selectionModel()
+            selected_indexes = selection_model.selectedRows()
+            if selected_indexes:
+                for idx in selected_indexes:
+                    row = idx.row()
+                    if row < len(self.model.items):
+                        selected_items.append(self.model.items[row])
+
+        def requires_review(item):
+            p_data = item.preset_data or {}
+            return item.review_status == "waiting" or p_data.get("Convert Review", True)
+
+        # 3. Filter review items based on selection
+        if selected_items:
+            review_items = [item for item in selected_items if requires_review(item)]
+            if not review_items:
+                QMessageBox.information(self, "Deadline", "None of the selected items require review conversion.")
+                return
+        else:
+            review_items = [item for item in self.model.items if requires_review(item)]
+            if not review_items:
+                QMessageBox.information(self, "Deadline", "No items in the project require review conversion.")
+                return
+
+        # 4. Confirm with the user before submitting
+        reply = QMessageBox.question(
+            self,
+            "Submit to Deadline",
+            f"Are you sure you want to submit {len(review_items)} review conversion(s) to Deadline?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes
+        )
+        if reply == QMessageBox.No:
+            return
+
+        success_count = 0
+        fail_count = 0
+        
+        self.log_message(f"Starting Deadline submission for {len(review_items)} jobs...", "info")
+        
+        for item in review_items:
+            p_data = item.preset_data or {}
+            cmd_template = p_data.get("Convert Review Command", "")
+            if not cmd_template:
+                self.log_message(f"Skipping {item.label}: No Convert Review Command preset defined.", "warning")
+                item.review_status = "failed"
+                self.model.layoutChanged.emit()
+                fail_count += 1
+                continue
+                
+            # Temporarily replace executable paths with backslashes for Deadline
+            orig_ffmpeg = self.model.ffmpeg_path
+            orig_ffprobe = self.model.ffprobe_path
+            orig_oiiotool = self.model.oiiotool_path
+            orig_vfxtranscode = self.model.vfxtranscode
+            
+            self.model.ffmpeg_path = (self.model.ffmpeg_path or "").replace("/", "\\")
+            self.model.ffprobe_path = (self.model.ffprobe_path or "").replace("/", "\\")
+            self.model.oiiotool_path = (self.model.oiiotool_path or "").replace("/", "\\")
+            self.model.vfxtranscode = (self.model.vfxtranscode or "").replace("/", "\\")
+            
+            # Expand tokens
+            cmd = self.model.expand_tokens(cmd_template, item)
+            target_path = self.model.expand_tokens("{prefs_review_path}", item)
+            
+            # Restore original paths
+            self.model.ffmpeg_path = orig_ffmpeg
+            self.model.ffprobe_path = orig_ffprobe
+            self.model.oiiotool_path = orig_oiiotool
+            self.model.vfxtranscode = orig_vfxtranscode
+            
+            if not cmd or not target_path:
+                self.log_message(f"Skipping {item.label}: Failed to evaluate tokens in command or review path.", "warning")
+                item.review_status = "failed"
+                self.model.layoutChanged.emit()
+                fail_count += 1
+                continue
+
+            # Ensure all paths in cmd and target_path use backslashes
+            cmd = cmd.replace("/", "\\")
+            target_path = target_path.replace("/", "\\")
+
+            # Ensure output directory exists
+            os.makedirs(os.path.dirname(target_path), exist_ok=True)
+            
+            # Split executable and arguments
+            import shlex
+            try:
+                tokens = shlex.split(cmd, posix=False)
+            except Exception:
+                tokens = cmd.split()
+                
+            executable = tokens[0] if tokens else ""
+            if executable.startswith('"') and executable.endswith('"'):
+                executable = executable[1:-1]
+            elif executable.startswith("'") and executable.endswith("'"):
+                executable = executable[1:-1]
+                
+            arguments = cmd[len(tokens[0]):].strip() if tokens else ""
+
+            # Substitute Job Name Template
+            name_template = self.secrets.get("deadline_job_name", "Encoding {label} Review for {ayon_path}/{ayon_task_name}")
+            job_name = name_template.replace("{label}", item.label or "")
+            job_name = job_name.replace("{ayon_path}", item.ayon_path or "")
+            job_name = job_name.replace("{ayon_task_name}", item.ayon_task_name or "")
+
+            # Build Job Info File
+            job_info_content = [
+                "Plugin=CommandLine",
+                f"Name={job_name}",
+                "Comment=Submitted via IngestDesktop",
+                f"Department={self.secrets.get('deadline_department', 'io')}",
+                f"Pool={self.secrets.get('deadline_pool', 'all')}",
+                f"SecondaryPool={self.secrets.get('deadline_secondary_pool', 'all')}",
+                f"Group={self.secrets.get('deadline_group', '2d_studio')}",
+                f"Priority={int(self.secrets.get('deadline_priority', 50))}",
+                f"MachineLimit={int(self.secrets.get('deadline_machine_limit', 1))}",
+                f"ConcurrentTasks={int(self.secrets.get('deadline_concurrent_tasks', 1))}",
+                "Frames=0",
+                "ChunkSize=1"
+            ]
+
+            # Build Plugin Info File
+            plugin_info_content = [
+                "Shell=default",
+                "ShellExecute=False",
+                f"Executable={executable}",
+                f"Arguments={arguments}",
+                "StartupDirectory="
+            ]
+
+            import tempfile
+            
+            try:
+                # Write files
+                job_file = tempfile.NamedTemporaryFile(mode="w", suffix="_job.txt", delete=False, encoding="utf-8")
+                job_file.write("\n".join(job_info_content))
+                job_file.close()
+                
+                plugin_file = tempfile.NamedTemporaryFile(mode="w", suffix="_plugin.txt", delete=False, encoding="utf-8")
+                plugin_file.write("\n".join(plugin_info_content))
+                plugin_file.close()
+
+                creationflags = 0
+                if os.name == 'nt':
+                    creationflags = 0x08000000 # CREATE_NO_WINDOW
+                
+                self.log_message(f"Submitting Deadline job for {item.label}...", "info")
+                process = subprocess.Popen([deadline_bin, job_file.name, plugin_file.name],
+                                           stdout=subprocess.PIPE,
+                                           stderr=subprocess.PIPE,
+                                           text=True,
+                                           creationflags=creationflags)
+                stdout, stderr = process.communicate()
+                
+                # Cleanup temp files
+                try:
+                    os.remove(job_file.name)
+                    os.remove(plugin_file.name)
+                except Exception:
+                    pass
+                
+                if process.returncode == 0:
+                    self.log_message(f"Successfully submitted Deadline job for {item.label}: {stdout.strip()}", "success")
+                    item.review_status = "submitted"
+                    success_count += 1
+                else:
+                    err_msg = stderr or stdout or "Unknown error"
+                    self.log_message(f"Failed to submit Deadline job for {item.label}: {err_msg.strip()}", "error")
+                    item.review_status = "failed"
+                    fail_count += 1
+            except Exception as e:
+                self.log_message(f"Exception while submitting Deadline job for {item.label}: {e}", "error")
+                item.review_status = "failed"
+                fail_count += 1
+            
+            self.model.layoutChanged.emit()
+
+        summary_msg = f"Deadline Submission Finished. Success: {success_count}, Failed: {fail_count}."
+        self.log_message(summary_msg, "success" if fail_count == 0 else "warning")
+        QMessageBox.information(self, "Deadline Submission Summary", summary_msg)
 
     def _get_tagged_for_ingest(self):
         tagged_items = [item for item in self.model.items if item.is_tagged]

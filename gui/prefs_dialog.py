@@ -104,6 +104,17 @@ class PreferencesDialog(QDialog):
             
         self.form.addRow("Version Collision:", ver_collision_layout)
         
+        # Ingest Report settings
+        self.create_ingest_report = QCheckBox("Create Ingest Report")
+        self.create_ingest_report.setChecked(self.config.get("create_ingest_report", True))
+        
+        self.timezone_offset_a = QLineEdit(self.config.get("timezone_offset_a", "+00:00"))
+        self.timezone_offset_b = QLineEdit(self.config.get("timezone_offset_b", "+00:00"))
+        
+        self.form.addRow("Create Ingest Report:", self.create_ingest_report)
+        self.form.addRow("Timezone Offset A:", self.timezone_offset_a)
+        self.form.addRow("Timezone Offset B:", self.timezone_offset_b)
+        
         self.general_layout.addLayout(self.form)
         self.general_layout.addStretch()
         self.tabs.addTab(self.general_tab, "General")
@@ -574,6 +585,46 @@ class PreferencesDialog(QDialog):
         self.secrets_layout.addStretch()
         self.tabs.addTab(self.secrets_tab, "Secrets")
 
+        # Deadline tab
+        self.deadline_tab = QWidget()
+        self.deadline_layout = QVBoxLayout(self.deadline_tab)
+        self.deadline_form = QFormLayout()
+        
+        self.deadline_job_name = QLineEdit(self.secrets.get("deadline_job_name", "Encoding {label} Review for {ayon_path}/{ayon_task_name}"))
+        self.deadline_form.addRow("Job Name Template:", self.deadline_job_name)
+        
+        self.deadline_department = QLineEdit(self.secrets.get("deadline_department", "io"))
+        self.deadline_form.addRow("Department:", self.deadline_department)
+        
+        self.deadline_pool = QLineEdit(self.secrets.get("deadline_pool", "all"))
+        self.deadline_form.addRow("Primary Pool:", self.deadline_pool)
+        
+        self.deadline_secondary_pool = QLineEdit(self.secrets.get("deadline_secondary_pool", "all"))
+        self.deadline_form.addRow("Secondary Pool:", self.deadline_secondary_pool)
+        
+        self.deadline_group = QLineEdit(self.secrets.get("deadline_group", "2d_studio"))
+        self.deadline_form.addRow("Group:", self.deadline_group)
+        
+        self.deadline_priority = QSpinBox()
+        self.deadline_priority.setRange(0, 100)
+        self.deadline_priority.setValue(int(self.secrets.get("deadline_priority", 50)))
+        self.deadline_form.addRow("Priority:", self.deadline_priority)
+        
+        self.deadline_machine_limit = QSpinBox()
+        self.deadline_machine_limit.setRange(0, 1000)
+        self.deadline_machine_limit.setValue(int(self.secrets.get("deadline_machine_limit", 1)))
+        self.deadline_form.addRow("Machine Limit:", self.deadline_machine_limit)
+        
+        self.deadline_concurrent_tasks = QSpinBox()
+        self.deadline_concurrent_tasks.setRange(1, 16)
+        self.deadline_concurrent_tasks.setValue(int(self.secrets.get("deadline_concurrent_tasks", 1)))
+        self.deadline_form.addRow("Concurrent Tasks:", self.deadline_concurrent_tasks)
+        
+        self.deadline_layout.addLayout(self.deadline_form)
+        self.deadline_layout.addStretch()
+        self.tabs.addTab(self.deadline_tab, "Deadline")
+
+
 
         self.layout.addWidget(self.tabs)
         
@@ -775,6 +826,9 @@ class PreferencesDialog(QDialog):
             "run_review_after_scan": self.run_review_after_scan.isChecked(),
             "skip_existing_thumbs": self.skip_existing_thumbs.isChecked(),
             "skip_existing_reviews": self.skip_existing_reviews.isChecked(),
+            "create_ingest_report": self.create_ingest_report.isChecked(),
+            "timezone_offset_a": self.timezone_offset_a.text(),
+            "timezone_offset_b": self.timezone_offset_b.text(),
             "presets": presets,
             "extensions": extensions,
             "stills_start_frame": stills_start,
@@ -825,6 +879,14 @@ class PreferencesDialog(QDialog):
             "vfxtranscode": self.vfxtranscode.text(),
             "ocio_config": self.ocio_config.text(),
             "ingest_log_folder": self.ingest_log_folder.text(),
-            "per_project_logging": self.per_project_logging.isChecked()
+            "per_project_logging": self.per_project_logging.isChecked(),
+            "deadline_job_name": self.deadline_job_name.text(),
+            "deadline_department": self.deadline_department.text(),
+            "deadline_pool": self.deadline_pool.text(),
+            "deadline_secondary_pool": self.deadline_secondary_pool.text(),
+            "deadline_group": self.deadline_group.text(),
+            "deadline_priority": self.deadline_priority.value(),
+            "deadline_machine_limit": self.deadline_machine_limit.value(),
+            "deadline_concurrent_tasks": self.deadline_concurrent_tasks.value()
         }
         return new_config, new_secrets

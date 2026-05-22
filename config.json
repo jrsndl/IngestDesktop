@@ -47,7 +47,7 @@
                 "Convert Thumbnail": true,
                 "Convert Thumbnail Override": false,
                 "Convert Thumbnail Command": "",
-                "Convert Review": true,
+                "Convert Review": false,
                 "Review Location": "Relative to Source Folder",
                 "Review Path": "_reviews",
                 "Review Suffix": "_review",
@@ -76,7 +76,7 @@
                 "Convert Thumbnail": true,
                 "Convert Thumbnail Override": false,
                 "Convert Thumbnail Command": "",
-                "Convert Review": true,
+                "Convert Review": false,
                 "Review Location": "Relative to Source Folder",
                 "Review Path": "_reviews",
                 "Review Suffix": "_review",
@@ -105,7 +105,7 @@
                 "Convert Thumbnail": true,
                 "Convert Thumbnail Override": false,
                 "Convert Thumbnail Command": "",
-                "Convert Review": true,
+                "Convert Review": false,
                 "Review Location": "Relative to Source Folder",
                 "Review Path": "_reviews",
                 "Review Suffix": "_review",
@@ -134,8 +134,8 @@
                 "Handle End": 0,
                 "Slate Exists": false,
                 "Convert Thumbnail": true,
-                "Convert Thumbnail Override": false,
-                "Convert Thumbnail Command": "",
+                "Convert Thumbnail Override": true,
+                "Convert Thumbnail Command": "{ffmpeg} -apply_trc bt709 -i \"{metadata.seq_thumbnail_path}\" -vf \"scale=if(gte(iw\\,ih)\\,min({prefs_highres_thumb_size}\\,iw)\\,-4):if(lt(iw\\,ih)\\,min({prefs_highres_thumb_size}\\,ih)\\,-4)\" -y \"{prefs_thumb_path}\"",
                 "Convert Review": true,
                 "Review Location": "Relative to Source Folder",
                 "Review Path": "_reviews",
@@ -145,7 +145,7 @@
                 "Review Representation": "h264",
                 "Review Colorspace": "Output - sRGB",
                 "Review Tags": "passing;ftracreview;webreview",
-                "Active": false
+                "Active": true
             },
             {
                 "Name": "any seqence",
@@ -174,7 +174,7 @@
                 "Review Representation": "h264",
                 "Review Colorspace": "Output - sRGB",
                 "Review Tags": "passing;ftracreview;webreview",
-                "Active": true
+                "Active": false
             }
         ],
         "videos": [
@@ -196,7 +196,7 @@
                 "Convert Thumbnail": true,
                 "Convert Thumbnail Override": false,
                 "Convert Thumbnail Command": "",
-                "Convert Review": true,
+                "Convert Review": false,
                 "Review Location": "Relative to Source Folder",
                 "Review Path": "_reviews",
                 "Review Suffix": "_review",
@@ -295,7 +295,7 @@
     "filter_v_stack": false,
     "filter_sequences": true,
     "thumbnail_size": 248,
-    "geometry": "01d9d0cb00030000fffff600fffffff8ffffffff0000059ffffff63f000000cbfffffd95000003ea00000001020000000a00fffff60000000017ffffffff0000059f",
+    "geometry": "01d9d0cb00030000fffff600fffffff8ffffffff0000059ffffff63f000000cbfffffe0c000003ea00000001020000000a00fffff60000000017ffffffff0000059f",
     "h_splitter": "000000ff000000010000000300000176000006b80000022f01ffffffff010000000100",
     "v_splitter": "000000ff0000000100000002000008b8000000ea01ffffffff010000000200",
     "last_source_folder": "D:/2ayon",
@@ -310,5 +310,20 @@
         "C:/Users/robur/Desktop/2ayon/sparks_020_pl01"
     ],
     "cmd_stills": "{ffmpeg} -i \"{filename}\" -vf \"scale=if(gte(iw\\,ih)\\,min({prefs_highres_thumb_size}\\,iw)\\,-4):if(lt(iw\\,ih)\\,min({prefs_highres_thumb_size}\\,ih)\\,-4)\" -y \"{prefs_thumb_path}\"",
-    "cmd_videos": "{ffmpeg} -ss {metadata.thumbnail_time} -i \"{filename}\" -vframes 1 -vf \"scale=if(gte(iw\\,ih)\\,min({prefs_highres_thumb_size}\\,iw)\\,-4):if(lt(iw\\,ih)\\,min({prefs_highres_thumb_size}\\,ih)\\,-4)\" -y \"{prefs_thumb_path}\""
+    "cmd_videos": "{ffmpeg} -ss {metadata.thumbnail_time} -i \"{filename}\" -vframes 1 -vf \"scale=if(gte(iw\\,ih)\\,min({prefs_highres_thumb_size}\\,iw)\\,-4):if(lt(iw\\,ih)\\,min({prefs_highres_thumb_size}\\,ih)\\,-4)\" -y \"{prefs_thumb_path}\"",
+    "disable_inline_video": false,
+    "fixed_task_name_enabled": false,
+    "fixed_task_name": "",
+    "ayon_ingest_check": true,
+    "ayon_version_status": "Pending Review",
+    "set_version_status_after_check": true,
+    "ayon_play_sound_on_finish": true,
+    "set_product_status_after_check": true,
+    "set_task_status_after_check": true,
+    "set_neighbour_status_after_check": false,
+    "neighbour_task_name": "comp",
+    "neighbour_task_status": "Ready to start",
+    "create_ingest_report": true,
+    "timezone_offset_a": "+01:00",
+    "timezone_offset_b": "-06:00"
 }

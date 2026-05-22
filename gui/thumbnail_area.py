@@ -1281,6 +1281,9 @@ class ThumbnailArea(QWidget):
         self._last_search_text = ""
         self.tooltip_templates = {}
         
+        self.player_mode = "selected" # "stop", "selected", "all"
+        self.active_players = {} # mapping: ThumbnailItem -> VideoPlayerOverlay
+        
         self.layout = QVBoxLayout(self)
         self.layout.setContentsMargins(0, 0, 0, 0)
         self.layout.setSpacing(0)
@@ -1350,6 +1353,12 @@ class ThumbnailArea(QWidget):
         self.controls_layout.addWidget(self.slider_text_size)
         self.controls_layout.addWidget(QLabel("Thumb:"))
         self.controls_layout.addWidget(self.slider_thumb_size)
+        
+        add_v_line(self.controls_layout)
+        self.btn_player_mode = QPushButton("Player: Selected")
+        self.btn_player_mode.clicked.connect(self._cycle_player_mode)
+        self.controls_layout.addWidget(self.btn_player_mode)
+        
         self.controls_layout.addStretch()
         self.controls_layout.addWidget(self.btn_paste)
         self.controls_layout.addWidget(self.btn_tag_filter)
@@ -1551,42 +1560,120 @@ class ThumbnailArea(QWidget):
             
         return None
 
+    def _cycle_player_mode(self):
+        if self.player_mode == "selected":
+            self.player_mode = "all"
+            self.btn_player_mode.setText("Player: All")
+        elif self.player_mode == "all":
+            self.player_mode = "stop"
+            self.btn_player_mode.setText("Player: Stop")
+        else:
+            self.player_mode = "selected"
+            self.btn_player_mode.setText("Player: Selected")
+            
+        self.update_video_overlay_geometry()
+
     def update_video_overlay_geometry(self):
-        """Position and size the video player overlay perfectly over the selected thumbnail image."""
+        """Position and size the video player overlays perfectly based on current player mode."""
         if not hasattr(self, 'video_player'):
             return
             
         from gui.video_player import is_multimedia_available
         if not is_multimedia_available():
             self.video_player.clear_video()
+            for player in list(self.active_players.values()):
+                player.clear_video()
+                player.deleteLater()
+            self.active_players.clear()
             return
             
-        selected = self.scene.selectedItems()
-        selected_thumb = None
-        for it in selected:
-            if isinstance(it, ThumbnailItem) and it.isVisible():
-                selected_thumb = it
-                break
-                
-        if not selected_thumb or not self.model:
+        # 1. Stop Mode
+        if self.player_mode == "stop":
             self.video_player.clear_video()
+            for player in list(self.active_players.values()):
+                player.clear_video()
+                player.deleteLater()
+            self.active_players.clear()
             return
             
-        # Check if selected item has a playable video
-        item_data = selected_thumb.data
-        video_path = self.find_media_path(item_data)
+        # 2. Selected Mode
+        if self.player_mode == "selected":
+            # Clear all multiple active players
+            for player in list(self.active_players.values()):
+                player.clear_video()
+                player.deleteLater()
+            self.active_players.clear()
+            
+            selected = self.scene.selectedItems()
+            selected_thumb = None
+            for it in selected:
+                if isinstance(it, ThumbnailItem) and it.isVisible():
+                    selected_thumb = it
+                    break
+                    
+            if not selected_thumb or not self.model:
+                self.video_player.clear_video()
+                return
                 
-        if not video_path or not os.path.exists(video_path):
-            self.video_player.clear_video()
-            return
+            item_data = selected_thumb.data
+            video_path = self.find_media_path(item_data)
+                    
+            if not video_path or not os.path.exists(video_path):
+                self.video_player.clear_video()
+                return
+                
+            image_rect_scene = selected_thumb.mapToScene(selected_thumb.get_image_rect()).boundingRect()
+            viewport_rect = self.view.mapFromScene(image_rect_scene).boundingRect()
             
-        # Map thumbnail drawing rect (get_image_rect) to viewport coordinates
-        image_rect_scene = selected_thumb.mapToScene(selected_thumb.get_image_rect()).boundingRect()
-        viewport_rect = self.view.mapFromScene(image_rect_scene).boundingRect()
-        
-        # Position and play
-        self.video_player.setGeometry(viewport_rect)
-        self.video_player.load_video(video_path, item_data.filename)
+            self.video_player.setGeometry(viewport_rect)
+            self.video_player.load_video(video_path, item_data.filename)
+            return
+
+        # 3. All Mode
+        if self.player_mode == "all":
+            self.video_player.clear_video()
+            
+            # Get viewport scene rect
+            viewport_rect_scene = self.view.mapToScene(self.view.viewport().rect()).boundingRect()
+            
+            # Find all visible thumbnail items that have a playable video
+            visible_video_thumbs = []
+            for item in self.scene.items():
+                if isinstance(item, ThumbnailItem) and item.isVisible():
+                    if item.sceneBoundingRect().intersects(viewport_rect_scene):
+                        video_path = self.find_media_path(item.data)
+                        if video_path and os.path.exists(video_path):
+                            visible_video_thumbs.append((item, video_path))
+            
+            # Rebuild dynamic players mapping
+            new_active_players = {}
+            for thumb_item, video_path in visible_video_thumbs:
+                image_rect_scene = thumb_item.mapToScene(thumb_item.get_image_rect()).boundingRect()
+                viewport_rect = self.view.mapFromScene(image_rect_scene).boundingRect()
+                
+                if thumb_item in self.active_players:
+                    player = self.active_players[thumb_item]
+                    player.setGeometry(viewport_rect)
+                    if not player.is_playing:
+                        player.load_video(video_path, thumb_item.data.filename)
+                    else:
+                        player.show()
+                    new_active_players[thumb_item] = player
+                else:
+                    from gui.video_player import VideoPlayerOverlay
+                    player = VideoPlayerOverlay(self.view.viewport())
+                    player.setGeometry(viewport_rect)
+                    player.load_video(video_path, thumb_item.data.filename)
+                    new_active_players[thumb_item] = player
+            
+            # Clean up out of view or deleted players
+            for thumb_item, player in list(self.active_players.items()):
+                if thumb_item not in new_active_players:
+                    player.clear_video()
+                    player.deleteLater()
+                    
+            self.active_players = new_active_players
+            return
 
     def _on_scene_selection_changed(self):
         self._has_selection = bool(self.scene.selectedItems())
@@ -1642,6 +1729,14 @@ class ThumbnailArea(QWidget):
 
     def add_items(self, items=None):
         """Initial populate or full reset."""
+        if hasattr(self, "active_players"):
+            for player in list(self.active_players.values()):
+                player.clear_video()
+                player.deleteLater()
+            self.active_players.clear()
+        if hasattr(self, "video_player"):
+            self.video_player.clear_video()
+
         self.scene.clear()
         self.item_to_thumb.clear()
         
@@ -1686,6 +1781,10 @@ class ThumbnailArea(QWidget):
             item_data = self.model.items[row]
             if item_data in self.item_to_thumb:
                 thumb = self.item_to_thumb.pop(item_data)
+                if hasattr(self, "active_players") and thumb in self.active_players:
+                    player = self.active_players.pop(thumb)
+                    player.clear_video()
+                    player.deleteLater()
                 self.scene.removeItem(thumb)
         self.rearrange_items()
 

@@ -476,15 +476,15 @@ Feature: Deadline Processing:
 Allow user to send the processing to the deadline farm.
 * Bottom Buttons: Change the "Publish Ayon Deadline" to "Process Reviews on Deadline"
 * Detect the deadlinecommand.exe, use environment variable "DEADLINE_PATH".
-* Preferences: Add "Deadline" tab:
+* Preferences: Add "Deadline" tab (make sure to save the deadline tab prefs to install.json):
+- "Name": default="Encoding {label} Review for {ayon_path}/{ayon_task_name}"
+- "Department", default="io"
 - "Primary Pool", default="all"
 - "Secondary Pool", default="all"
 - "Group", default="2d_studio"
 - "Priority", default=50
-- "Depatrment", default="io"
 - "MachineLimit", default=1
 - "ConcurrentTasks", default=1
-- "Name": default="Encoding {label} Review for {ayon_path}/{ayon_task_name}"
 * implement sending the Review Conversion to Deadline, one review - one deadline job, with one cmd task
 
 

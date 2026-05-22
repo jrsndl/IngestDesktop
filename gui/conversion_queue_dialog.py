@@ -98,9 +98,15 @@ class ConversionQueueDialog(QDialog):
         self.btn_convert_thumbs.setMinimumHeight(40)
         self.btn_convert_thumbs.clicked.connect(self.convertThumbsRequested.emit)
         
+        self.btn_check_existing = QPushButton("Check existing")
+        self.btn_check_existing.setMinimumHeight(40)
+        self.btn_check_existing.clicked.connect(self.check_existing_reviews)
+        
         self.controls.addWidget(self.btn_convert_reviews)
         self.controls.addSpacing(10)
         self.controls.addWidget(self.btn_convert_thumbs)
+        self.controls.addSpacing(10)
+        self.controls.addWidget(self.btn_check_existing)
         self.controls.addStretch()
         self.controls.addWidget(self.btn_pause)
         self.controls.addWidget(self.btn_restart)
@@ -112,9 +118,29 @@ class ConversionQueueDialog(QDialog):
         # Status Label
         self.lbl_status = QLabel("Status: Waiting")
         self.layout.addWidget(self.lbl_status)
-
+ 
     def set_queue_status(self, text):
         self.lbl_status.setText(f"Status: {text}")
         
     def set_pause_text(self, is_paused):
         self.btn_pause.setText("Resume" if is_paused else "Pause")
+
+    def check_existing_reviews(self):
+        import os
+        source_model = self.proxy.sourceModel()
+        if not source_model:
+            return
+            
+        count = 0
+        for item in source_model.items:
+            if item.review_status != "do not convert":
+                review_path = source_model._get_prefs_review_path(item)
+                if review_path and os.path.exists(review_path):
+                    if item.review_status != "done":
+                        item.review_status = "done"
+                        count += 1
+                        
+        if count > 0:
+            source_model.layoutChanged.emit()
+            
+        self.set_queue_status(f"Checked existing. Updated {count} review(s) to 'done'.")

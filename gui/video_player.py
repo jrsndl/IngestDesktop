@@ -3,7 +3,7 @@ import sys
 import logging
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton, 
                              QSlider, QLabel, QStackedWidget, QStyle, QSizePolicy, QFrame)
-from PySide6.QtCore import Qt, QUrl, QTime, Signal, Slot
+from PySide6.QtCore import Qt, QUrl, QTime, Signal, Slot, QEvent
 
 try:
     from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
@@ -495,6 +495,7 @@ class VideoPlayerOverlay(QWidget):
         if is_multimedia_available():
             self.video_widget = QVideoWidget(self)
             self.video_widget.setAttribute(Qt.WA_TransparentForMouseEvents, False)
+            self.video_widget.installEventFilter(self)
             layout.addWidget(self.video_widget)
             
             # Setup player
@@ -582,6 +583,35 @@ class VideoPlayerOverlay(QWidget):
             event.accept()
         else:
             super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        # Double-click zooms/frames the selected thumbnail and ensures video is playing
+        if event.button() == Qt.LeftButton:
+            parent_widget = self.parent()
+            while parent_widget:
+                if parent_widget.__class__.__name__ == "ThumbnailArea":
+                    break
+                parent_widget = parent_widget.parent()
+            
+            if parent_widget:
+                parent_widget.frame_selection()
+            
+            if is_multimedia_available() and hasattr(self, 'player'):
+                self.player.play()
+                self.is_playing = True
+            event.accept()
+        else:
+            super().mouseDoubleClickEvent(event)
+
+    def eventFilter(self, source, event):
+        if source is getattr(self, 'video_widget', None):
+            if event.type() == QEvent.MouseButtonPress:
+                self.mousePressEvent(event)
+                return True
+            elif event.type() == QEvent.MouseButtonDblClick:
+                self.mouseDoubleClickEvent(event)
+                return True
+        return super().eventFilter(source, event)
 
     def _on_player_error(self, error, error_string):
         print(f"[VideoPlayerOverlay Error] QMediaPlayer Error ({error}): {error_string}")

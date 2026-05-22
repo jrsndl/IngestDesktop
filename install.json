@@ -11,5 +11,14 @@
     "oiiotool_path": "oiiotool.exe",
     "ocio_config": "",
     "ingest_log_folder": "D:\\_code\\IngestDesktop\\ingestLog",
-    "per_project_logging": true
+    "per_project_logging": true,
+    "vfxtranscode": "",
+    "deadline_job_name": "Encoding {label} Review for {ayon_path}/{ayon_task_name}",
+    "deadline_department": "io",
+    "deadline_pool": "all",
+    "deadline_secondary_pool": "all",
+    "deadline_group": "2d_studio",
+    "deadline_priority": 50,
+    "deadline_machine_limit": 1,
+    "deadline_concurrent_tasks": 1
 }
