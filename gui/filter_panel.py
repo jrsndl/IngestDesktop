@@ -8,11 +8,12 @@ from PySide6.QtCore import Signal, Qt, QDir, QSortFilterProxyModel, QItemSelecti
 from PySide6.QtGui import QColor, QStandardItemModel, QStandardItem, QPalette, QFont, QPen, QIcon, QPixmap, QPainter
 from utils import strip_sequence_counter, get_version_from_name
 
-def get_review_icon(review_status):
+def get_review_icon(review_status, ingest_status="unknown"):
+    cache_key = (review_status, ingest_status)
     if not hasattr(get_review_icon, "_cache"):
         get_review_icon._cache = {}
-    if review_status in get_review_icon._cache:
-        return get_review_icon._cache[review_status]
+    if cache_key in get_review_icon._cache:
+        return get_review_icon._cache[cache_key]
         
     color_map = {
         "done": QColor("#44ff44"), # green
@@ -26,21 +27,40 @@ def get_review_icon(review_status):
             r_color = color
             break
             
-    pixmap = QPixmap(16, 16)
+    has_indicator = ingest_status in ["OK", "Failed"]
+    w = 28 if has_indicator else 16
+    
+    pixmap = QPixmap(w, 16)
     pixmap.fill(Qt.transparent)
     
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.Antialiasing)
     painter.setRenderHint(QPainter.TextAntialiasing)
     
+    x_offset = 0
+    if has_indicator:
+        painter.save()
+        if ingest_status == "OK":
+            pen = QPen(QColor("#4caf50"), 2, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+            painter.setPen(pen)
+            painter.drawLine(2, 8, 5, 11)
+            painter.drawLine(5, 11, 10, 4)
+        else:
+            pen = QPen(QColor("#f44336"), 2, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+            painter.setPen(pen)
+            painter.drawLine(2, 4, 10, 12)
+            painter.drawLine(2, 12, 10, 4)
+        painter.restore()
+        x_offset = 12
+        
     font = QFont("Arial", 11, QFont.Bold)
     painter.setFont(font)
     painter.setPen(r_color)
-    painter.drawText(0, 0, 16, 16, Qt.AlignCenter, "R")
+    painter.drawText(x_offset, 0, 16, 16, Qt.AlignCenter, "R")
     painter.end()
     
     icon = QIcon(pixmap)
-    get_review_icon._cache[review_status] = icon
+    get_review_icon._cache[cache_key] = icon
     return icon
 
 class TagColorProxyModel(QSortFilterProxyModel):
@@ -88,7 +108,7 @@ class TagColorProxyModel(QSortFilterProxyModel):
         
         for item in self.main_model.items:
             abs_path = os.path.normpath(os.path.abspath(item.file_path))
-            self._path_info[abs_path] = (item.is_tagged, item.age_minutes, item.label, item.review_status, item.filename)
+            self._path_info[abs_path] = (item.is_tagged, item.age_minutes, item.label, item.review_status, item.filename, getattr(item, "ingest_status", "unknown"))
             
             directory = os.path.dirname(abs_path)
             filename = os.path.basename(abs_path)
@@ -202,8 +222,9 @@ class TagColorProxyModel(QSortFilterProxyModel):
                 info = self._path_info.get(abs_path)
                 if info and len(info) >= 4:
                     review_status = info[3]
+                    ingest_status = info[5] if len(info) > 5 else "unknown"
                     if review_status and review_status != "do not convert":
-                        return get_review_icon(review_status)
+                        return get_review_icon(review_status, ingest_status)
 
         if role == Qt.ForegroundRole:
             source_index = self.mapToSource(index)

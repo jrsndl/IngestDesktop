@@ -9,6 +9,9 @@ IMAGE_EXTENSIONS = {
 
 def get_ffprobe_data(path_to_file, ffprobe_exe, logger=None, timeout=6.0):
     """Get metadata via ffprobe."""
+    if timeout == 0 or timeout == 0.0:
+        timeout = None
+
     if logger is None:
         logger = logging.getLogger(__name__)
 
@@ -39,6 +42,9 @@ def get_ffprobe_data(path_to_file, ffprobe_exe, logger=None, timeout=6.0):
 
 def get_oiio_info_for_input(path_to_file, oiiotool_exe, logger=None, timeout=6.0):
     """Get metadata via oiiotool."""
+    if timeout == 0 or timeout == 0.0:
+        timeout = None
+
     if logger is None:
         logger = logging.getLogger(__name__)
 
@@ -98,6 +104,9 @@ def get_image_info_metadata(path_to_file, ffprobe_exe, oiiotool_exe, keys=None, 
     
     Based on ayon-core implementation.
     """
+    if timeout == 0 or timeout == 0.0:
+        timeout = None
+
     if logger is None:
         logger = logging.getLogger(__name__)
 

@@ -62,8 +62,8 @@ class SpreadsheetPanel(QWidget):
         self.btn_tagged_only = QPushButton("Enabled Only")
         self.btn_tagged_only.setCheckable(True)
         self.btn_tagged_only.toggled.connect(lambda: self.update_filtering())
-        self.btn_check_ver = QPushButton("Version check")
-        self.btn_check_dup = QPushButton("Check duplicates")
+        self.btn_check_ver = QPushButton("Version Check & Fix")
+        self.btn_check_dup = QPushButton("Check Duplicities")
         self.btn_tag_sel = QPushButton("Enable/Disable Selected")
         
         self.btn_csv = QPushButton("CSV")
@@ -203,8 +203,8 @@ class SpreadsheetPanel(QWidget):
             self._setup_standard_view()
         
         # Hide/Show other controls
-        self.btn_check_ver.setEnabled(not checked)
-        self.btn_check_dup.setEnabled(not checked)
+        self.btn_check_ver.setEnabled(True)
+        self.btn_check_dup.setEnabled(True)
         self.btn_tag_sel.setEnabled(not checked)
         self.btn_selected_only.setEnabled(not checked)
         self.btn_tagged_only.setEnabled(not checked)

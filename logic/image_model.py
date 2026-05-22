@@ -53,7 +53,7 @@ class ImageTableModel(QAbstractTableModel):
 
     COLUMNS = [
         "Enable", "Thumbnail", "Label", "Variant", "Product Name", "Category", "Preset", "Version", 
-        "Last Version", "Age", "Review", "AYON Path", "Key Value Pairs"
+        "Last Version", "Age", "Review", "AYON Path", "Key Value Pairs", "Ingest Status"
     ]
 
     def __init__(self, parent=None):
@@ -122,6 +122,12 @@ class ImageTableModel(QAbstractTableModel):
             # Dim non-editable text columns: Variant(3), Product Name(4), Category(5), Preset(6), Last Version(8), Age(9), Path(10)
             if col in [3, 4, 5, 6, 8, 9, 10]:
                 return QColor("#888888")
+            
+            if col == 13:
+                if item.ingest_status == "OK":
+                    return QColor("#4caf50")
+                elif item.ingest_status == "Failed":
+                    return QColor("#f44336")
             return None
 
         if role in [Qt.DisplayRole, Qt.EditRole]:
@@ -150,6 +156,7 @@ class ImageTableModel(QAbstractTableModel):
                 if col == 11: return item.ayon_path
                 if col == 12: # Key Value Pairs
                     return self._get_all_tokens_string(item)
+                if col == 13: return item.ingest_status
             else:
                 # For EditRole in non-label/version columns
                 return None

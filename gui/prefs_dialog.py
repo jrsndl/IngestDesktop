@@ -133,6 +133,21 @@ class PreferencesDialog(QDialog):
         self.ayon_version_status = QLineEdit(self.config.get("ayon_version_status", "Pending Review"))
         self.set_version_status_after_check = QCheckBox("Set version status after Ingest Check")
         self.set_version_status_after_check.setChecked(self.config.get("set_version_status_after_check", True))
+        
+        self.play_sound_on_finish = QCheckBox("Play Sound on Finish")
+        self.play_sound_on_finish.setChecked(self.config.get("ayon_play_sound_on_finish", True))
+
+        self.set_product_status_after_check = QCheckBox("Set Product Status after Ingest Check")
+        self.set_product_status_after_check.setChecked(self.config.get("set_product_status_after_check", True))
+
+        self.set_task_status_after_check = QCheckBox("Set Task Status after Ingest Check")
+        self.set_task_status_after_check.setChecked(self.config.get("set_task_status_after_check", True))
+
+        self.set_neighbour_status_after_check = QCheckBox("Set Neighbour Task Status after Ingest Check")
+        self.set_neighbour_status_after_check.setChecked(self.config.get("set_neighbour_status_after_check", False))
+
+        self.neighbour_task_name = QLineEdit(self.config.get("neighbour_task_name", "comp"))
+        self.neighbour_task_status = QLineEdit(self.config.get("neighbour_task_status", "Ready to start"))
 
         self.ayon_form.addRow("Project {ayon_project_name}:", self.ayon_project_name)
         self.ayon_form.addRow("CSV Ingest Folder:", self.csv_ingest_folder)
@@ -142,6 +157,12 @@ class PreferencesDialog(QDialog):
         self.ayon_form.addRow(self.ingest_check)
         self.ayon_form.addRow("Ingested Version Status:", self.ayon_version_status)
         self.ayon_form.addRow(self.set_version_status_after_check)
+        self.ayon_form.addRow(self.play_sound_on_finish)
+        self.ayon_form.addRow(self.set_product_status_after_check)
+        self.ayon_form.addRow(self.set_task_status_after_check)
+        self.ayon_form.addRow(self.set_neighbour_status_after_check)
+        self.ayon_form.addRow("Neighbour Task Name:", self.neighbour_task_name)
+        self.ayon_form.addRow("Neighbour Task Status:", self.neighbour_task_status)
 
         self.ayon_layout.addLayout(self.ayon_form)
         self.ayon_layout.addStretch()
@@ -325,6 +346,13 @@ class PreferencesDialog(QDialog):
         ocio_lay.addWidget(self.btn_browse_ocio)
         self.thumbs_form.addRow("OCIO Config:", ocio_lay)
 
+        self.timeout_seconds = QSpinBox()
+        self.timeout_seconds.setRange(0, 3600)
+        self.timeout_seconds.setSuffix(" sec")
+        self.timeout_seconds.setSpecialValueText("No timeout")
+        self.timeout_seconds.setValue(self.config.get("timeout_seconds", 6))
+        self.thumbs_form.addRow("Timeout seconds:", self.timeout_seconds)
+
         self.thumbs_layout.addLayout(self.thumbs_form)
         self.thumbs_layout.addStretch()
         self.tabs.addTab(self.thumbs_tab, "Conversions")
@@ -378,11 +406,6 @@ class PreferencesDialog(QDialog):
         self.low_res_size.setSuffix(" px")
         self.low_res_size.setValue(self.config.get("low_res_size", 150))
 
-        self.timeout_seconds = QSpinBox()
-        self.timeout_seconds.setRange(1, 3600)
-        self.timeout_seconds.setSuffix(" sec")
-        self.timeout_seconds.setValue(self.config.get("timeout_seconds", 6))
-
         self.disable_inline_video = QCheckBox("Disable Inline Video Player (Always use default system player)")
         self.disable_inline_video.setChecked(self.config.get("disable_inline_video", False))
 
@@ -391,7 +414,6 @@ class PreferencesDialog(QDialog):
         self.gui_form.addRow("Default Thumbnail Size:", self.default_thumb_size)
         self.gui_form.addRow("Allowed Label Characters:", self.label_regex)
         self.gui_form.addRow("Low-Res Thumbnail Size:", self.low_res_size)
-        self.gui_form.addRow("Timeout seconds:", self.timeout_seconds)
         self.gui_form.addRow("Inline Video Player:", self.disable_inline_video)
 
         self.gui_layout.addLayout(self.gui_form)
@@ -769,6 +791,12 @@ class PreferencesDialog(QDialog):
             "ayon_ingest_check": self.ingest_check.isChecked(),
             "ayon_version_status": self.ayon_version_status.text(),
             "set_version_status_after_check": self.set_version_status_after_check.isChecked(),
+            "ayon_play_sound_on_finish": self.play_sound_on_finish.isChecked(),
+            "set_product_status_after_check": self.set_product_status_after_check.isChecked(),
+            "set_task_status_after_check": self.set_task_status_after_check.isChecked(),
+            "set_neighbour_status_after_check": self.set_neighbour_status_after_check.isChecked(),
+            "neighbour_task_name": self.neighbour_task_name.text(),
+            "neighbour_task_status": self.neighbour_task_status.text(),
             "clip_temp_root": self.clip_temp_root.text(),
             "clip_folder_template": self.clip_folder_template.text(),
             "clip_file_prefix": self.clip_file_prefix.text(),

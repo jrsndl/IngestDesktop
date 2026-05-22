@@ -2145,6 +2145,7 @@ class MainWindow(QMainWindow):
         product_name_col = -1
         version_col = -1
         repre_col = -1
+        task_col = -1
         
         for idx, h in enumerate(headers):
             h_lower = h.lower().strip()
@@ -2158,6 +2159,8 @@ class MainWindow(QMainWindow):
                 version_col = idx
             elif h_lower in ["representation", "repre"]:
                 repre_col = idx
+            elif h_lower in ["task", "task name", "task_name"]:
+                task_col = idx
                 
         def normalize_version(v_str):
             if not v_str: return None
@@ -2184,6 +2187,8 @@ class MainWindow(QMainWindow):
                 norm_review = os.path.normpath(os.path.abspath(review_path)).lower()
                 item_map[norm_review] = item
                 
+        item_statuses = {}
+        
         for row in rows:
             while len(row) < len(headers):
                 row.append("")
@@ -2224,12 +2229,6 @@ class MainWindow(QMainWindow):
                 repre_name = row[repre_col]
             if not repre_name and file_path_val:
                 repre_name = os.path.splitext(file_path_val)[1].replace(".", "").lower()
-
-            print(f"Found {matched_item}")
-            print(f" AYON product name: {product_name_val}")
-            print(f" Representation name: {repre_name}")
-            print(f" Version: {version_val}")
-            print(f" normalized Version: {normalize_version(version_val)}")
                 
             status_str = "OK"
             try:
@@ -2264,6 +2263,42 @@ class MainWindow(QMainWindow):
                                         self.log_message(f"Updated AYON version {version_val} (ID: {version_obj['id']}) status to: {target_status}", "success")
                                     except Exception as e:
                                         self.log_message(f"Failed to update AYON version status for version {version_val}: {e}", "warning")
+
+                                if self.config.get("set_product_status_after_check", True):
+                                    target_status = self.config.get("ayon_version_status", "Pending Review")
+                                    try:
+                                        ayon_api.update_product(project, product_id=product["id"], status=target_status)
+                                        self.log_message(f"Updated AYON product {product['name']} status to: {target_status}", "success")
+                                    except Exception as e:
+                                        self.log_message(f"Failed to update AYON product status for {product['name']}: {e}", "warning")
+
+                                if self.config.get("set_task_status_after_check", True) or self.config.get("set_neighbour_status_after_check", False):
+                                    target_status = self.config.get("ayon_version_status", "Pending Review")
+                                    try:
+                                        tasks = list(ayon_api.get_tasks(project, folder_ids=[folder["id"]]))
+                                        
+                                        if self.config.get("set_task_status_after_check", True):
+                                            current_task_name = row[task_col] if (task_col >= 0 and len(row) > task_col and row[task_col]) else self.config.get("ayon_csv_ingest_task", "csvingest")
+                                            if current_task_name:
+                                                current_task = next((t for t in tasks if t["name"].lower() == current_task_name.lower()), None)
+                                                if current_task:
+                                                    ayon_api.update_task(project, task_id=current_task["id"], status=target_status)
+                                                    self.log_message(f"Updated AYON task {current_task['name']} status to: {target_status}", "success")
+                                                else:
+                                                    self.log_message(f"Task '{current_task_name}' not found under folder {ayon_path_val}", "warning")
+
+                                        if self.config.get("set_neighbour_status_after_check", False):
+                                            neighbour_name = self.config.get("neighbour_task_name", "comp")
+                                            neighbour_status = self.config.get("neighbour_task_status", "Ready to start")
+                                            if neighbour_name:
+                                                neighbour_task = next((t for t in tasks if t["name"].lower() == neighbour_name.lower()), None)
+                                                if neighbour_task:
+                                                    ayon_api.update_task(project, task_id=neighbour_task["id"], status=neighbour_status)
+                                                    self.log_message(f"Updated AYON neighbour task {neighbour_task['name']} status to: {neighbour_status}", "success")
+                                                else:
+                                                    self.log_message(f"Neighbour task '{neighbour_name}' not found under folder {ayon_path_val}", "warning")
+                                    except Exception as e:
+                                        self.log_message(f"Failed to update task/neighbour task status: {e}", "warning")
             except Exception as e:
                 self.log_message(f"Error checking AYON database for product '{product_name_val}': {e}", "warning")
                 status_str = f"Failed: Error checking AYON database: {e}"
@@ -2272,17 +2307,23 @@ class MainWindow(QMainWindow):
             
             if file_path_val:
                 norm_f = os.path.normpath(os.path.abspath(file_path_val)).lower()
-                matched_item = item_map.get(norm_f)
-                if matched_item:
-                    if status_str != "OK":
-                        matched_item.ingest_status = "Failed"
-                    else:
-                        if getattr(matched_item, "ingest_status", "unknown") != "Failed":
-                            matched_item.ingest_status = "OK"
+                if norm_f not in item_statuses:
+                    item_statuses[norm_f] = []
+                item_statuses[norm_f].append(status_str)
             
             checked_row = list(row)
             checked_row.append(status_str)
             checked_rows.append(checked_row)
+            
+        # Update matching items with their final resolved status for this run
+        for norm_f, statuses in item_statuses.items():
+            matched_item = item_map.get(norm_f)
+            if matched_item:
+                if any(s != "OK" for s in statuses):
+                    matched_item.ingest_status = "Failed"
+                else:
+                    matched_item.ingest_status = "OK"
+                self.model.update_item(matched_item)
             
         checked_headers = list(headers)
         checked_headers.append("Check")
@@ -2311,6 +2352,69 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.log_message(f"Failed to rename Ingest Log CSV: {e}", "error")
             
+        # Clearly communicate to the user that the item was ingested (OK/FAIL)
+        ok_count = check_results.count("OK")
+        fail_count = len(check_results) - ok_count
+        
+        from PySide6.QtWidgets import QMessageBox
+        msg = QMessageBox(self)
+        msg.setWindowTitle("AYON Ingest Check Summary")
+        msg.setStyleSheet("""
+            QMessageBox {
+                background-color: #1e1e1e;
+                color: #e0e0e0;
+            }
+            QLabel {
+                color: #e0e0e0;
+                font-family: 'Segoe UI', Arial;
+                font-size: 14px;
+            }
+            QPushButton {
+                background-color: #333333;
+                color: #e0e0e0;
+                border: 1px solid #555555;
+                padding: 5px 15px;
+                border-radius: 4px;
+                min-width: 80px;
+            }
+            QPushButton:hover {
+                background-color: #444444;
+            }
+        """)
+        
+        summary_text = "<h3>AYON Ingest Verification Complete</h3>"
+        summary_text += f"<p><b>Total checked:</b> {len(check_results)}<br/>"
+        summary_text += f"<span style='color: #4caf50;'><b>Successfully Ingested (OK):</b> {ok_count}</span><br/>"
+        if fail_count > 0:
+            summary_text += f"<span style='color: #f44336;'><b>Failed Ingest Check:</b> {fail_count}</span></p>"
+        else:
+            summary_text += f"<span style='color: #4caf50;'><b>All items ingested perfectly!</b></span></p>"
+            
+        if fail_count > 0:
+            summary_text += "<p><b>Ingest failure details:</b><ul style='color: #f44336;'>"
+            for r in check_results:
+                if r != "OK":
+                    summary_text += f"<li>{r}</li>"
+            summary_text += "</ul></p>"
+            
+        msg.setText(summary_text)
+        if fail_count > 0:
+            msg.setIcon(QMessageBox.Warning)
+        else:
+            msg.setIcon(QMessageBox.Information)
+
+        if self.config.get("ayon_play_sound_on_finish", True):
+            try:
+                import winsound
+                if fail_count > 0:
+                    winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
+                else:
+                    winsound.MessageBeep(winsound.MB_OK)
+            except Exception as e:
+                self.log_message(f"Failed to play finish notification sound: {e}", "warning")
+
+        msg.exec()
+
         self.model.layoutChanged.emit()
 
     def perform_paste_image(self):
@@ -3368,29 +3472,39 @@ class MainWindow(QMainWindow):
         """Identify items sharing same {ayon_path}{product_name}{version} strings."""
         self.log_message("Starting duplicate check...")
         
+        is_csv = self.spreadsheet._is_csv_mode
+        
         # 1. Gather candidate items based on criteria
         # - tagged on
-        # - valid AYON path assigned
+        # - valid AYON path assigned (only required if not in CSV mode)
         # - visible according to current UI filters
         candidates = []
         for item in self.model.items:
             item.is_duplicate = False # Reset status for all
             
-            if not (item.is_tagged and item.ayon_path):
+            if not item.is_tagged:
                 continue
             
-            # Check if fits the right filter panel
-            age_min = item.age_minutes
-            label = item.label
-            matches_search = not self._search_filter_text or self._search_filter_text in label.lower()
-            matches_age = not self._age_filter_enabled or (age_min <= self._age_filter_value)
+            if not is_csv and not item.ayon_path:
+                continue
             
-            if matches_search and matches_age:
-                candidates.append(item)
+            if not is_csv:
+                # Check if fits the right filter panel
+                age_min = item.age_minutes
+                label = item.label
+                matches_search = not self._search_filter_text or self._search_filter_text in label.lower()
+                matches_age = not self._age_filter_enabled or (age_min <= self._age_filter_value)
+                
+                if not (matches_search and matches_age):
+                    continue
+            
+            candidates.append(item)
 
         if not candidates:
             self.log_message("No candidate items (tagged, assigned, and filtered) for duplicate check.", "warning")
             self.model.layoutChanged.emit()
+            if is_csv:
+                self.csv_preview_model._refresh_data()
             return
 
         # 2. Group by identity string: {ayon_path}{product_name}{version}
@@ -3398,7 +3512,8 @@ class MainWindow(QMainWindow):
         for item in candidates:
             # Product name expanded from template
             prod_name = self.model._expand_string(self.model.product_name_template, item, use_global_camel=True)
-            identity = f"{item.ayon_path}{prod_name}{item.version}"
+            ayon_path_val = item.ayon_path or ""
+            identity = f"{ayon_path_val}{prod_name}{item.version}"
             
             if identity not in identity_map:
                 identity_map[identity] = []
@@ -3414,6 +3529,8 @@ class MainWindow(QMainWindow):
 
         # 4. Refresh view to show updated {is_duplicate} in Key Value Pairs column
         self.model.layoutChanged.emit()
+        if is_csv:
+            self.csv_preview_model._refresh_data()
         
         if duplicate_items_count > 0:
             self.log_message(f"Duplicate check complete: Found {duplicate_items_count} items sharing {len([k for k,v in identity_map.items() if len(v)>1])} unique identities.", "warning")
@@ -3427,20 +3544,25 @@ class MainWindow(QMainWindow):
             self.log_message("No project selected for version check.", "warning")
             return
         
+        is_csv = self.spreadsheet._is_csv_mode
+        
         # 1. Gather candidate items based on criteria
         candidates = []
         for item in self.model.items:
             if not (item.is_tagged and item.ayon_path):
                 continue
             
-            # Check if fits the right filter panel
-            age_min = item.age_minutes
-            label = item.label
-            matches_search = not self._search_filter_text or self._search_filter_text in label.lower()
-            matches_age = not self._age_filter_enabled or (age_min <= self._age_filter_value)
+            if not is_csv:
+                # Check if fits the right filter panel
+                age_min = item.age_minutes
+                label = item.label
+                matches_search = not self._search_filter_text or self._search_filter_text in label.lower()
+                matches_age = not self._age_filter_enabled or (age_min <= self._age_filter_value)
+                
+                if not (matches_search and matches_age):
+                    continue
             
-            if matches_search and matches_age:
-                candidates.append(item)
+            candidates.append(item)
 
         self.log_message(f"Version Check: Found {len(candidates)} candidate items.")
 
@@ -3537,6 +3659,8 @@ class MainWindow(QMainWindow):
             self.model.index(0, 7), 
             self.model.index(len(self.model.items)-1, 11)
         )
+        if self.spreadsheet._is_csv_mode:
+            self.csv_preview_model._refresh_data()
         self.log_message(f"Version check complete. Updated {updated} items.", "success")
 
     def log_message(self, message, level="info"):

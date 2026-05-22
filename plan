@@ -428,3 +428,30 @@ Feature: Ingest Check
   - renamme the file with originalname_suffix.csv
   
 Store the Preferences: General: "Ingest Log Folder" and "Per Project Logging" in install.json, not other jsons
+
+
+Preferences: AYON: add new "Ingested Version Status" with default "Pending Review", followed by checkbox "Set version status after Ingest Check"
+
+ngest Check: when chacking AYON database, be more descriptive with what failed, and write it to the Check column. for example:
+* Failed: AYON Folder /shots/something not found
+* Failed: Product name "something" not found
+* Failed: Repre "somerepre" of product "Something" not found
+* Failed: version 11 of repre "somerepre" of product "Something" not found
+Feature: Ingest Check
+* Preferences: AYON: add new "Ingest Check" checkbox - default on
+* After the AYON Traypublisher command finishes, and Ingest Logging finishes:
+- Refresh Ayon Panel, so it can show the freshly ingested products and representations
+- For the Ingest Log file, add "Check" column, go row by row, and check:
+  - the required product, representation and version exists in AYON database, write "OK" or "Failed" to the Check column. Set new key {ingest_status} with default "unknown", set to OK or Failed
+- after checking all the rows:
+  - save (overwrite) the file with new Check column filled
+  - decide on suffix: if all rows OK, suffix = "_checkedOK", if all rows Failed, suffix = "_checkedFailed", if some rows failed, suffix = "_checkedMixed"
+  - renamme the file with originalname_suffix.csv
+
+Ingest Check:
+clearly communicate to the user that item was ingested (OK/FAIL)
+Thumb View: Add overlay top left corner triangle overlay (triangle size 20% of the height of the thumb rectangle) to the item that was ingested:
+- if the ingest check is OK, green triangle
+- if the ingest check failed, red triangle
+Spreadsheet view: Add "Ingest Status" column
+Filter View: add tiny green checkmark or red cross icon before the R symbol of each item

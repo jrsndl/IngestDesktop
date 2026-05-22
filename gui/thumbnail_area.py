@@ -8,7 +8,7 @@ from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtCore import Qt, QRectF, QPointF, Signal, QSize, QEvent, QTimer, QRegularExpression, QRunnable, QThreadPool, QObject
 from PySide6.QtGui import (QPainter, QPen, QColor, QAction, QPixmap, QFontMetrics, 
                          QRegularExpressionValidator, QImage, QFont, QTextOption, 
-                         QHelpEvent, QTextCharFormat, QTextCursor, QPainterPath)
+                         QHelpEvent, QTextCharFormat, QTextCursor, QPainterPath, QPolygonF)
 from PySide6.QtWidgets import QToolTip
 
 class TextNoteItem(QGraphicsObject):
@@ -751,6 +751,29 @@ class ThumbnailItem(QGraphicsObject):
             t_opt = QTextOption(Qt.AlignLeft | Qt.AlignTop)
             t_opt.setWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
             painter.drawText(label_rect, self.cached_label, t_opt)
+
+        # Draw Ingest Check status triangle in top-left corner
+        ingest_status = getattr(self.data, "ingest_status", "unknown")
+        if ingest_status in ["OK", "Failed"]:
+            painter.save()
+            painter.setRenderHint(QPainter.Antialiasing)
+            tri_size = thumb_rect.height() * 0.20
+            
+            triangle = QPolygonF([
+                QPointF(thumb_rect.left(), thumb_rect.top()),
+                QPointF(thumb_rect.left() + tri_size, thumb_rect.top()),
+                QPointF(thumb_rect.left(), thumb_rect.top() + tri_size)
+            ])
+            
+            if ingest_status == "OK":
+                tri_color = QColor(76, 175, 80, 230) # Green
+            else:
+                tri_color = QColor(244, 67, 54, 230) # Red
+                
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(tri_color)
+            painter.drawPolygon(triangle)
+            painter.restore()
         
         painter.restore()
 

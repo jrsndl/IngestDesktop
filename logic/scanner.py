@@ -96,7 +96,7 @@ class ImageScanner(QThread):
                 self.canceled.emit()
                 return
 
-            if time.perf_counter() - start_time > self.timeout:
+            if self.timeout > 0 and time.perf_counter() - start_time > self.timeout:
                 warning_msg = f"[Warning] Scan operation timed out after {self.timeout} seconds. Stopping operation."
                 print(warning_msg)
                 self.status_text.emit(warning_msg)
@@ -179,7 +179,7 @@ class ImageScanner(QThread):
             if self._is_canceled:
                 self.canceled.emit()
                 return
-            if time.perf_counter() - start_time > self.timeout:
+            if self.timeout > 0 and time.perf_counter() - start_time > self.timeout:
                 warning_msg = f"[Warning] Scan operation timed out after {self.timeout} seconds. Stopping operation."
                 print(warning_msg)
                 self.status_text.emit(warning_msg)
@@ -263,7 +263,7 @@ class ImageScanner(QThread):
             if self._is_canceled:
                 self.canceled.emit()
                 return
-            if time.perf_counter() - start_time > self.timeout:
+            if self.timeout > 0 and time.perf_counter() - start_time > self.timeout:
                 warning_msg = f"[Warning] Scan operation timed out after {self.timeout} seconds. Stopping operation."
                 print(warning_msg)
                 self.status_text.emit(warning_msg)
@@ -305,7 +305,7 @@ class ImageScanner(QThread):
             if self._is_canceled:
                 self.canceled.emit()
                 return
-            if time.perf_counter() - start_time > self.timeout:
+            if self.timeout > 0 and time.perf_counter() - start_time > self.timeout:
                 warning_msg = f"[Warning] Scan operation timed out after {self.timeout} seconds. Stopping operation."
                 print(warning_msg)
                 self.status_text.emit(warning_msg)
@@ -355,7 +355,7 @@ class ImageScanner(QThread):
 
         def process_item_metadata(item):
             if self._is_canceled: return
-            if time.perf_counter() - meta_start_time > self.timeout:
+            if self.timeout > 0 and time.perf_counter() - meta_start_time > self.timeout:
                 warning_msg = f"[Warning] Metadata fetching timed out after {self.timeout} seconds. Stopping operation."
                 print(warning_msg)
                 self.status_text.emit(warning_msg)
@@ -520,7 +520,7 @@ class ThumbnailConversionWorker(QThread):
             if self._is_canceled:
                 break
                 
-            if time.perf_counter() - start_time > self.timeout:
+            if self.timeout > 0 and time.perf_counter() - start_time > self.timeout:
                 warning_msg = f"[Warning] Thumbnail generation timed out after {self.timeout} seconds. Stopping operation."
                 print(warning_msg)
                 self.log.emit(warning_msg)
@@ -601,7 +601,7 @@ class ThumbnailConversionWorker(QThread):
                 
                 try:
                     # Calculate remaining time for the overall operation, but at least 0.1s
-                    rem_time = max(0.1, self.timeout - (time.perf_counter() - start_time))
+                    rem_time = max(0.1, self.timeout - (time.perf_counter() - start_time)) if self.timeout > 0 else None
                     stdout, stderr = self.process.communicate(timeout=rem_time)
                     returncode = self.process.returncode
                 except subprocess.TimeoutExpired:
