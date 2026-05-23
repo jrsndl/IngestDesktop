@@ -6,7 +6,7 @@ Welcome to the user guide for **IngestDesktop**, a desktop application designed 
 
 ## 🚀 Quickstart Guide
 
-Get up and running with IngestDesktop in four simple steps.
+Get up and running with IngestDesktop in four 9 steps.
 
 ![Quickstart Pipeline Infographic](resources/ID_ss01.png)
 
@@ -43,39 +43,3 @@ After publishing, IngestDesktop reloads the AYON panel, and checks that every ro
 Cuccesful publishes are marked with green corner in the Thumbnail view and check mark in the File panel. There is also Ingest Status column in the Spreadsheet view.
 The result is logged to CSV file. You can optionally set the status of the published version in AYON. Another feature is Neighbour Task Status: for example, after ingesting a CG render, you might want to set the compositing task status to "Ready to Start".
 IngestDesktop can also generate simple PDF with ingest report.
-
-
-### 📁 Filter Panel
-The **Filter Panel** located on the left provides flexible navigation options for scanned assets:
-* **Hierarchical View**: Navigate your scanned files via a standard directory folder tree.
-* **Flat View**: Switch to a unified, alphabetical flat list of all project files, ideal for quick sorting.
-* **Toggles**:
-  * *Files Only*: Hide or show scene backdrops and notes.
-  * *Version Stack*: Filter entries to show only the highest parsed version string.
-  * *Sequences*: Collapse image sequences into a single representative sequence asset with start/end frames noted.
-
-### 🎬 Video Playback & Controls
-IngestDesktop features a built-in video player overlay for quick reviews:
-* **Playback Controls**: Hover or click video thumbnails to trigger instant loop playbacks. Press **Spacebar** to toggle play/pause, or **M** to toggle audio muting.
-* **Tri-State Player Modes**: Use the button in the controls header to select:
-  * *Player: Selected*: Only the currently selected video thumbnail plays.
-  * *Player: All*: All visible video cards in the viewport play simultaneously.
-  * *Player: Stop*: Playback is entirely disabled, clearing all active media resources.
-
-### 📐 Layout Management, Backdrops & Notes
-Organize and annotate your graphics workspace:
-* **Arrange Grid**: Use the columns spinner and thumb size sliders in the controls header to customize item scale and grid spacing on the fly.
-* **Backdrops**: Group thumbnails visually by placing resizable backdrop panels in the scene.
-* **Text Notes**: Place notes directly in the canvas for layout annotations or ingestion logs.
-
-### ✏️ Thumbnail Batch Renaming
-* Select multiple thumbnails and right-click to open the sequence renaming tools.
-* Configure prefix naming patterns, start indexes, zero-padding counters, and suffix tags to batch-update target spreadsheet labels instantly.
-
-### 🔍 Post-Ingest Validation, Logs & PDF Reports
-Protect your pipeline against corrupted files and configuration mismatches:
-* **Post-Ingest Validation**: The validation engine automatically verifies local file sizes, generates md5 hashes, checks for duplicate naming tokens, and flags version overlaps.
-* **Ingest Log & Report**:
-  * *CSV Log*: Generates a raw action-history log detailing validation passes and failures.
-  * *PDF Report*: Compiles a beautifully formatted A4 Landscape Ingest Report PDF including embedded image thumbnails (preserving native aspect ratios), success filters, and normalized local/client time stamps (based on configurable timezone offsets).
-
