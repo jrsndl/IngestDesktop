@@ -497,5 +497,8 @@ Feature: Ingest Check Report:
 - Spreadsheet with: decent sized thumbnail, File Name, Ayon Folder, Version, length (frames), frame start, frame end
 - Formated to A4, portrait
 
+Processing on deadline: Stop all playback before sending items to deadline
 
+Thumbnail view: top controls, add tri state toggle button: "Player: Stop", "Player: Selected", "Player: All"
+* this will control how many items will play
 
