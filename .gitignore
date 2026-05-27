@@ -23,3 +23,13 @@ $\{IngestDesktop\}/users/
 ocio/aces_1.2cg/
 
 oiio/
+
+defaults.json
+
+defaults.yaml
+
+fonts/
+
+IngestDesktop.exe
+
+vfx-transcode.exe

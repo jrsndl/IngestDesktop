@@ -3551,6 +3551,15 @@ class MainWindow(QMainWindow):
 
     def toggle_maximize(self, source="thumbs"):
         """Toggle maximize state of the middle panel or spreadsheet."""
+        from PySide6.QtCore import QPoint
+        
+        # Save a reference scene point and its screen position to keep items stable on screen
+        scene_point = None
+        global_pos = None
+        if source == "thumbs" and self.thumb_area.isVisible():
+            scene_point = self.thumb_area.view.mapToScene(0, 0)
+            global_pos = self.thumb_area.view.viewport().mapToGlobal(QPoint(0, 0))
+
         if not self._is_maximized:
             # Maximize
             self._last_h_state = self.h_splitter.saveState()
@@ -3592,9 +3601,27 @@ class MainWindow(QMainWindow):
             
             self._is_maximized = False
         
-        # Reframe thumbnails after layout change
-        if self.thumb_area.isVisible():
-            self.thumb_area.frame_all()
+        # Keep view zoom and pan untouched during maximize/restore; compensate for top/left panels so thumbnails do not move on screen
+        if scene_point and global_pos:
+            def restore_pan():
+                if not self.thumb_area.isVisible():
+                    return
+                viewport = self.thumb_area.view.viewport()
+                new_global_pos = viewport.mapToGlobal(QPoint(0, 0))
+                target_viewport_pixel = global_pos - new_global_pos
+                
+                W = viewport.width()
+                H = viewport.height()
+                C_v = QPoint(W // 2, H // 2)
+                
+                scene_center = self.thumb_area.view.mapToScene(C_v)
+                scene_target = self.thumb_area.view.mapToScene(target_viewport_pixel)
+                
+                new_scene_center = scene_point + (scene_center - scene_target)
+                self.thumb_area.view.centerOn(new_scene_center)
+                self.thumb_area.update_zoom_indicator()
+            
+            QTimer.singleShot(0, restore_pan)
 
     def _on_ayon_task_selected(self, folder_path, task_name, task_type, assignee=""):
         """Assign AYON path to selected items."""

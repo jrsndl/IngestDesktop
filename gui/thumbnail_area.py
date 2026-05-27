@@ -1397,7 +1397,7 @@ class ThumbnailArea(QWidget):
         self.view.setBackgroundBrush(QColor("#1e1e1e"))
         self.view.setDragMode(QGraphicsView.RubberBandDrag)
         self.view.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
-        self.view.setResizeAnchor(QGraphicsView.AnchorUnderMouse)
+        self.view.setResizeAnchor(QGraphicsView.NoAnchor)
         self.view.viewport().installEventFilter(self)
         self.view.installEventFilter(self) # For key logic
         self.view.setMouseTracking(True)
