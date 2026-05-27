@@ -1,4 +1,4 @@
-from PySide6.QtWidgets import QWidget, QHBoxLayout, QPushButton, QComboBox, QLabel, QFileDialog, QLineEdit
+from PySide6.QtWidgets import QWidget, QHBoxLayout, QPushButton, QComboBox, QLabel, QFileDialog, QLineEdit, QCheckBox
 from PySide6.QtCore import Signal
 
 class TopBar(QWidget):
@@ -23,8 +23,13 @@ class TopBar(QWidget):
         self.path_display.setPlaceholderText("No source folder selected")
         self.path_display.setStyleSheet("background-color: #1e1e1e; border: 1px solid #333333;")
         
+        # Recursive Checkbox
+        self.chk_recursive = QCheckBox("Recursive")
+        self.chk_recursive.setChecked(True)
+        
         self.layout.addWidget(self.btn_folder)
         self.layout.addWidget(self.path_display)
+        self.layout.addWidget(self.chk_recursive)
         
         self.btn_rescan = QPushButton("Rescan")
         self.btn_rescan.clicked.connect(self.rescan_requested.emit)

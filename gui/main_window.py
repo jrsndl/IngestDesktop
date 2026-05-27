@@ -1145,6 +1145,7 @@ class MainWindow(QMainWindow):
         from utils import expand_env_vars
         self.scanner = ImageScanner(
             directory, 
+            recursive=self.top_bar.chk_recursive.isChecked(),
             version_regex=self.config.get("version_regex", r"([._]v|v)(\d+)"),
             thumbnail_size=self.config.get("thumbnail_size", 150),
             age_source=self.config.get("age_source", "Modification Date"),
@@ -1322,6 +1323,7 @@ class MainWindow(QMainWindow):
         from utils import expand_env_vars
         self.scanner = ImageScanner(
             directory, 
+            recursive=self.top_bar.chk_recursive.isChecked(),
             version_regex=self.config.get("version_regex", r"([._]v|v)(\d+)"),
             thumbnail_size=self.config.get("thumbnail_size", 150),
             age_source=self.config.get("age_source", "Modification Date"),
