@@ -146,10 +146,13 @@ class ImageScanner(QThread):
                 
                 if self.detect_sequences:
                     # 2. Strip version from filename for further pattern matching
-                    name_no_ver = re.sub(self.version_regex, "", filename)
-                    # 3. Strip sequence counter
-                    base_name = strip_sequence_counter(name_no_ver)
-                    key = (directory, base_name, ext, version)
+                    name_no_ver = re.sub(self.version_regex, "", filename, flags=re.IGNORECASE)
+                    # 3. Only strip sequence counter if one exists after version is removed
+                    if get_sequence_counter(name_no_ver):
+                        base_name = strip_sequence_counter(name_no_ver)
+                        key = (directory, base_name, ext, version)
+                    else:
+                        key = (directory, filename, ext, version)
                 else:
                     # If detection is off, every file gets its own unique key
                     key = (directory, filename, ext, version)
@@ -200,8 +203,8 @@ class ImageScanner(QThread):
                 last_name = os.path.basename(paths[-1])
                 
                 # Strip version from these names as well to ensure we get the right counter
-                fn_no_ver = re.sub(self.version_regex, "", first_name)
-                ln_no_ver = re.sub(self.version_regex, "", last_name)
+                fn_no_ver = re.sub(self.version_regex, "", first_name, flags=re.IGNORECASE)
+                ln_no_ver = re.sub(self.version_regex, "", last_name, flags=re.IGNORECASE)
                 
                 first_f = get_sequence_counter(fn_no_ver)
                 last_f = get_sequence_counter(ln_no_ver)
@@ -369,15 +372,20 @@ class ImageScanner(QThread):
             
             # 1. Video Thumbnail Generation
             if item.category == "Video" and not getattr(item, "conversion_thumb_path", None):
-                thumb_path = item._meta_source + "_thumbnail.png"
-                if not os.path.exists(thumb_path):
+                expected_thumb = self._get_expected_thumb_path(item)
+                # Ensure the directory for expected_thumb exists
+                os.makedirs(os.path.dirname(expected_thumb), exist_ok=True)
+                
+                if not os.path.exists(expected_thumb):
                     duration = metadata.get("duration")
                     generate_video_thumbnail(item._meta_source, self.ffmpeg_path, 
-                                             frame_mode=self.seq_thumb_frame, duration=duration)
+                                             frame_mode=self.seq_thumb_frame, duration=duration,
+                                             out_path=expected_thumb)
                 
                 # Update icon if thumbnail exists now
-                if os.path.exists(thumb_path):
-                    item.thumbnail_image = generate_thumbnail_image(thumb_path, self.thumbnail_size)
+                if os.path.exists(expected_thumb):
+                    item.thumbnail_image = generate_thumbnail_image(expected_thumb, self.thumbnail_size)
+                    item.conversion_thumb_path = expected_thumb
 
             # 2. Special handling for videos: start/end frames
             if item.category == "Video":

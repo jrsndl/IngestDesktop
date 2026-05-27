@@ -5,8 +5,8 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QPushButton, QLineEdit,
                              QButtonGroup, QComboBox, QAbstractItemView, QCheckBox,
                              QStyledItemDelegate, QStyleOptionViewItem, QStyle, QApplication)
 from PySide6.QtCore import Signal, Qt, QDir, QSortFilterProxyModel, QItemSelectionModel, QModelIndex, QRect
-from PySide6.QtGui import QColor, QStandardItemModel, QStandardItem, QPalette, QFont, QPen, QIcon, QPixmap, QPainter
-from utils import strip_sequence_counter, get_version_from_name
+from PySide6.QtGui import QColor, QStandardItemModel, QStandardItem, QPalette, QFont, QPen, QIcon, QPixmap, QPainter, QShortcut, QKeySequence
+from utils import strip_sequence_counter, get_version_from_name, get_sequence_counter
 
 def get_review_icon(review_status, ingest_status="unknown"):
     cache_key = (review_status, ingest_status)
@@ -116,7 +116,7 @@ class TagColorProxyModel(QSortFilterProxyModel):
             directory = os.path.dirname(abs_path)
             filename = os.path.basename(abs_path)
             version = get_version_from_name(filename, self.version_regex)
-            name_no_ver = re.sub(self.version_regex, "", filename)
+            name_no_ver = re.sub(self.version_regex, "", filename, flags=re.IGNORECASE)
             ext = os.path.splitext(filename)[1].lower()
             
             # For Version Stack
@@ -126,9 +126,10 @@ class TagColorProxyModel(QSortFilterProxyModel):
                     self._max_version_map[base_key] = version
             
             if self.detect_sequences and item.is_sequence:
-                base_name = strip_sequence_counter(name_no_ver)
-                key = (directory, base_name, ext, version)
-                self._sequence_map[key] = item
+                if get_sequence_counter(name_no_ver):
+                    base_name = strip_sequence_counter(name_no_ver)
+                    key = (directory, base_name, ext, version)
+                    self._sequence_map[key] = item
                 
         self.invalidateFilter()
 
@@ -175,25 +176,26 @@ class TagColorProxyModel(QSortFilterProxyModel):
             directory = os.path.dirname(abs_path)
             filename = os.path.basename(abs_path)
             version = get_version_from_name(filename, self.version_regex)
-            name_no_ver = re.sub(self.version_regex, "", filename)
+            name_no_ver = re.sub(self.version_regex, "", filename, flags=re.IGNORECASE)
             ext = os.path.splitext(filename)[1].lower()
-
+ 
             # Version Stack logic
             if self.v_stack and version is not None:
                 base_key = (directory, name_no_ver, ext)
                 if base_key in self._max_version_map:
                     if version < self._max_version_map[base_key]:
                         return False
-
+ 
             # Sequence logic
             if self.detect_sequences:
-                base_name = strip_sequence_counter(name_no_ver)
-                key = (directory, base_name, ext, version)
-                if key in self._sequence_map:
-                    item = self._sequence_map[key]
-                    item_abs_path = os.path.normpath(os.path.abspath(item.file_path))
-                    if abs_path != item_abs_path:
-                        return False
+                if get_sequence_counter(name_no_ver):
+                    base_name = strip_sequence_counter(name_no_ver)
+                    key = (directory, base_name, ext, version)
+                    if key in self._sequence_map:
+                        item = self._sequence_map[key]
+                        item_abs_path = os.path.normpath(os.path.abspath(item.file_path))
+                        if abs_path != item_abs_path:
+                            return False
                     
         return super().filterAcceptsRow(source_row, source_parent)
 
@@ -207,16 +209,17 @@ class TagColorProxyModel(QSortFilterProxyModel):
                 filename = os.path.basename(abs_path)
                 
                 version = get_version_from_name(filename, self.version_regex)
-                name_no_ver = re.sub(self.version_regex, "", filename)
-                base_name = strip_sequence_counter(name_no_ver)
-                ext = os.path.splitext(filename)[1].lower()
-                
-                key = (directory, base_name, ext, version)
-                if key in self._sequence_map:
-                    item = self._sequence_map[key]
-                    display_name = strip_sequence_counter(filename)
-                    # Nuke notation: filename[first-last].extension
-                    return f"{display_name}[{item.frame_start}-{item.frame_end}]{ext}"
+                name_no_ver = re.sub(self.version_regex, "", filename, flags=re.IGNORECASE)
+                if get_sequence_counter(name_no_ver):
+                    base_name = strip_sequence_counter(name_no_ver)
+                    ext = os.path.splitext(filename)[1].lower()
+                    
+                    key = (directory, base_name, ext, version)
+                    if key in self._sequence_map:
+                        item = self._sequence_map[key]
+                        display_name = strip_sequence_counter(filename)
+                        # Nuke notation: filename[first-last].extension
+                        return f"{display_name}[{item.frame_start}-{item.frame_end}]{ext}"
 
         if role == Qt.DecorationRole:
             source_index = self.mapToSource(index)
@@ -329,6 +332,9 @@ class FilterPanel(QWidget):
         self.tree.clicked.connect(self._on_folder_click)
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._on_context_menu)
+        
+        self.shortcut_open = QShortcut(QKeySequence("Ctrl+O"), self.tree)
+        self.shortcut_open.activated.connect(self._on_shortcut_open)
         
         # Connect main model signals to automatically refresh views when items change
         self.main_model.rowsInserted.connect(self.refresh_views_if_active)
@@ -696,6 +702,7 @@ class FilterPanel(QWidget):
         menu.addAction(act_reveal)
         
         act_open = QAction("OS Open", self)
+        act_open.setShortcut("Ctrl+O")
         act_open.triggered.connect(lambda: self._on_action_open(paths))
         menu.addAction(act_open)
         
@@ -706,6 +713,23 @@ class FilterPanel(QWidget):
         menu.addAction(act_rename)
         
         menu.exec(self.tree.viewport().mapToGlobal(pos))
+
+    def _on_shortcut_open(self):
+        indexes = self.tree.selectionModel().selectedIndexes()
+        paths = []
+        for idx in indexes:
+            if idx.column() == 0:
+                source_idx = self.proxy.mapToSource(idx)
+                model = self.proxy.sourceModel()
+                if hasattr(model, "filePath"):
+                    path = model.filePath(source_idx)
+                else:
+                    is_scene = source_idx.data(Qt.UserRole + 1)
+                    path = source_idx.data(Qt.UserRole) if not is_scene else None
+                if path and isinstance(path, str):
+                    paths.append(path)
+        if paths:
+            self._on_action_open(paths)
 
     def _on_action_reveal(self, paths):
         import subprocess

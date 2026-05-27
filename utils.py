@@ -63,8 +63,8 @@ def generate_thumbnail(image_path, size=150):
     print(f"[Timer] Generating thumbnail pixmap for {os.path.basename(image_path)} took {elapsed:.4f} seconds.")
     return pixmap
 
-def generate_video_thumbnail(video_path, ffmpeg_path, frame_mode="Middle", duration=None):
-    """Generate a PNG thumbnail for a video file at the source path."""
+def generate_video_thumbnail(video_path, ffmpeg_path, frame_mode="Middle", duration=None, out_path=None):
+    """Generate a PNG/JPG thumbnail for a video file at the source path."""
     import subprocess
     import time
     print(f"[Timer] Starting to generate video thumbnail for {os.path.basename(video_path)}...")
@@ -72,7 +72,8 @@ def generate_video_thumbnail(video_path, ffmpeg_path, frame_mode="Middle", durat
     if not ffmpeg_path or not os.path.exists(ffmpeg_path):
         return None
         
-    out_path = video_path + "_thumbnail.png"
+    if not out_path:
+        out_path = video_path + "_thumbnail.png"
     
     # Calculate timestamp based on mode
     ss = "00:00:00"
@@ -126,6 +127,9 @@ def strip_sequence_counter(filename):
     """Remove sequence counter (digits before extension) from filename."""
     # Matches name.0001.ext or name0001.ext
     base, ext = os.path.splitext(filename)
+    if ext and re.match(r"^\.\d+$", ext):
+        # Numeric extension (e.g. .1001), treat as part of sequence counter
+        base = filename
     match = re.search(r"(.*?)(\d+)$", base)
     if match:
         # If there's a dot or underscore before the numbers, strip it too
@@ -138,6 +142,9 @@ def strip_sequence_counter(filename):
 def get_sequence_counter(filename):
     """Extract sequence counter (trailing digits before extension) from filename."""
     base, ext = os.path.splitext(filename)
+    if ext and re.match(r"^\.\d+$", ext):
+        # Numeric extension (e.g. .1001), treat as part of sequence counter
+        base = filename
     match = re.search(r"(\d+)$", base)
     if match:
         return match.group(1)

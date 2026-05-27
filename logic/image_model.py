@@ -376,6 +376,10 @@ class ImageTableModel(QAbstractTableModel):
         
         p_data = item.preset_data or {}
         
+        # Precompute expanded representation only if "{repre}" is actually in the text to avoid eager recursive loops
+        repre_template = item.representation or p_data.get("Representation") or "{extension}"
+        repre_expanded = self._expand_string(repre_template, item) if (text and "{repre}" in text.lower() and text != repre_template) else repre_template
+        
         # Replacement mapping
         replacements = {
             "{product_type}": item.product_type or "",
@@ -389,13 +393,13 @@ class ImageTableModel(QAbstractTableModel):
             "{ayon_task_type}": item.ayon_task_type or "",
             "{ayon_task_assignee}": item.ayon_task_assignee or "",
             "{label}": item.label or "",
-            "{variant}": self._expand_string(item.variant, item) if text != item.variant else (item.variant or ""),
+            "{variant}": self._expand_string(item.variant, item) if (text and "{variant}" in text.lower() and text != item.variant) else (item.variant or ""),
             "{filename}": filename_val,
             "{filename_printf}": filename_printf_val,
             "{file_name}": os.path.splitext(os.path.basename(item.file_path))[0],
             "{extension}": os.path.splitext(item.file_path)[1].replace(".", "").lower(),
-            "{repre}": p_data.get("Representation", ""),
-            "{REPRE}": p_data.get("Representation", ""),
+            "{repre}": repre_expanded,
+            "{REPRE}": repre_expanded,
             "{head}": str(p_data.get("Handle Start", "0")),
             "{HEAD}": str(p_data.get("Handle Start", "0")),
             "{tail}": str(p_data.get("Handle End", "0")),
@@ -594,7 +598,7 @@ class ImageTableModel(QAbstractTableModel):
             
             if item.is_sequence:
                 # Pattern: strip counter and version from original filename
-                name_no_ver = re.sub(version_regex, "", orig_filename)
+                name_no_ver = re.sub(version_regex, "", orig_filename, flags=re.IGNORECASE)
                 pattern_base = strip_sequence_counter(name_no_ver)
                 
                 # Get all files in directory
@@ -604,7 +608,7 @@ class ImageTableModel(QAbstractTableModel):
                     continue
                 
                 for f in all_dir_files:
-                    f_no_ver = re.sub(version_regex, "", f)
+                    f_no_ver = re.sub(version_regex, "", f, flags=re.IGNORECASE)
                     f_pattern_base = strip_sequence_counter(f_no_ver)
                     f_ver_match = re.search(version_regex, f, re.IGNORECASE)
                     f_ver_str = f_ver_match.group(0) if f_ver_match else ""

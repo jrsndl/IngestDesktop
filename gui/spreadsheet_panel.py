@@ -62,6 +62,11 @@ class SpreadsheetPanel(QWidget):
         self.btn_tagged_only = QPushButton("Enabled Only")
         self.btn_tagged_only.setCheckable(True)
         self.btn_tagged_only.toggled.connect(lambda: self.update_filtering())
+        
+        self.btn_assigned_only = QPushButton("Assigned Only")
+        self.btn_assigned_only.setCheckable(True)
+        self.btn_assigned_only.toggled.connect(lambda: self.update_filtering())
+        
         self.btn_check_ver = QPushButton("Version Check & Fix")
         self.btn_check_dup = QPushButton("Check Duplicities")
         self.btn_tag_sel = QPushButton("Enable/Disable Selected")
@@ -88,6 +93,7 @@ class SpreadsheetPanel(QWidget):
 
         controls_layout.addWidget(self.btn_selected_only)
         controls_layout.addWidget(self.btn_tagged_only)
+        controls_layout.addWidget(self.btn_assigned_only)
         controls_layout.addWidget(self.btn_check_ver)
         controls_layout.addWidget(self.btn_check_dup)
         controls_layout.addWidget(self.btn_tag_sel)
@@ -208,6 +214,7 @@ class SpreadsheetPanel(QWidget):
         self.btn_tag_sel.setEnabled(not checked)
         self.btn_selected_only.setEnabled(not checked)
         self.btn_tagged_only.setEnabled(not checked)
+        self.btn_assigned_only.setEnabled(not checked)
         
         # Ensure row hidden states are refreshed
         self.update_filtering()
@@ -247,11 +254,12 @@ class SpreadsheetPanel(QWidget):
             return
         selected_only = self.btn_selected_only.isChecked()
         tagged_only = self.btn_tagged_only.isChecked()
+        assigned_only = self.btn_assigned_only.isChecked()
         
         age_enabled, age_val = self._last_age_filter
         search_term = self._last_search_text
         
-        if not selected_only and not tagged_only and not age_enabled and not search_term:
+        if not selected_only and not tagged_only and not assigned_only and not age_enabled and not search_term:
             for row in range(self.table.model().rowCount()):
                 self.table.setRowHidden(row, False)
             return
@@ -261,6 +269,7 @@ class SpreadsheetPanel(QWidget):
             item = self.table.model().items[row]
             is_selected = selection_model.isRowSelected(row, QModelIndex())
             is_tagged = item.is_tagged
+            is_assigned = bool(item.ayon_path)
             is_young_enough = not age_enabled or (item.age_minutes <= age_val)
             matches_search = (not search_term or 
                               search_term in item.label.lower() or 
@@ -270,6 +279,8 @@ class SpreadsheetPanel(QWidget):
             if selected_only and not is_selected:
                 hidden = True
             if tagged_only and not is_tagged:
+                hidden = True
+            if assigned_only and not is_assigned:
                 hidden = True
             if age_enabled and not is_young_enough:
                 hidden = True

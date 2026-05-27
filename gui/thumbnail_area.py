@@ -1300,10 +1300,7 @@ class ThumbnailArea(QWidget):
         self.btn_frame_sel = QPushButton("Frame Selection")
         self.btn_frame_sel.clicked.connect(self.frame_selection)
         
-        self.slider_cols = QSpinBox()
-        self.slider_cols.setRange(5, 100)
-        self.slider_cols.setValue(self._last_arrange_vals["cols"])
-        self.slider_cols.valueChanged.connect(self._on_spinner_changed)
+        
 
         self.slider_text_size = QSlider(Qt.Horizontal)
         self.slider_text_size.setRange(4, 64)
@@ -1345,8 +1342,7 @@ class ThumbnailArea(QWidget):
         self.controls_layout.addWidget(self.btn_frame_all)
         self.controls_layout.addWidget(self.btn_frame_sel)
         add_v_line(self.controls_layout)
-        self.controls_layout.addWidget(QLabel("Cols:"))
-        self.controls_layout.addWidget(self.slider_cols)
+        
         self.controls_layout.addWidget(self.btn_show_text)
         add_v_line(self.controls_layout)
         self.controls_layout.addWidget(QLabel("Text:"))
@@ -1807,7 +1803,7 @@ class ThumbnailArea(QWidget):
         if search_text is not None:
             self._last_search_text = search_text
             
-        cols = self.slider_cols.value()
+        
         
         age_enabled, age_val = self._last_age_filter
         search_term = self._last_search_text
@@ -1841,9 +1837,8 @@ class ThumbnailArea(QWidget):
         if not visible_items:
             return
             
-        # Use last arrangement values but current column count
+        # Use last arrangement values
         vals = self._last_arrange_vals.copy()
-        vals["cols"] = self.slider_cols.value()
         
         # Use (0,0) as anchor for the main layout
         self._apply_arrangement(visible_items, "grid", vals, anchor=(0, 0), ignore_manual=True)
@@ -1896,8 +1891,7 @@ class ThumbnailArea(QWidget):
             self.btn_paste.setStyleSheet("color: #666666;")
             self.btn_paste.setEnabled(False)
 
-    def _on_spinner_changed(self, value):
-        self.rearrange_items()
+    
 
     def frame_all(self):
         rect = self.scene.itemsBoundingRect()
@@ -2053,6 +2047,10 @@ class ThumbnailArea(QWidget):
             elif event.key() == Qt.Key_F:
                 if self.view.underMouse():
                     self.frame_selection()
+                    return True
+            elif event.key() == Qt.Key_O and (event.modifiers() & Qt.ControlModifier):
+                if self.view.underMouse():
+                    self._on_action_os_open()
                     return True
             elif event.key() == Qt.Key_N and (event.modifiers() & Qt.ControlModifier):
                 if self.view.underMouse():
@@ -2223,6 +2221,10 @@ class ThumbnailArea(QWidget):
             edit_backdrop_action = QAction("Edit Backdrop", self)
             edit_backdrop_action.triggered.connect(lambda: self.edit_backdrop(backdrop_under_cursor))
             menu.addAction(edit_backdrop_action)
+            
+            delete_backdrop_action = QAction("Delete Backdrop", self)
+            delete_backdrop_action.triggered.connect(lambda: self.delete_backdrop(backdrop_under_cursor))
+            menu.addAction(delete_backdrop_action)
 
         menu.addSeparator()
         
@@ -2236,6 +2238,16 @@ class ThumbnailArea(QWidget):
         # Enable only if something is selected
         action_seq_rename.setEnabled(bool(self.scene.selectedItems()))
         menu.addAction(action_seq_rename)
+        
+        # Add OS Open action
+        action_os_open = QAction("OS Open", self)
+        action_os_open.setShortcut("Ctrl+O")
+        action_os_open.triggered.connect(self._on_action_os_open)
+        # Filter for ThumbnailItems
+        selected = self.scene.selectedItems()
+        target_items = [it for it in selected if isinstance(it, ThumbnailItem)]
+        action_os_open.setEnabled(bool(target_items))
+        menu.addAction(action_os_open)
         
         menu.addSeparator()
         reset_action = QAction("Reset Label", self)
@@ -2293,6 +2305,16 @@ class ThumbnailArea(QWidget):
             menu.addAction(open_review_action)
             
         menu.exec(event.globalPos())
+
+    def _on_action_os_open(self):
+        selected = self.scene.selectedItems()
+        paths = []
+        for it in selected:
+            if isinstance(it, ThumbnailItem) and it.data and it.data.file_path:
+                paths.append(it.data.file_path)
+        for path in paths:
+            if os.path.exists(path):
+                os.startfile(path)
 
     def wheelEvent(self, event):
         # Base wheel events for the widget itself (if any)
@@ -2625,3 +2647,12 @@ class ThumbnailArea(QWidget):
         to_remove = [it for it in selected if isinstance(it, BackdropItem)]
         for it in to_remove:
             self.scene.removeItem(it)
+
+    def delete_backdrop(self, backdrop):
+        selected_backdrops = [it for it in self.scene.selectedItems() if isinstance(it, BackdropItem)]
+        if backdrop in selected_backdrops:
+            for it in selected_backdrops:
+                self.scene.removeItem(it)
+        else:
+            self.scene.removeItem(backdrop)
+        self.scene_items_changed.emit()

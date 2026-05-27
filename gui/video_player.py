@@ -513,12 +513,6 @@ class VideoPlayerOverlay(QWidget):
                 
             # Default to muted for professional DAM experience
             self.audio_output.setMuted(True)
-            
-            # Tiny mute/unmute overlay button in the top-right
-            self.btn_mute = QPushButton("🔇", self)
-            self.btn_mute.setObjectName("MuteOverlayButton")
-            self.btn_mute.setFixedSize(24, 24)
-            self.btn_mute.clicked.connect(self.toggle_mute)
         else:
             # Fallback label
             self.lbl_fallback = QLabel("Fallback Player", self)
@@ -528,18 +522,8 @@ class VideoPlayerOverlay(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        if is_multimedia_available() and hasattr(self, 'btn_mute'):
-            # Place button in top-right corner with a small margin
-            self.btn_mute.move(self.width() - self.btn_mute.width() - 6, 6)
-            self.btn_mute.raise_()
 
-    @Slot()
-    def toggle_mute(self):
-        if not is_multimedia_available() or not hasattr(self, 'audio_output'):
-            return
-        muted = self.audio_output.isMuted()
-        self.audio_output.setMuted(not muted)
-        self.btn_mute.setText("🔇" if not muted else "🔊")
+    
 
     def load_video(self, video_path, name=""):
         if not video_path or not os.path.exists(video_path):

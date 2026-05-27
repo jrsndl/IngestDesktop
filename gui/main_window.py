@@ -567,7 +567,6 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
         
         act_open_project = QAction("&Open Project...", self)
-        act_open_project.setShortcut("Ctrl+O")
         act_open_project.triggered.connect(self.perform_open_project)
         file_menu.addAction(act_open_project)
         
@@ -866,8 +865,11 @@ class MainWindow(QMainWindow):
                 
                 # Load thumbnail image
                 thumb_source = item.file_path
+                expected_pref_thumb = self.model._get_prefs_thumb_path(item)
                 if item.conversion_thumb_path and os.path.exists(item.conversion_thumb_path):
                     thumb_source = item.conversion_thumb_path
+                elif expected_pref_thumb and os.path.exists(expected_pref_thumb):
+                    thumb_source = expected_pref_thumb
                 elif item.category.lower().startswith("video"):
                     sidecar = item.file_path + "_thumbnail.png"
                     if os.path.exists(sidecar):
@@ -1092,7 +1094,6 @@ class MainWindow(QMainWindow):
         self._restore_gui_state()
         self.thumb_area.high_res_size = self.config.get("thumb_size", 512)
         
-        self.thumb_area.slider_cols.valueChanged.connect(self._on_cols_changed)
         self.thumb_area.slider_text_size.valueChanged.connect(self._on_text_size_changed)
         self.thumb_area.slider_thumb_size.valueChanged.connect(self._on_thumb_size_changed)
 
@@ -1618,7 +1619,8 @@ class MainWindow(QMainWindow):
         self.config.update(new_config)
         self.secrets.update(new_secrets)
         
-        self.thumb_area.slider_cols.setValue(self.config.get("default_columns", 12))
+        self.thumb_area._last_arrange_vals["cols"] = self.config.get("default_columns", 12)
+        self.thumb_area.rearrange_items()
         self.thumb_area.slider_text_size.setValue(self.config.get("default_text_size", 10))
         self.thumb_area.slider_thumb_size.setValue(self.config.get("default_thumb_size", 150))
         self.thumb_area.high_res_size = self.config.get("thumb_size", 512)
@@ -1773,7 +1775,7 @@ class MainWindow(QMainWindow):
 
         # 3. Thumbnails Panel
         if hasattr(self, "thumb_area") and self.thumb_area:
-            self.config["default_columns"] = self.thumb_area.slider_cols.value()
+            self.config["default_columns"] = self.thumb_area._last_arrange_vals["cols"]
             self.config["thumbnails_show_text"] = self.thumb_area.btn_show_text.isChecked()
             self.config["default_text_size"] = self.thumb_area.slider_text_size.value()
             self.config["default_thumb_size"] = self.thumb_area.slider_thumb_size.value()
@@ -1798,7 +1800,8 @@ class MainWindow(QMainWindow):
 
         # 2. Thumbnails Panel
         if hasattr(self, "thumb_area") and self.thumb_area:
-            self.thumb_area.slider_cols.setValue(self.config.get("default_columns", 12))
+            self.thumb_area._last_arrange_vals["cols"] = self.config.get("default_columns", 12)
+            self.thumb_area.rearrange_items()
             self.thumb_area.slider_text_size.setValue(self.config.get("default_text_size", 10))
             self.thumb_area.slider_thumb_size.setValue(self.config.get("default_thumb_size", 150))
             
