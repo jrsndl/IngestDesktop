@@ -502,3 +502,10 @@ Processing on deadline: Stop all playback before sending items to deadline
 Thumbnail view: top controls, add tri state toggle button: "Player: Stop", "Player: Selected", "Player: All"
 * this will control how many items will play
 
+Feature: display AYON Thumbnails:
+* when getting AYON hierarchy, also get the thumbnail ID for each task from the server
+* Preferences - AYON: Add text box "AYON Thumbnails Cache" for folder path where app should store jpeg thumbnails files downloaded from AYON server
+* Start downloading and caching AYON thumbnails to "AYON Thumbnails Cache"/"AYON Project Name" folder after thumb and review conversion is done. Skip downloading thumbs already present in the cache folder.
+* Check https://github.com/jrsndl/SubmissionHelper/blob/main/ayon_shotlist.py for guide how to download thumbnails from AYON.
+* Display small thumbs in left AYON panel for each task if "Show Thumbs" toggle button is on
+* 

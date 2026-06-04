@@ -161,8 +161,10 @@ class HelpContentWidget(QWidget):
         y = draw_shortcut(painter, full_rect, "{repre}", "Representation from preset", y)
         y = draw_shortcut(painter, full_rect, "{head} / {tail}", "Handle Start / End from preset", y)
         y = draw_shortcut(painter, full_rect, "{slate_exists}", "True/False based on preset", y)
-        y = draw_shortcut(painter, full_rect, "{fps}", "FPS from preset", y)
+        y = draw_shortcut(painter, full_rect, "{fps}", "FPS from preset / metadata", y)
+        y = draw_shortcut(painter, full_rect, "{fps_int}", "FPS rounded to nearest integer", y)
         y = draw_shortcut(painter, full_rect, "{version}", "Current version from spreadsheet", y)
+        y = draw_shortcut(painter, full_rect, "{ocio}", "OCIO config absolute path from preferences", y)
         y = draw_shortcut(painter, full_rect, "{metadata.width}", "Source image width (integer)", y)
         y = draw_shortcut(painter, full_rect, "{metadata.height}", "Source image height (integer)", y)
         y = draw_shortcut(painter, full_rect, "{metadata.timecode}", "Technical timecode (from file)", y)
@@ -738,10 +740,29 @@ class MainWindow(QMainWindow):
         from gui.thumbnail_area import TextNoteItem, BackdropItem
         for graphics_item in self.thumb_area.scene.items():
             if isinstance(graphics_item, TextNoteItem):
+                parent_uuid = None
+                note_center = graphics_item.sceneBoundingRect().center()
+                parent_bd = None
+                for item in self.thumb_area.scene.items():
+                    if isinstance(item, BackdropItem):
+                        if item.sceneBoundingRect().contains(note_center):
+                            parent_uuid = item.uuid
+                            parent_bd = item
+                            break
+                
+                if parent_bd:
+                    rel_pos = parent_bd.mapFromScene(graphics_item.scenePos())
+                    note_x = rel_pos.x()
+                    note_y = rel_pos.y()
+                else:
+                    note_x = graphics_item.scenePos().x()
+                    note_y = graphics_item.scenePos().y()
+                
                 note_dict = {
                     "uuid": graphics_item.uuid,
-                    "x": graphics_item.pos().x(),
-                    "y": graphics_item.pos().y(),
+                    "parent_uuid": parent_uuid,
+                    "x": note_x,
+                    "y": note_y,
                     "width": graphics_item.width,
                     "height": graphics_item.height,
                     "bg_color": graphics_item.bg_color.name(),
@@ -909,29 +930,9 @@ class MainWindow(QMainWindow):
             from gui.thumbnail_area import TextNoteItem, BackdropItem
             from PySide6.QtCore import QPointF
             
-            # Recreate text notes
-            text_notes = project_data.get("text_notes", [])
-            for nt in text_notes:
-                pos = QPointF(nt.get("x", 0), nt.get("y", 0))
-                note = TextNoteItem(pos, nt.get("text", "New Note"))
-                note.uuid = nt.get("uuid", note.uuid)
-                note.width = nt.get("width", 400)
-                note.height = nt.get("height", 200)
-                note.bg_color = QColor(nt.get("bg_color", "#1e1e1e"))
-                
-                # Restore HTML rich text and default colors if present
-                if "html" in nt:
-                    note.text_item.setHtml(nt["html"])
-                if "default_text_color" in nt:
-                    note.text_item.setDefaultTextColor(QColor(nt["default_text_color"]))
-                
-                # Apply restored size to text item wrapping
-                note.text_item.setTextWidth(note.width - 20)
-                
-                self.thumb_area.scene.addItem(note)
-                
-            # Recreate backdrops
+            # Recreate backdrops first
             backdrops = project_data.get("backdrops", [])
+            backdrop_map = {}
             for bd in backdrops:
                 from PySide6.QtCore import QRectF
                 rect = QRectF(bd.get("x", 0), bd.get("y", 0), bd.get("width", 300), bd.get("height", 300))
@@ -951,7 +952,56 @@ class MainWindow(QMainWindow):
                 }
                 backdrop = BackdropItem(rect, bd_data)
                 backdrop.uuid = bd.get("uuid", backdrop.uuid)
+                backdrop.setZValue(-1000)
                 self.thumb_area.scene.addItem(backdrop)
+                backdrop_map[backdrop.uuid] = backdrop
+                
+            # Recreate text notes second
+            text_notes = project_data.get("text_notes", [])
+            for nt in text_notes:
+                pos = QPointF(nt.get("x", 0), nt.get("y", 0))
+                note = TextNoteItem(pos, nt.get("text", "New Note"))
+                note.uuid = nt.get("uuid", note.uuid)
+                note.width = nt.get("width", 400)
+                note.height = nt.get("height", 200)
+                note.bg_color = QColor(nt.get("bg_color", "#1e1e1e"))
+                
+                # Restore HTML rich text and default colors if present
+                if "html" in nt:
+                    note.text_item.setHtml(nt["html"])
+                if "default_text_color" in nt:
+                    note.text_item.setDefaultTextColor(QColor(nt["default_text_color"]))
+                
+                # Apply restored size to text item wrapping
+                note.text_item.setTextWidth(note.width - 20)
+                note.setZValue(1000)
+                
+                # Determine containing backdrop (no setParentItem)
+                parent_uuid = nt.get("parent_uuid")
+                parent_bd = backdrop_map.get(parent_uuid) if parent_uuid else None
+                
+                # Compatibility fallback for older files: check containment
+                if not parent_bd:
+                    # Older files stored absolute scene position in 'pos'
+                    # We check if the note center falls inside any backdrop
+                    note_center = QPointF(pos.x() + note.width/2, pos.y() + note.height/2)
+                    for bd_item in backdrop_map.values():
+                        if bd_item.sceneBoundingRect().contains(note_center):
+                            parent_bd = bd_item
+                            break
+                            
+                if parent_bd:
+                    if parent_uuid:
+                        # Loaded from new style: position was saved relative to parent
+                        note.setPos(parent_bd.mapToScene(pos))
+                    else:
+                        # Loaded from old style: position was absolute scene coordinate
+                        note.setPos(pos)
+                else:
+                    # Top-level note
+                    note.setPos(pos)
+                
+                self.thumb_area.scene.addItem(note)
                 
             # Restore manual positions on reconstructed items in the scene using saved states
             for item in self.model.items:
@@ -1166,7 +1216,9 @@ class MainWindow(QMainWindow):
             thumb_format=self.config.get("thumb_format", ".jpg"),
             thumb_location=self.config.get("thumb_location", "Relative to Source Folder"),
             thumb_location_path=self.config.get("thumb_location_path", "_thumbs"),
-            timeout=self.config.get("timeout_seconds", 6)
+            timeout=self.config.get("timeout_seconds", 6),
+            default_fps=self.config.get("default_fps", 25.0),
+            use_fps_from_metadata=self.config.get("use_fps_from_metadata", True)
         )
         self.scanner.finished.connect(lambda items: self.log_message(f"Scan complete. Found {len(items)} items. Fetching metadata in background...", "success"))
         self.scanner.finished.connect(self._on_scan_finished)
@@ -1214,7 +1266,7 @@ class MainWindow(QMainWindow):
         self._conv_worker.finished.connect(self.start_review_conversions)
         self._conv_worker.start()
 
-    def start_review_conversions(self, force=False, reset=False):
+    def start_review_conversions(self, force=False, reset=False, force_overwrite=False):
         """Triggered after thumbnail conversions are done or scan finished."""
         if not force and not self.config.get("run_review_after_scan", False):
             return
@@ -1233,8 +1285,9 @@ class MainWindow(QMainWindow):
             self.thumb_area.btn_queue.setText("Conversion Queue: done")
             return
             
-        self._review_worker = ReviewConversionWorker(self.model.items, self.model, self.config)
+        self._review_worker = ReviewConversionWorker(self.model.items, self.model, self.config, force_overwrite=force_overwrite)
         self._review_worker.item_updated.connect(self.model.update_item)
+        self._review_worker.item_updated.connect(lambda it: self._refresh_tables())
         self._review_worker.progress.connect(self._on_review_progress)
         self._review_worker.status_text.connect(lambda txt: self.statusBar().showMessage(txt))
         self._review_worker.log.connect(lambda msg: self.log_message(msg))
@@ -1243,14 +1296,23 @@ class MainWindow(QMainWindow):
         self.thumb_area.btn_queue.setText("Conversion Queue: processing")
         self._review_worker.start()
 
+    def _refresh_tables(self):
+        if self._queue_dialog and self._queue_dialog.isVisible():
+            self._queue_dialog.table.viewport().update()
+            self._queue_dialog.table.update()
+        self.spreadsheet.table.viewport().update()
+        self.spreadsheet.table.update()
+
     def _on_review_progress(self, current, total):
         if self._queue_dialog:
             self._queue_dialog.set_queue_status(f"Processing {current}/{total}")
+        self._refresh_tables()
             
     def _on_review_finished(self):
         self.thumb_area.btn_queue.setText("Conversion Queue: done")
         if self._queue_dialog:
             self._queue_dialog.set_queue_status("Done")
+        self._refresh_tables()
 
     def show_queue_dialog(self):
         if not self._queue_dialog:
@@ -1258,8 +1320,10 @@ class MainWindow(QMainWindow):
             self._queue_dialog.btn_pause.clicked.connect(self._on_queue_pause)
             self._queue_dialog.btn_cancel.clicked.connect(self._on_queue_cancel)
             self._queue_dialog.btn_restart.clicked.connect(self._on_queue_restart)
-            self._queue_dialog.convertReviewsRequested.connect(lambda: self.start_review_conversions(force=True))
-            self._queue_dialog.convertThumbsRequested.connect(lambda: self.start_conversions(self.model.items))
+            self._queue_dialog.convertReviewsRequested.connect(lambda: self.start_review_conversions(force=True, reset=False, force_overwrite=False))
+            self._queue_dialog.forceConvertReviewsRequested.connect(lambda: self.start_review_conversions(force=True, reset=True, force_overwrite=True))
+            self._queue_dialog.convertThumbsRequested.connect(lambda: self.start_conversions(self.model.items, force=False))
+            self._queue_dialog.forceConvertThumbsRequested.connect(lambda: self.start_conversions(self.model.items, force=True))
             
         self._queue_dialog.show()
         self._queue_dialog.raise_()
@@ -1305,6 +1369,7 @@ class MainWindow(QMainWindow):
                 item.thumbnail = new_thumb
         
         self.model.update_item(item)
+        self._refresh_tables()
 
 
     def rescan_current(self):
@@ -1344,7 +1409,9 @@ class MainWindow(QMainWindow):
             thumb_format=self.config.get("thumb_format", ".jpg"),
             thumb_location=self.config.get("thumb_location", "Relative to Source Folder"),
             thumb_location_path=self.config.get("thumb_location_path", "_thumbs"),
-            timeout=self.config.get("timeout_seconds", 6)
+            timeout=self.config.get("timeout_seconds", 6),
+            default_fps=self.config.get("default_fps", 25.0),
+            use_fps_from_metadata=self.config.get("use_fps_from_metadata", True)
         )
         self.scanner.finished.connect(self._on_rescan_finished)
         self.scanner.item_updated.connect(self.model.update_item)
@@ -1654,6 +1721,8 @@ class MainWindow(QMainWindow):
         self.model.product_name_camel = self.config.get("product_name_camel", True)
         self.model.stills_thumb_same = self.config.get("stills_thumb_same", True)
         self.model.high_res_size = self.config.get("thumb_size", 512)
+        self.model.default_fps = self.config.get("default_fps", 25.0)
+        self.model.use_fps_from_metadata = self.config.get("use_fps_from_metadata", True)
         
         self.model.thumb_location = self.config.get("thumb_location", "Relative to Source Folder")
         self.model.thumb_location_path = self.config.get("thumb_location_path", "_thumbs")
@@ -1664,7 +1733,10 @@ class MainWindow(QMainWindow):
         self.model.ffmpeg_path = expand_env_vars(self.secrets.get("ffmpeg_path", "ffmpeg.exe"))
         self.model.ffprobe_path = expand_env_vars(self.secrets.get("ffprobe_path", "ffprobe.exe"))
         self.model.oiiotool_path = expand_env_vars(self.secrets.get("oiiotool_path", "oiiotool.exe"))
-        self.model.vfxtranscode = expand_env_vars(self.secrets.get("vfxtranscode", ""))
+        vfxtrans_path = expand_env_vars(self.secrets.get("vfxtranscode", ""))
+        self.model.vfxtranscode = os.path.abspath(vfxtrans_path).replace("\\", "/") if vfxtrans_path else ""
+        ocio_config_path = expand_env_vars(self.secrets.get("ocio_config", ""))
+        self.model.ocio_config = os.path.abspath(ocio_config_path).replace("\\", "/") if ocio_config_path else ""
         
         self.csv_preview_model.refresh_config(self.config)
         

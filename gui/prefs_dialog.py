@@ -2,7 +2,7 @@ import os
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, 
                              QPushButton, QFormLayout, QSpinBox, QComboBox, QFileDialog, 
                              QTabWidget, QScrollArea, QWidget, QCheckBox, QPlainTextEdit,
-                             QRadioButton, QButtonGroup)
+                             QRadioButton, QButtonGroup, QDoubleSpinBox)
 from PySide6.QtCore import Qt, Signal
 from gui.preset_widget import PresetWidget
 
@@ -264,6 +264,14 @@ class PreferencesDialog(QDialog):
         self.seq_thumb_frame.addItems(["First", "Second", "Middle"])
         self.seq_thumb_frame.setCurrentText(self.config.get("seq_thumb_frame", "Middle"))
 
+        self.default_fps = QDoubleSpinBox()
+        self.default_fps.setRange(0.001, 1000.0)
+        self.default_fps.setDecimals(3)
+        self.default_fps.setValue(self.config.get("default_fps", 25.0))
+
+        self.use_fps_from_metadata = QCheckBox("Use FPS from metadata")
+        self.use_fps_from_metadata.setChecked(self.config.get("use_fps_from_metadata", True))
+
         self.skip_existing_thumbs = QCheckBox("Skip Existing Thumbnails")
         self.skip_existing_thumbs.setChecked(self.config.get("skip_existing_thumbs", True))
         
@@ -313,6 +321,8 @@ class PreferencesDialog(QDialog):
         self.thumbs_form.addRow(self.run_review_after_scan)
         self.thumbs_form.addRow(self.skip_existing_thumbs)
         self.thumbs_form.addRow(self.skip_existing_reviews)
+        self.thumbs_form.addRow("Default FPS:", self.default_fps)
+        self.thumbs_form.addRow(self.use_fps_from_metadata)
         self.thumbs_form.addRow("Sequence Thumbnail Frame:", self.seq_thumb_frame)
         self.thumbs_form.addRow("High-Res Thumbnail Size:", self.high_res_size)
         self.thumbs_form.addRow("Thumbnail Location:", self.thumb_location)
@@ -800,6 +810,8 @@ class PreferencesDialog(QDialog):
             "default_columns": self.default_cols.value(),
             "default_text_size": self.default_text_size.value(),
             "default_thumb_size": self.default_thumb_size.value(),
+            "default_fps": self.default_fps.value(),
+            "use_fps_from_metadata": self.use_fps_from_metadata.isChecked(),
             "timeout_seconds": self.timeout_seconds.value(),
             "age_source": self.age_source.currentText(),
             "label_allowed_chars": self.label_regex.text(),

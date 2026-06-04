@@ -60,11 +60,13 @@ class QueueProxyModel(QSortFilterProxyModel):
 class ConversionQueueDialog(QDialog):
     convertReviewsRequested = Signal()
     convertThumbsRequested = Signal()
+    forceConvertReviewsRequested = Signal()
+    forceConvertThumbsRequested = Signal()
 
     def __init__(self, main_model, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Review Conversion Queue")
-        self.resize(800, 500)
+        self.resize(1000, 500)
         
         self.layout = QVBoxLayout(self)
         
@@ -94,17 +96,27 @@ class ConversionQueueDialog(QDialog):
         self.btn_convert_reviews.setMinimumHeight(40)
         self.btn_convert_reviews.clicked.connect(self.convertReviewsRequested.emit)
 
+        self.btn_force_convert_reviews = QPushButton("Force convert Reviews")
+        self.btn_force_convert_reviews.setMinimumHeight(40)
+        self.btn_force_convert_reviews.clicked.connect(self.forceConvertReviewsRequested.emit)
+
         self.btn_convert_thumbs = QPushButton("Convert Thumbnails")
         self.btn_convert_thumbs.setMinimumHeight(40)
         self.btn_convert_thumbs.clicked.connect(self.convertThumbsRequested.emit)
+
+        self.btn_force_convert_thumbs = QPushButton("Force convert Thumbnails")
+        self.btn_force_convert_thumbs.setMinimumHeight(40)
+        self.btn_force_convert_thumbs.clicked.connect(self.forceConvertThumbsRequested.emit)
         
         self.btn_check_existing = QPushButton("Check existing")
         self.btn_check_existing.setMinimumHeight(40)
         self.btn_check_existing.clicked.connect(self.check_existing_reviews)
         
         self.controls.addWidget(self.btn_convert_reviews)
+        self.controls.addWidget(self.btn_force_convert_reviews)
         self.controls.addSpacing(10)
         self.controls.addWidget(self.btn_convert_thumbs)
+        self.controls.addWidget(self.btn_force_convert_thumbs)
         self.controls.addSpacing(10)
         self.controls.addWidget(self.btn_check_existing)
         self.controls.addStretch()

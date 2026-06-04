@@ -28,7 +28,7 @@ class ImageScanner(QThread):
                  oiiotool_path="oiiotool.exe", ocio_config="", stills_thumb_same=True,
                  thumb_suffix="_thumbnail", thumb_format=".jpg",
                  thumb_location="Relative to Source Folder", thumb_location_path="_thumbs",
-                 timeout=6):
+                 timeout=6, default_fps=25.0, use_fps_from_metadata=True):
         super().__init__()
         self.directory = directory
         self.recursive = recursive
@@ -53,6 +53,8 @@ class ImageScanner(QThread):
         self.thumb_location = thumb_location
         self.thumb_location_path = thumb_location_path
         self.timeout = timeout
+        self.default_fps = default_fps
+        self.use_fps_from_metadata = use_fps_from_metadata
         self._is_canceled = False
 
     def cancel(self):
@@ -403,9 +405,9 @@ class ImageScanner(QThread):
                     item.frame_end = item.frame_start
 
             # 3. Calculate thumbnail time for ffmpeg seeking
-            fps = item.metadata.get("framerate")
+            fps = self._resolve_fps(item)
             nb = item.metadata.get("nb_frames", 1)
-            item.metadata["thumbnail_time"] = calculate_thumbnail_time(nb, fps, mode=self.seq_thumb_frame)
+            item.metadata["thumbnail_time"] = calculate_thumbnail_time(nb, fps, mode=self.seq_thumb_frame, default_fps=self.default_fps)
             
             nonlocal checked_meta
             checked_meta += 1
@@ -422,6 +424,29 @@ class ImageScanner(QThread):
         print(f"[Timer] Metadata fetching took {meta_elapsed:.4f} seconds.")
         self.status_text.emit(f"Metadata fetching took {meta_elapsed:.4f} seconds.")
         self.log.emit(f"[Timer] Metadata fetching took {meta_elapsed:.4f} seconds.")
+
+    def _resolve_fps(self, item):
+        fps_val = None
+        p_data = item.preset_data or {}
+        if p_data.get("FPS Override", False):
+            fps_preset = p_data.get("FPS")
+            if fps_preset is not None:
+                try:
+                    fps_val = float(fps_preset)
+                except (ValueError, TypeError):
+                    pass
+        else:
+            use_meta = getattr(self, "use_fps_from_metadata", True)
+            if use_meta and p_data.get("FPS From Metadata", True):
+                fps_meta = item.metadata.get("framerate")
+                if fps_meta is not None:
+                    try:
+                        fps_val = float(fps_meta)
+                    except (ValueError, TypeError):
+                        pass
+        if fps_val is None:
+            fps_val = self.default_fps
+        return fps_val
 
     def _get_expected_thumb_path(self, item):
         """Calculate the expected generated thumbnail path based on preferences."""
@@ -477,9 +502,9 @@ class ImageScanner(QThread):
             
             # Initial thumbnail_time for stills/sequences (videos handled in Phase 2)
             if item.category != "Video":
-                fps = item.metadata.get("framerate")
+                fps = self._resolve_fps(item)
                 nb = item.metadata.get("nb_frames", 1)
-                item.metadata["thumbnail_time"] = calculate_thumbnail_time(nb, fps, mode=self.seq_thumb_frame)
+                item.metadata["thumbnail_time"] = calculate_thumbnail_time(nb, fps, mode=self.seq_thumb_frame, default_fps=self.default_fps)
         except Exception:
             pass
 
@@ -665,11 +690,12 @@ class ReviewConversionWorker(QThread):
     status_text = Signal(str)
     log = Signal(str)
 
-    def __init__(self, items, model, config):
+    def __init__(self, items, model, config, force_overwrite=False):
         super().__init__()
         self.items = [it for it in items if it.review_status == "waiting"]
         self.model = model
         self.config = config
+        self.force_overwrite = force_overwrite
         self._is_canceled = False
         self._is_paused = False
         self.process = None
@@ -737,8 +763,8 @@ class ReviewConversionWorker(QThread):
                     self.item_updated.emit(item)
                     continue
                     
-                # Skip existing if enabled
-                if self.config.get("skip_existing_reviews", True) and \
+                # Skip existing if enabled (and not forced)
+                if not self.force_overwrite and self.config.get("skip_existing_reviews", True) and \
                    os.path.exists(target_path) and os.path.getsize(target_path) > 0:
                     print(f"Skipping review conversion: {target_path} already exists")
                     item.review_status = "done"

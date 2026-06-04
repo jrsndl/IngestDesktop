@@ -91,10 +91,26 @@ class PresetWidget(QFrame):
         self.add_to_grid(1, 2, "", self.camel_case)
         
         # Row 2: FPS, from metadata, Slate Exists
+        fps_layout = QHBoxLayout()
+        fps_layout.setContentsMargins(0, 0, 0, 0)
+        fps_layout.setSpacing(5)
+        
+        self.fps_override = QCheckBox("FPS Override")
+        self.fps_override.setChecked(False)
+        self.fps_override.toggled.connect(self._on_fps_override_toggled)
+        fps_layout.addWidget(self.fps_override)
+        
+        lbl_fps = QLabel("FPS:")
+        fps_layout.addWidget(lbl_fps)
+        
         self.fps = QDoubleSpinBox()
         self.fps.setRange(0.0, 120.0)
         self.fps.setDecimals(3)
-        self.add_to_grid(2, 0, "FPS:", self.fps)
+        self.fps.setEnabled(False)
+        fps_layout.addWidget(self.fps)
+        
+        self.add_to_grid(2, 0, "", fps_layout)
+        
         self.fps_from_metadata = QCheckBox("from metadata")
         self.fps_from_metadata.setChecked(True)
         self.add_to_grid(2, 1, "", self.fps_from_metadata)
@@ -196,6 +212,9 @@ class PresetWidget(QFrame):
         # Kept for compatibility if needed, but not used in current grid layout
         pass
 
+    def _on_fps_override_toggled(self, checked):
+        self.fps.setEnabled(checked)
+
     def toggle_collapsed(self):
         self.is_collapsed = not self.is_collapsed
         self.content_widget.setVisible(not self.is_collapsed)
@@ -232,6 +251,9 @@ class PresetWidget(QFrame):
             self.product_type.setCurrentText(data.get("Product Type", ""))
             self.variant.setText(data.get("Variant", ""))
             self.camel_case.setChecked(data.get("CamelCase", True))
+            override_val = data.get("FPS Override", False)
+            self.fps_override.setChecked(override_val)
+            self.fps.setEnabled(override_val)
             self.fps.setValue(data.get("FPS", 24.0))
             self.representation.setText(data.get("Representation", "{extension}"))
             self.colorspace.setText(data.get("Colorspace", "sRGB"))
@@ -316,6 +338,9 @@ class PresetWidget(QFrame):
         self.product_type.setCurrentText(d.get("Product Type", ""))
         self.variant.setText(d.get("Variant", ""))
         self.camel_case.setChecked(d.get("CamelCase", True))
+        override_val = d.get("FPS Override", False)
+        self.fps_override.setChecked(override_val)
+        self.fps.setEnabled(override_val)
         self.fps.setValue(d.get("FPS", 24.0))
         self.representation.setText(d.get("Representation", "{extension}"))
         self.colorspace.setText(d.get("Colorspace", "sRGB"))
@@ -342,6 +367,7 @@ class PresetWidget(QFrame):
             "Colorspace": self.colorspace.text(),
             "Tags": self.rep_tags.text(),
             "FPS": self.fps.value(),
+            "FPS Override": self.fps_override.isChecked(),
             "FPS From Metadata": self.fps_from_metadata.isChecked(),
             "Handle Start": self.handle_start.value(),
             "Handle End": self.handle_end.value(),

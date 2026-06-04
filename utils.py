@@ -173,17 +173,17 @@ def evaluate_preset(file_path, presets, p_type, label=None):
             if fnmatch.fnmatch(label.lower(), f_str): return p
     return None
 
-def calculate_thumbnail_time(nb_frames, framerate, mode="Middle"):
+def calculate_thumbnail_time(nb_frames, framerate, mode="Middle", default_fps=24.0):
     """
     Calculate the time in seconds for thumbnail extraction.
     mode: First, Second, Middle
     """
     try:
         nb_frames = int(nb_frames)
-        # Default to 24 fps if missing or zero
-        fps = float(framerate) if (framerate and float(framerate) > 0) else 24.0
+        # Default to default_fps if missing or zero
+        fps = float(framerate) if (framerate and float(framerate) > 0) else default_fps
     except (ValueError, TypeError):
-        fps = 24.0
+        fps = default_fps
         nb_frames = 1
 
     if mode == "First":
@@ -232,4 +232,8 @@ def expand_env_vars(path_str):
         var_name = match.group(1)
         return _ENV_CACHE.get(var_name, "")
         
-    return re.sub(r'\$\{([^}]+)\}', replacer, path_str)
+    res = re.sub(r'\$\{([^}]+)\}', replacer, path_str)
+    # Also support {IngestDesktop} style expansion without $
+    res = res.replace("{IngestDesktop}", _ENV_CACHE.get("IngestDesktop", ""))
+    res = res.replace("{IngestDesktopResources}", _ENV_CACHE.get("IngestDesktopResources", ""))
+    return res

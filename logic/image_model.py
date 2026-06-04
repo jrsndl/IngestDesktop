@@ -1,6 +1,6 @@
 import os
 import re
-from utils import strip_sequence_counter
+from utils import strip_sequence_counter, app_dir
 from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex, Signal
 from PySide6.QtGui import QPixmap, QColor
 
@@ -74,7 +74,10 @@ class ImageTableModel(QAbstractTableModel):
         self.ffprobe_path = "ffprobe.exe"
         self.oiiotool_path = "oiiotool.exe"
         self.vfxtranscode = ""
+        self.ocio_config = ""
         self.show_thumbs = False
+        self.default_fps = 25.0
+        self.use_fps_from_metadata = True
 
     def set_presets(self, presets):
         self.presets = presets
@@ -380,6 +383,30 @@ class ImageTableModel(QAbstractTableModel):
         repre_template = item.representation or p_data.get("Representation") or "{extension}"
         repre_expanded = self._expand_string(repre_template, item) if (text and "{repre}" in text.lower() and text != repre_template) else repre_template
         
+        # Resolve FPS
+        fps_val = None
+        if p_data.get("FPS Override", False):
+            fps_preset = p_data.get("FPS")
+            if fps_preset is not None:
+                try:
+                    fps_val = float(fps_preset)
+                except (ValueError, TypeError):
+                    pass
+        else:
+            use_meta = getattr(self, "use_fps_from_metadata", True)
+            if use_meta and p_data.get("FPS From Metadata", True):
+                fps_meta = item.metadata.get("framerate")
+                if fps_meta is not None:
+                    try:
+                        fps_val = float(fps_meta)
+                    except (ValueError, TypeError):
+                        pass
+        if fps_val is None:
+            fps_val = getattr(self, "default_fps", 25.0)
+
+        fps_str = str(fps_val) if fps_val is not None else ""
+        fps_int_str = str(int(round(fps_val))) if fps_val is not None else ""
+
         # Replacement mapping
         replacements = {
             "{product_type}": item.product_type or "",
@@ -406,8 +433,10 @@ class ImageTableModel(QAbstractTableModel):
             "{TAIL}": str(p_data.get("Handle End", "0")),
             "{slate_exists}": "True" if p_data.get("Slate Exists") else "False",
             "{SLATE_EXISTS}": "True" if p_data.get("Slate Exists") else "False",
-            "{fps}": str(p_data.get("FPS", "")),
-            "{FPS}": str(p_data.get("FPS", "")),
+            "{fps}": fps_str,
+            "{FPS}": fps_str,
+            "{fps_int}": fps_int_str,
+            "{FPS_INT}": fps_int_str,
             "{repre_color}": p_data.get("Colorspace", ""),
             "{REPRE_COLOR}": p_data.get("Colorspace", ""),
             "{repre_tags}": p_data.get("Tags", ""),
@@ -438,7 +467,12 @@ class ImageTableModel(QAbstractTableModel):
             "{ffmpeg}": self.ffmpeg_path,
             "{ffprobe}": self.ffprobe_path,
             "{oiiotool}": self.oiiotool_path,
-            "{vfxtranscode}": self.vfxtranscode,
+            "{vfxtranscode}": os.path.abspath(self.vfxtranscode).replace("\\", "/") if self.vfxtranscode else "",
+            "{VFXTRANSCODE}": os.path.abspath(self.vfxtranscode).replace("\\", "/") if self.vfxtranscode else "",
+            "{ocio}": os.path.abspath(self.ocio_config).replace("\\", "/") if self.ocio_config else "",
+            "{OCIO}": os.path.abspath(self.ocio_config).replace("\\", "/") if self.ocio_config else "",
+            "{IngestDesktop}": app_dir.replace("\\", "/"),
+            "{INGESTDESKTOP}": app_dir.replace("\\", "/"),
             "{ingest_status}": getattr(item, "ingest_status", "unknown"),
             "{INGEST_STATUS}": getattr(item, "ingest_status", "unknown"),
         }
@@ -553,7 +587,9 @@ class ImageTableModel(QAbstractTableModel):
         # Basename with suffix and format
         target_filename = f"{name_no_ext}{rev_suffix}{rev_format}"
         
-        return os.path.join(target_dir, target_filename).replace("\\", "/")
+        # Ensure the path is absolute
+        full_path = os.path.join(target_dir, target_filename)
+        return os.path.abspath(full_path).replace("\\", "/")
     def perform_rename_to_label(self, selected_paths, version_regex):
         """
         Renames files on disk based on their model label.

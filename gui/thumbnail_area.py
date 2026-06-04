@@ -11,6 +11,16 @@ from PySide6.QtGui import (QPainter, QPen, QColor, QAction, QPixmap, QFontMetric
                          QHelpEvent, QTextCharFormat, QTextCursor, QPainterPath, QPolygonF)
 from PySide6.QtWidgets import QToolTip
 
+class NoteTextItem(QGraphicsTextItem):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        
+    def focusOutEvent(self, event):
+        super().focusOutEvent(event)
+        parent = self.parentItem()
+        if isinstance(parent, TextNoteItem):
+            parent.on_text_focus_out(event)
+
 class TextNoteItem(QGraphicsObject):
     moving_started = Signal()
     moving_finished = Signal()
@@ -25,7 +35,7 @@ class TextNoteItem(QGraphicsObject):
         self.uuid = str(uuid.uuid4())
         self.setCacheMode(QGraphicsItem.NoCache) # Prevent clipping artifacts
         
-        self.text_item = QGraphicsTextItem(self)
+        self.text_item = NoteTextItem(self)
         self.text_item.setDefaultTextColor(QColor("#e0e0e0"))
         # Standard default font
         font = QFont("Arial", 24)
@@ -59,6 +69,10 @@ class TextNoteItem(QGraphicsObject):
             self.height = max(self.height, needed_h)
             self.text_item.setTextWidth(self.width - 20)
             self.update()
+            
+            parent = self.parentItem()
+            if isinstance(parent, BackdropItem):
+                parent.child_geometry_changed()
         
         # Increase click area for grabbing
         self.setCursor(Qt.PointingHandCursor)
@@ -144,6 +158,10 @@ class TextNoteItem(QGraphicsObject):
                 self.height = max(50, self._resize_start_size[1] + delta.y())
                 
             self.text_item.setTextWidth(self.width - 20)
+            
+            parent = self.parentItem()
+            if isinstance(parent, BackdropItem):
+                parent.child_geometry_changed()
         else:
             super().mouseMoveEvent(event)
             
@@ -153,6 +171,9 @@ class TextNoteItem(QGraphicsObject):
         if event.button() == Qt.LeftButton:
             self.moving_finished.emit()
         super().mouseReleaseEvent(event)
+        
+    def itemChange(self, change, value):
+        return super().itemChange(change, value)
         
     def mouseDoubleClickEvent(self, event):
         self.text_item.setAcceptedMouseButtons(Qt.LeftButton)
@@ -164,16 +185,16 @@ class TextNoteItem(QGraphicsObject):
         self.text_item.setTextCursor(cursor)
         super().mouseDoubleClickEvent(event)
 
-    def focusOutEvent(self, event):
+    def on_text_focus_out(self, event):
         self.text_item.setTextInteractionFlags(Qt.NoTextInteraction)
         self.text_item.setAcceptedMouseButtons(Qt.NoButton)
-        # Clear selection when losing focus
         cursor = self.text_item.textCursor()
         cursor.clearSelection()
         self.text_item.setTextCursor(cursor)
-        super().focusOutEvent(event)
+        self.update()
 
-        self.text_item.setTextCursor(cursor)
+    def focusOutEvent(self, event):
+        self.on_text_focus_out(event)
         super().focusOutEvent(event)
 
 class ColorButton(QPushButton):
@@ -864,11 +885,19 @@ class BackdropItem(QGraphicsObject):
         self.appearance = data.get("appearance", "Border")
         self.border_color = QColor(data.get("border_color", "magenta"))
         self.fill_color = QColor(data.get("fill_color", "#282828"))
+        self.setZValue(-1000) # Ensure backdrop is always behind thumbnails and notes
+        self.update()
+
+    def child_geometry_changed(self):
+        self.prepareGeometryChange()
         self.update()
 
     def boundingRect(self):
-        # Margin to avoid clipping borders
-        return QRectF(-2, -2, self.width + 4, self.height + 4)
+        base_rect = QRectF(-2, -2, self.width + 4, self.height + 4)
+        children_rect = self.childrenBoundingRect()
+        if not children_rect.isEmpty():
+            return base_rect.united(children_rect)
+        return base_rect
 
     def shape(self):
         path = QPainterPath()
@@ -998,13 +1027,13 @@ class BackdropItem(QGraphicsObject):
         if y < self.top_bar_height:
             self._is_dragging_top_bar = True
             self.setFlag(QGraphicsItem.ItemIsMovable, True)
-            # Find all items inside the backdrop to move with it
             self._content_offsets = {}
             if not (event.modifiers() & Qt.ControlModifier):
                 backdrop_rect = self.sceneBoundingRect()
+                # Populating offsets for items inside the backdrop (like thumbnails and text notes)
                 for item in self.scene().items(backdrop_rect):
-                    if item == self or item.parentItem() or item.isSelected(): continue
-                    # Only move top-level items that are truly "inside" (center point)
+                    if item == self or item.parentItem(): continue
+                    if item.isSelected() and self.isSelected(): continue
                     if backdrop_rect.contains(item.sceneBoundingRect().center()):
                         self._content_offsets[item] = item.pos() - self.pos()
         else:
@@ -2514,7 +2543,7 @@ class ThumbnailArea(QWidget):
             center_view = v_rect.center()
             scene_pos = self.view.mapToScene(center_view)
         
-        target_size = 200
+        target_size = 24
         
         note = TextNoteItem(scene_pos)
         # Apply initial font size
@@ -2534,7 +2563,9 @@ class ThumbnailArea(QWidget):
         note.moving_started.connect(self.note_toolbar.hide)
         note.moving_finished.connect(self._update_note_toolbar)
         
-        self.scene.addItem(note)
+        if note.scene() is None:
+            self.scene.addItem(note)
+            
         self.scene_items_changed.emit()
         
         # Select and edit immediately
@@ -2553,13 +2584,19 @@ class ThumbnailArea(QWidget):
             
         QTimer.singleShot(10, select_all)
         
+    def remove_backdrop_safely(self, backdrop):
+        self.scene.removeItem(backdrop)
+
     def delete_selected_notes(self):
         selected = self.scene.selectedItems()
         to_remove = [it for it in selected if isinstance(it, (TextNoteItem, BackdropItem))]
         if not to_remove: return
         
         for it in to_remove:
-            self.scene.removeItem(it)
+            if isinstance(it, BackdropItem):
+                self.remove_backdrop_safely(it)
+            else:
+                self.scene.removeItem(it)
         self.scene_items_changed.emit()
         self._update_note_toolbar()
 
@@ -2646,13 +2683,13 @@ class ThumbnailArea(QWidget):
         selected = self.scene.selectedItems()
         to_remove = [it for it in selected if isinstance(it, BackdropItem)]
         for it in to_remove:
-            self.scene.removeItem(it)
+            self.remove_backdrop_safely(it)
 
     def delete_backdrop(self, backdrop):
         selected_backdrops = [it for it in self.scene.selectedItems() if isinstance(it, BackdropItem)]
         if backdrop in selected_backdrops:
             for it in selected_backdrops:
-                self.scene.removeItem(it)
+                self.remove_backdrop_safely(it)
         else:
-            self.scene.removeItem(backdrop)
+            self.remove_backdrop_safely(backdrop)
         self.scene_items_changed.emit()
