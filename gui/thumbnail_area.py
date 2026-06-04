@@ -31,14 +31,14 @@ class TextNoteItem(QGraphicsObject):
         self.setFlag(QGraphicsItem.ItemIsSelectable)
         self.setFlag(QGraphicsItem.ItemIsMovable)
         self.setFlag(QGraphicsItem.ItemSendsGeometryChanges)
-        self.setZValue(1000)
+        self.setZValue(5000)  # Always above backdrops (-1000) and thumbnails (0)
         self.uuid = str(uuid.uuid4())
         self.setCacheMode(QGraphicsItem.NoCache) # Prevent clipping artifacts
         
         self.text_item = NoteTextItem(self)
         self.text_item.setDefaultTextColor(QColor("#e0e0e0"))
-        # Standard default font
-        font = QFont("Arial", 24)
+        # Default font: 3x the original 24pt = 72pt
+        font = QFont("Arial", 72)
         self.text_item.setFont(font)
         self.text_item.setPlainText(text)
         self.text_item.setPos(10, 10)
@@ -150,29 +150,46 @@ class TextNoteItem(QGraphicsObject):
     def mouseMoveEvent(self, event):
         if self._resizing:
             delta = event.scenePos() - self._resize_start_pos
-            self.prepareGeometryChange()
             
+            new_w = self.width
+            new_h = self.height
             if self._resize_mode in ["bottom_right", "right"]:
-                self.width = max(100, self._resize_start_size[0] + delta.x())
+                new_w = max(100, self._resize_start_size[0] + delta.x())
             if self._resize_mode in ["bottom_right", "bottom"]:
-                self.height = max(50, self._resize_start_size[1] + delta.y())
-                
-            self.text_item.setTextWidth(self.width - 20)
+                new_h = max(50, self._resize_start_size[1] + delta.y())
+
+            if new_w != self.width or new_h != self.height:
+                self.prepareGeometryChange()
+                self.width = new_w
+                self.height = new_h
+                self.update()
             
             parent = self.parentItem()
             if isinstance(parent, BackdropItem):
                 parent.child_geometry_changed()
+            event.accept()
         else:
             super().mouseMoveEvent(event)
             
     def mouseReleaseEvent(self, event):
+        if self._resizing:
+            # Finalise text wrapping now that the drag is done
+            self.text_item.setTextWidth(self.width - 20)
+            self.update()
         self._resizing = False
         self._resize_mode = None
         if event.button() == Qt.LeftButton:
             self.moving_finished.emit()
         super().mouseReleaseEvent(event)
+
         
     def itemChange(self, change, value):
+        if change == QGraphicsItem.ItemParentChange:
+            # Never allow a text note to become a child of a BackdropItem;
+            # that would place it in the backdrop's stacking context (z=-1000)
+            # and make it appear behind thumbnails.
+            if isinstance(value, BackdropItem):
+                return None  # reject reparenting
         return super().itemChange(change, value)
         
     def mouseDoubleClickEvent(self, event):
@@ -188,9 +205,9 @@ class TextNoteItem(QGraphicsObject):
     def on_text_focus_out(self, event):
         self.text_item.setTextInteractionFlags(Qt.NoTextInteraction)
         self.text_item.setAcceptedMouseButtons(Qt.NoButton)
-        cursor = self.text_item.textCursor()
-        cursor.clearSelection()
-        self.text_item.setTextCursor(cursor)
+        # Clear the text cursor selection without triggering a geometry change
+        # by using the document directly instead of setTextCursor()
+        self.text_item.textCursor().clearSelection()
         self.update()
 
     def focusOutEvent(self, event):
@@ -848,6 +865,8 @@ class ThumbnailItem(QGraphicsObject):
         return super().itemChange(change, value)
 
 class BackdropItem(QGraphicsObject):
+    delete_requested = Signal(object)  # emits self
+
     def __init__(self, rect, data):
         super().__init__()
         self.setPos(rect.topLeft())
@@ -901,16 +920,14 @@ class BackdropItem(QGraphicsObject):
 
     def shape(self):
         path = QPainterPath()
-        # Top bar is interactive
-        path.addRect(0, 0, self.width, self.top_bar_height)
-        # Corners are interactive for resizing
         cs = self.corner_size
+        # Top bar is interactive, shrunk horizontally so corner triangles are accessible
+        path.addRect(cs, 0, self.width - 2 * cs, self.top_bar_height)
+        # Corners are interactive for resizing (and TL acts as delete)
         path.addRect(0, 0, cs, cs) # TL
         path.addRect(self.width - cs, 0, cs, cs) # TR
         path.addRect(0, self.height - cs, cs, cs) # BL
         path.addRect(self.width - cs, self.height - cs, cs, cs) # BR
-        # Border is interactive? 
-        # Actually, let's keep it simple: Top bar + Corners.
         return path
 
     def paint(self, painter, option, widget):
@@ -942,8 +959,10 @@ class BackdropItem(QGraphicsObject):
         painter.setPen(pen)
         painter.drawRect(0, 0, self.width, self.height)
         
-        # 3. Top Bar (Name area)
-        top_bar_rect = QRectF(0, 0, self.width, self.top_bar_height)
+        cs = self.corner_size
+
+        # 3. Top Bar (Name area) — shrunk horizontally so corner triangles remain visible
+        top_bar_rect = QRectF(cs, 0, self.width - 2 * cs, self.top_bar_height)
         painter.setBrush(self.border_color)
         painter.setPen(Qt.NoPen)
         painter.drawRect(top_bar_rect)
@@ -986,30 +1005,52 @@ class BackdropItem(QGraphicsObject):
         painter.setBrush(self.border_color)
         painter.setPen(Qt.NoPen)
         
-        cs = self.corner_size
         # Top-left
         painter.drawPolygon([QPointF(0,0), QPointF(cs, 0), QPointF(0, cs)])
-        # Top-right
+        # Top-right (also acts as delete button)
         painter.drawPolygon([QPointF(self.width,0), QPointF(self.width - cs, 0), QPointF(self.width, cs)])
         # Bottom-left
         painter.drawPolygon([QPointF(0, self.height), QPointF(cs, self.height), QPointF(0, self.height - cs)])
         # Bottom-right
         painter.drawPolygon([QPointF(self.width, self.height), QPointF(self.width - cs, self.height), QPointF(self.width, self.height - cs)])
+
+        # 7. Delete × symbol on the top-right corner triangle
+        # Draw a small × centered within the triangle's visual area
+        cross_cx = self.width - cs * 0.30  # x center of ×
+        cross_cy = cs * 0.30              # y center of ×
+        cross_r = cs * 0.13              # half-size of the × arms
+        cross_color = Qt.black if self.border_color.lightness() > 128 else Qt.white
+        cross_pen = QPen(cross_color, max(3, cs * 0.06))
+        cross_pen.setCapStyle(Qt.RoundCap)
+        painter.setPen(cross_pen)
+        painter.drawLine(QPointF(cross_cx - cross_r, cross_cy - cross_r),
+                         QPointF(cross_cx + cross_r, cross_cy + cross_r))
+        painter.drawLine(QPointF(cross_cx + cross_r, cross_cy - cross_r),
+                         QPointF(cross_cx - cross_r, cross_cy + cross_r))
         
         painter.restore()
+
+    def _is_in_delete_zone(self, x, y):
+        """Check if (x, y) is within the top-right delete × area."""
+        cs = self.corner_size
+        # The delete × is in the top-right triangle; require point is above the triangle hypotenuse
+        return x > self.width - cs and y < cs and ((self.width - x) + y) < cs
 
     def mousePressEvent(self, event):
         pos = event.pos()
         x, y = pos.x(), pos.y()
         cs = self.corner_size
         
-        # Check corners first
+        # Check delete button first (top-left corner triangle)
+        if self._is_in_delete_zone(x, y):
+            event.accept()
+            self.delete_requested.emit(self)
+            return
+
+        # Check resize corners (skip top-right since it's the delete zone)
         if x < cs and y < cs:
             self._resizing = True
             self._resize_corner = "top_left"
-        elif x > self.width - cs and y < cs:
-            self._resizing = True
-            self._resize_corner = "top_right"
         elif x < cs and y > self.height - cs:
             self._resizing = True
             self._resize_corner = "bottom_left"
@@ -1023,8 +1064,8 @@ class BackdropItem(QGraphicsObject):
             event.accept()
             return
             
-        # Check top bar
-        if y < self.top_bar_height:
+        # Check top bar (shrunken: between cs and width-cs)
+        if y < self.top_bar_height and cs <= x <= self.width - cs:
             self._is_dragging_top_bar = True
             self.setFlag(QGraphicsItem.ItemIsMovable, True)
             self._content_offsets = {}
@@ -1417,7 +1458,7 @@ class ThumbnailArea(QWidget):
         self.view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.view.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.scene = QGraphicsScene(self)
-        self.scene.setItemIndexMethod(QGraphicsScene.BspTreeIndex)
+        self.scene.setItemIndexMethod(QGraphicsScene.NoIndex)
         self.scene.setSceneRect(-50000, -50000, 100000, 100000)
         self.view.setScene(self.scene)
         self.scene.show_labels = True
@@ -1702,7 +1743,9 @@ class ThumbnailArea(QWidget):
 
     def _on_scene_selection_changed(self):
         self._has_selection = bool(self.scene.selectedItems())
-        self.scene.update()
+        # Note: Qt automatically schedules repaints for selection changes;
+        # calling scene.update() here would cause a race with in-progress
+        # item updates (e.g. QGraphicsTextItem cursor changes) and make notes disappear.
         self._update_note_toolbar()
         self.update_video_overlay_geometry()
 
@@ -1996,6 +2039,8 @@ class ThumbnailArea(QWidget):
                     return True
                     
                 if not self.view.itemAt(event.pos()):
+                    # Exit edit mode on any active text note before clearing selection
+                    self._exit_active_note_edit()
                     self.scene.clearSelection()
 
         if event.type() == QEvent.MouseButtonRelease:
@@ -2089,10 +2134,16 @@ class ThumbnailArea(QWidget):
                 if self.view.underMouse():
                     self.add_backdrop()
                     return True
-                if self.view.underMouse():
-                    self.delete_selected_notes()
-                    self.scene_items_changed.emit()
-                    return True
+            elif event.key() in (Qt.Key_Delete, Qt.Key_Backspace):
+                if self.view.underMouse() or self.view.hasFocus():
+                    selected = self.scene.selectedItems()
+                    # Only act when the entire selection is text notes (not thumbnails/backdrops)
+                    notes = [it for it in selected if isinstance(it, TextNoteItem)]
+                    non_notes = [it for it in selected if not isinstance(it, TextNoteItem)]
+                    if notes and not non_notes:
+                        self.delete_selected_notes()
+                        self.scene_items_changed.emit()
+                        return True
         
         if event.type() == QEvent.Gesture:
             return self.gestureEvent(event)
@@ -2257,6 +2308,19 @@ class ThumbnailArea(QWidget):
 
         menu.addSeparator()
         
+        # Draw precedence (only when thumbnails are selected)
+        selected_thumbs = [it for it in self.scene.selectedItems() if isinstance(it, ThumbnailItem)]
+        if selected_thumbs:
+            front_action = QAction("Move to Front", self)
+            front_action.triggered.connect(self.move_selected_to_front)
+            menu.addAction(front_action)
+
+            back_action = QAction("Move to Back", self)
+            back_action.triggered.connect(self.move_selected_to_back)
+            menu.addAction(back_action)
+
+        menu.addSeparator()
+        
         tag_action = QAction("Enable/Disable Selected", self)
         tag_action.triggered.connect(self.tag_toggle_requested.emit)
         menu.addAction(tag_action)
@@ -2334,6 +2398,34 @@ class ThumbnailArea(QWidget):
             menu.addAction(open_review_action)
             
         menu.exec(event.globalPos())
+
+    def move_selected_to_front(self):
+        """Raise selected ThumbnailItems above all other thumbnails."""
+        all_thumbs = [it for it in self.scene.items() if isinstance(it, ThumbnailItem)]
+        selected = [it for it in all_thumbs if it.isSelected()]
+        others = [it for it in all_thumbs if not it.isSelected()]
+        if not selected:
+            return
+        # Find the highest z among non-selected thumbnails
+        base_z = max((it.zValue() for it in others), default=0)
+        # Place each selected item above: cap at 4999 (below text notes at 5000)
+        for i, it in enumerate(selected):
+            it.setZValue(min(base_z + 1 + i, 4999))
+        self.scene_items_changed.emit()
+
+    def move_selected_to_back(self):
+        """Lower selected ThumbnailItems below all other thumbnails."""
+        all_thumbs = [it for it in self.scene.items() if isinstance(it, ThumbnailItem)]
+        selected = [it for it in all_thumbs if it.isSelected()]
+        others = [it for it in all_thumbs if not it.isSelected()]
+        if not selected:
+            return
+        # Find the lowest z among non-selected thumbnails
+        base_z = min((it.zValue() for it in others), default=0)
+        # Place each selected item below: floor at -999 (above backdrops at -1000)
+        for i, it in enumerate(reversed(selected)):
+            it.setZValue(max(base_z - 1 - i, -999))
+        self.scene_items_changed.emit()
 
     def _on_action_os_open(self):
         selected = self.scene.selectedItems()
@@ -2534,6 +2626,20 @@ class ThumbnailArea(QWidget):
                 res.append({"type": "backdrop", "name": item.name or item.label, "label": "Backdrop", "id": item.uuid})
         return res
 
+    def _exit_active_note_edit(self):
+        """Force any currently-editing TextNoteItem to leave edit mode."""
+        focus_item = self.scene.focusItem()
+        if focus_item is None:
+            return
+        # Walk up: the focusItem is the NoteTextItem child; its parent is the TextNoteItem
+        candidate = focus_item
+        while candidate:
+            if isinstance(candidate, TextNoteItem):
+                candidate.on_text_focus_out(None)
+                candidate.clearFocus()
+                break
+            candidate = candidate.parentItem() if hasattr(candidate, 'parentItem') else None
+
     def add_text_note(self, pos=None):
         # Create at last click position or center of view
         if hasattr(self, "_last_click_scene_pos"):
@@ -2543,7 +2649,7 @@ class ThumbnailArea(QWidget):
             center_view = v_rect.center()
             scene_pos = self.view.mapToScene(center_view)
         
-        target_size = 24
+        target_size = 72  # 3x the original 24pt default
         
         note = TextNoteItem(scene_pos)
         # Apply initial font size
@@ -2607,6 +2713,7 @@ class ThumbnailArea(QWidget):
         groupable = [it for it in selected if not it.parentItem()]
         
         margin = 250
+        has_selection = bool(groupable)
         if groupable:
             # Enclose selected items
             rect = groupable[0].sceneBoundingRect()
@@ -2636,6 +2743,7 @@ class ThumbnailArea(QWidget):
             if not temp_item:
                 temp_item = BackdropItem(rect, vals)
                 self.scene.addItem(temp_item)
+                temp_item.delete_requested.connect(self.delete_backdrop)
             else:
                 temp_item.set_data(vals)
         
@@ -2643,13 +2751,32 @@ class ThumbnailArea(QWidget):
         
         if dialog.exec():
             data = dialog.get_values()
+
+            # 3. Extend rect based on label alignment when items were selected
+            final_rect = QRectF(rect)  # copy
+            if has_selection:
+                alignment = data.get("label_alignment", "")
+                extension = final_rect.height() * 0.20
+                if "Top" in alignment:
+                    # Extend the top edge upward
+                    final_rect.setTop(final_rect.top() - extension)
+                elif "Bottom" in alignment:
+                    # Extend the bottom edge downward
+                    final_rect.setBottom(final_rect.bottom() + extension)
+
             if not temp_item:
-                backdrop = BackdropItem(rect, data)
+                backdrop = BackdropItem(final_rect, data)
                 self.scene.addItem(backdrop)
+                backdrop.delete_requested.connect(self.delete_backdrop)
                 self.scene_items_changed.emit()
             else:
+                # Reposition temp_item to reflect final_rect
+                temp_item.prepareGeometryChange()
+                temp_item.setPos(final_rect.topLeft())
+                temp_item.width = final_rect.width()
+                temp_item.height = final_rect.height()
+                temp_item.set_data(data)
                 backdrop = temp_item
-                backdrop.set_data(data)
             
             # Select it
             self.scene.clearSelection()

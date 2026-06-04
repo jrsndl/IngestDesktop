@@ -453,6 +453,7 @@ class MainWindow(QMainWindow):
         self.filter_panel.rename_to_label_requested.connect(self._on_rename_to_label_requested)
         self.filter_panel.delete_scene_items_requested.connect(self._on_filter_delete_scene_items)
         self.filter_panel.edit_scene_item_requested.connect(self._on_filter_edit_scene_item)
+        self.filter_panel.move_front_back_requested.connect(self._on_filter_move_front_back)
         self.h_splitter.addWidget(self.filter_panel)
 
         self.main_layout.addWidget(self.h_splitter, 1)
@@ -732,7 +733,9 @@ class MainWindow(QMainWindow):
                 "is_selected": is_selected,
                 "position": item.position,
                 "metadata": item.metadata,
-                "ingest_status": item.ingest_status
+                "ingest_status": item.ingest_status,
+                "z_value": (self.thumb_area.item_to_thumb.get(item).zValue()
+                             if self.thumb_area and self.thumb_area.item_to_thumb.get(item) else 0)
             }
             project_data["items"].append(item_dict)
             
@@ -876,6 +879,7 @@ class MainWindow(QMainWindow):
                 item.position = tuple(it.get("position", (0, 0)))
                 item.metadata = it.get("metadata", {})
                 item.ingest_status = it.get("ingest_status", "unknown")
+                item._z_value = it.get("z_value", 0)  # saved draw order
                 
                 # Check for standard model keys
                 item.is_sequence = it.get("is_sequence", False)
@@ -913,9 +917,10 @@ class MainWindow(QMainWindow):
                 
                 reconstructed_items.append(item)
                 
-            # Save the loaded positions and selection states before resetting the model
+            # Save the loaded positions, selection states, and z-values before resetting the model
             saved_positions = {it.file_path: it.position for it in reconstructed_items}
             saved_selections = {it.file_path: it.is_selected for it in reconstructed_items}
+            saved_z_values = {it.file_path: it._z_value for it in reconstructed_items if hasattr(it, "_z_value")}
 
             # Update Model
             self.model.clear()
@@ -954,6 +959,7 @@ class MainWindow(QMainWindow):
                 backdrop.uuid = bd.get("uuid", backdrop.uuid)
                 backdrop.setZValue(-1000)
                 self.thumb_area.scene.addItem(backdrop)
+                backdrop.delete_requested.connect(self.thumb_area.delete_backdrop)
                 backdrop_map[backdrop.uuid] = backdrop
                 
             # Recreate text notes second
@@ -974,7 +980,7 @@ class MainWindow(QMainWindow):
                 
                 # Apply restored size to text item wrapping
                 note.text_item.setTextWidth(note.width - 20)
-                note.setZValue(1000)
+                note.setZValue(5000)  # Always above backdrops (-1000) and thumbnails (0)
                 
                 # Determine containing backdrop (no setParentItem)
                 parent_uuid = nt.get("parent_uuid")
@@ -1012,6 +1018,9 @@ class MainWindow(QMainWindow):
                         item.position = pos
                         thumb.setPos(pos[0], pos[1])
                         thumb.is_manually_moved = True
+
+                    z = saved_z_values.get(item.file_path, 0)
+                    thumb.setZValue(z)
                     
                     is_sel = saved_selections.get(item.file_path, False)
                     item.is_selected = is_sel
@@ -3509,7 +3518,29 @@ class MainWindow(QMainWindow):
             # Trigger Backdrop Settings Dialog
             self.thumb_area.edit_backdrop(target_item)
 
-            
+    def _on_filter_move_front_back(self, direction, paths):
+        """Select the ThumbnailItems matching the given paths and move them front or back."""
+        from gui.thumbnail_area import ThumbnailItem
+        import os
+        norm_paths = {os.path.normpath(os.path.abspath(p)) for p in paths}
+        # Select matching thumbs temporarily, then call the area method
+        prev_selection = self.thumb_area.scene.selectedItems()
+        self.thumb_area.scene.clearSelection()
+        for item in self.thumb_area.scene.items():
+            if isinstance(item, ThumbnailItem):
+                item_path = os.path.normpath(os.path.abspath(item.data.file_path))
+                if item_path in norm_paths:
+                    item.setSelected(True)
+        if direction == "front":
+            self.thumb_area.move_selected_to_front()
+        else:
+            self.thumb_area.move_selected_to_back()
+        # Restore previous selection
+        self.thumb_area.scene.clearSelection()
+        for it in prev_selection:
+            it.setSelected(True)
+
+
 
     def _on_label_action(self, action, data):
         if action in ["tag", "enable"]:

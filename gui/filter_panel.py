@@ -277,6 +277,7 @@ class FilterPanel(QWidget):
     toggles_changed = Signal()
     delete_scene_items_requested = Signal(list) # list of UUIDs
     edit_scene_item_requested = Signal(str) # UUID
+    move_front_back_requested = Signal(str, list) # direction ("front"/"back"), list of paths
 
     def __init__(self, main_model, parent=None):
         super().__init__(parent)
@@ -711,6 +712,16 @@ class FilterPanel(QWidget):
         act_rename = QAction("Rename to Label", self)
         act_rename.triggered.connect(lambda: self.rename_to_label_requested.emit(paths))
         menu.addAction(act_rename)
+
+        menu.addSeparator()
+
+        act_front = QAction("Move to Front", self)
+        act_front.triggered.connect(lambda: self.move_front_back_requested.emit("front", paths))
+        menu.addAction(act_front)
+
+        act_back = QAction("Move to Back", self)
+        act_back.triggered.connect(lambda: self.move_front_back_requested.emit("back", paths))
+        menu.addAction(act_back)
         
         menu.exec(self.tree.viewport().mapToGlobal(pos))
 

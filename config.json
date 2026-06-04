@@ -3,7 +3,7 @@
     "disable_inline_video": false,
     "default_fps": 29.97,
     "use_fps_from_metadata": false,
-    "default_columns": 11,
+    "default_columns": 2,
     "default_text_size": 10,
     "default_thumb_size": 407,
     "timeout_seconds": 0,

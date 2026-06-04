@@ -509,3 +509,27 @@ Feature: display AYON Thumbnails:
 * Check https://github.com/jrsndl/SubmissionHelper/blob/main/ayon_shotlist.py for guide how to download thumbnails from AYON.
 * Display small thumbs in left AYON panel for each task if "Show Thumbs" toggle button is on
 * 
+
+Backdrop Enhancements:
+* the top bar / handle left corner: add simple cross symbol to delete the backdrop (but not in's content!)
+* the top bar / handle: shrink it horizontally, so the corners of the backdrop rectangle for resizing are visible, and not covered by the top bar
+* when creating backdrop with some items selected, consider the "label alignment": if top (left/center/right) is selected, extend the top part of the backdrop for 20% of the height, so the backdrop label is not covered by the items. Similarly, if bottom (left/center/right) label alignment is selected, extend the bottom part of the backdrop for 20% of the height. Do not extend the backdrop size for middle label alignments.
+  
+Text Note Enhancement:
+* when clicking outside text node, leave the edit mode and deselect any text selected in the note
+* make the default text size 3x bigger
+* make sure the text note can be part of the Backdrop, and still be displayed. currently text note disappears when being inside the backdrop
+
+Thumbnail View Enhancement: draw precedence
+* Add "Move to Front" and "Move to Back" items to the context menus of the thumbnail view and right filter panel. This allows user to control the z-depth of the items being drawn. The default precedence should be:
+- Backdrops at the bottom
+- Thumbnails above backdrops
+- text notes above thumbnails and backdrops
+
+Thumbnail View Enhancement: draw precedence
+* Add "Move to Front" and "Move to Back" items to the context menus of the thumbnail view and right filter panel. This allows user to control the z-depth of the items being drawn. The default precedence should be:
+- Backdrops at the bottom
+- Thumbnails above backdrops
+- text notes above thumbnails and backdrops
+
+text note: when not in text edit mode, and only text note(s) are selected, pressinf delete key deletes the note(s)
