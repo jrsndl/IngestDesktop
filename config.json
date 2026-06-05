@@ -284,8 +284,8 @@
     "active_preset": "default_25fps",
     "last_ayon_project": "BCV_009_JA_Hiphi",
     "filter_toggles": {
-        "files_only": true,
-        "flat": false,
+        "files_only": false,
+        "flat": true,
         "v_stack": false,
         "sequences": true
     },
@@ -300,15 +300,15 @@
     "filter_age_enabled": false,
     "filter_age_value": 0,
     "filter_age_units": "minutes",
-    "filter_files_only": true,
-    "filter_flat": false,
+    "filter_files_only": false,
+    "filter_flat": true,
     "filter_v_stack": false,
     "filter_sequences": true,
     "thumbnail_size": 1024,
     "last_source_folder": "C:/Users/robur/Desktop/seqs",
     "fixed_task_name_enabled": true,
     "fixed_task_name": "comp",
-    "geometry": "01d9d0cb00030000fffff600fffffff8ffffffff0000059ffffff6b10000008efffffe73000003ad00000001020000000a00fffff60000000017ffffffff0000059f",
+    "geometry": "01d9d0cb00030000fffff600fffffff8ffffffff0000059ffffff6a7000000abfffffe69000003aa00000001020000000a00fffff60000000017ffffffff0000059f",
     "h_splitter": "000000ff000000010000000300000176000006e40000019201ffffffff010000000100",
     "v_splitter": "000000ff0000000100000002000003c00000014701ffffffff010000000200",
     "recent_folders": [
@@ -338,6 +338,6 @@
     "neighbour_task_name": "comp",
     "neighbour_task_status": "Ready to start",
     "get_ayon_thumbnails": true,
-    "ayon_thumbnails_cache": "D:/_ayonThumbCache",
+    "ayon_thumbnails_cache": "_ayon_thumbs_cache_test",
     "ayon_show_thumbs": true
 }

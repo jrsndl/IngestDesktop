@@ -335,6 +335,7 @@ class MainWindow(QMainWindow):
         self.ayon_thumb_cache = {}
         self.ayon_thumb_downloading = set()
         self.ayon_thumb_states = {}
+        self.load_ayon_thumb_states()
         self._thumb_threads = []
         
         # Configure logging to console
@@ -668,6 +669,7 @@ class MainWindow(QMainWindow):
 
     def perform_new_project(self):
         self.current_project_path = None
+        self.thumb_area.clear_canvas()
         self.model.clear()
         self.top_bar.path_display.setText("")
         self.log_message("New project created. Select a folder to begin.")
@@ -924,6 +926,7 @@ class MainWindow(QMainWindow):
             saved_z_values = {it.file_path: it._z_value for it in reconstructed_items if hasattr(it, "_z_value")}
 
             # Update Model
+            self.thumb_area.clear_canvas()
             self.model.clear()
             self.model.beginResetModel()
             self.model.items = reconstructed_items
@@ -1008,6 +1011,8 @@ class MainWindow(QMainWindow):
                     # Top-level note
                     note.setPos(pos)
                 
+                note.moving_started.connect(self.thumb_area.note_toolbar.hide)
+                note.moving_finished.connect(self.thumb_area._update_note_toolbar)
                 self.thumb_area.scene.addItem(note)
                 
             # Restore manual positions on reconstructed items in the scene using saved states
@@ -1197,6 +1202,7 @@ class MainWindow(QMainWindow):
             self.scanner.cancel()
             self.scanner.wait()
 
+        self.thumb_area.clear_canvas()
         self.model.clear()
         self.model.source_folder = directory
         self.filter_panel.set_root_folder(directory)
@@ -1462,6 +1468,7 @@ class MainWindow(QMainWindow):
             
         # Clear "not available" states
         self.ayon_thumb_states = {k: v for k, v in self.ayon_thumb_states.items() if v != "not available"}
+        self.save_ayon_thumb_states()
         
         # Save last project to config
         self.config["last_ayon_project"] = project_name
@@ -1563,6 +1570,7 @@ class MainWindow(QMainWindow):
             
         # Clear "not available" states so we can retry them
         self.ayon_thumb_states = {k: v for k, v in self.ayon_thumb_states.items() if v != "not available"}
+        self.save_ayon_thumb_states()
             
         # Force a reconnect if we aren't connected yet
         if not self.ayon.is_connected:
@@ -3219,6 +3227,9 @@ class MainWindow(QMainWindow):
             selected_items = self.thumb_area.scene.selectedItems()
             
             for item in selected_items:
+                if hasattr(item, "uuid") and (not hasattr(item, "data") or callable(item.data)):
+                    selected_paths.append(item.uuid)
+                    continue
                 try:
                     if is_csv:
                         # Only items that are in tagged_items exist in CSV mode
@@ -3272,6 +3283,11 @@ class MainWindow(QMainWindow):
                     path = source_idx.data(Qt.UserRole)
                 
                 if path:
+                    is_scene_item = source_idx.data(Qt.UserRole + 1)
+                    if is_scene_item:
+                        paths.add(path)
+                        continue
+                        
                     is_path_model = hasattr(source_model, "filePath")
                     is_known_item_path = False
                     if isinstance(path, str):
@@ -4002,12 +4018,15 @@ class MainWindow(QMainWindow):
         
         # Filter tasks_info based on local disk state and known states
         filtered_tasks_info = []
+        changed = False
         for info in tasks_info:
             thumb_id = info["thumbnailId"]
             target_path = os.path.join(project_cache_dir, f"{thumb_id}.jpg")
             
             if os.path.exists(target_path):
-                self.ayon_thumb_states[thumb_id] = "cached"
+                if self.ayon_thumb_states.get(thumb_id) != "cached":
+                    self.ayon_thumb_states[thumb_id] = "cached"
+                    changed = True
                 continue
                 
             state = self.ayon_thumb_states.get(thumb_id)
@@ -4016,6 +4035,10 @@ class MainWindow(QMainWindow):
                 
             filtered_tasks_info.append(info)
             self.ayon_thumb_states[thumb_id] = "downloading"
+            changed = True
+            
+        if changed:
+            self.save_ayon_thumb_states()
             
         if not filtered_tasks_info:
             self._refresh_ayon_panel_icons()
@@ -4029,8 +4052,46 @@ class MainWindow(QMainWindow):
         self._ayon_thumb_download_thread.finished.connect(self._refresh_ayon_panel_icons)
         self._ayon_thumb_download_thread.start()
 
+    def load_ayon_thumb_states(self):
+        cache_root = self.config.get("ayon_thumbnails_cache", "")
+        if not cache_root:
+            cache_root = "_ayon_thumbs_cache"
+        from utils import expand_env_vars
+        cache_root = expand_env_vars(cache_root)
+        os.makedirs(cache_root, exist_ok=True)
+        
+        path = os.path.join(cache_root, "ayon_thumb_states.json")
+        if os.path.exists(path):
+            try:
+                import json
+                with open(path, "r", encoding="utf-8") as f:
+                    self.ayon_thumb_states = json.load(f)
+                print(f"[Prefs] Loaded AYON thumbnail states from: {path}")
+            except Exception as e:
+                print(f"Error loading AYON thumbnail states: {e}")
+                self.ayon_thumb_states = {}
+        else:
+            self.ayon_thumb_states = {}
+
+    def save_ayon_thumb_states(self):
+        cache_root = self.config.get("ayon_thumbnails_cache", "")
+        if not cache_root:
+            cache_root = "_ayon_thumbs_cache"
+        from utils import expand_env_vars
+        cache_root = expand_env_vars(cache_root)
+        os.makedirs(cache_root, exist_ok=True)
+        
+        path = os.path.join(cache_root, "ayon_thumb_states.json")
+        try:
+            import json
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(self.ayon_thumb_states, f, indent=4)
+        except Exception as e:
+            print(f"Error saving AYON thumbnail states: {e}")
+
     def _on_task_thumb_state_changed(self, thumb_id, state):
         self.ayon_thumb_states[thumb_id] = state
+        self.save_ayon_thumb_states()
 
 
     def update_ayon_thumbnails(self):
@@ -4045,6 +4106,7 @@ class MainWindow(QMainWindow):
         if not path_map:
             return
             
+        changed = False
         for item in self.model.items:
             if not item.ayon_path:
                 print(f"debug: ayon_path is empty for item: {item}")
@@ -4071,7 +4133,9 @@ class MainWindow(QMainWindow):
                     pixmap = QPixmap(local_thumb_path)
                     if not pixmap.isNull():
                         self.ayon_thumb_cache[f_id] = pixmap
-                        self.ayon_thumb_states[f_id] = "cached"
+                        if self.ayon_thumb_states.get(f_id) != "cached":
+                            self.ayon_thumb_states[f_id] = "cached"
+                            changed = True
                         item.ayon_thumbnail = pixmap
                         item.thumbnail = pixmap
                         continue
@@ -4085,6 +4149,7 @@ class MainWindow(QMainWindow):
             # If not cached and not currently downloading, start download
             print(f"Downloading thumbnail for folder ID '{f_id}' in project '{project}' from AYON...")
             self.ayon_thumb_states[f_id] = "downloading"
+            changed = True
             self.ayon_thumb_downloading.add(f_id)
             
             # Start background thread
@@ -4093,6 +4158,9 @@ class MainWindow(QMainWindow):
             # Keep thread reference
             self._thumb_threads.append(thread)
             thread.start()
+
+        if changed:
+            self.save_ayon_thumb_states()
 
     def _get_ayon_thumb_path(self, item):
         """Construct a thumbnail path using AYON folder path, replacing slashes with dashes, adding suffix '_thumbAyon'."""
@@ -4166,6 +4234,7 @@ class MainWindow(QMainWindow):
                 self.ayon_thumb_states[folder_id] = "not available"
         else:
             self.ayon_thumb_states[folder_id] = "not available"
+        self.save_ayon_thumb_states()
 
     def _on_ayon_representations_requested(self, project, product_id):
         """Asynchronously load representations for the selected product."""

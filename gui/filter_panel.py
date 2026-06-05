@@ -558,7 +558,6 @@ class FilterPanel(QWidget):
             self.tree.setRootIndex(QModelIndex())
 
     def select_paths(self, paths):
-        """Programmatically select multiple files in the tree."""
         selection = self.tree.selectionModel()
         selection.clear()
         
@@ -580,17 +579,34 @@ class FilterPanel(QWidget):
                 source_idx = model.index(norm_p)
             else: # QStandardItemModel
                 norm_p_lower = norm_p.lower() if isinstance(norm_p, str) else norm_p
-                for row in range(model.rowCount()):
-                    idx = model.index(row, 0)
-                    val = idx.data(Qt.UserRole)
-                    if isinstance(val, str):
-                        val_norm = os.path.normpath(os.path.abspath(val)).lower()
-                        if val_norm == norm_p_lower:
-                            source_idx = idx
-                            break
-                    elif val == norm_p:
-                        source_idx = idx
-                        break
+                
+                def find_item_by_val(parent_item):
+                    for row in range(parent_item.rowCount()):
+                        item = parent_item.child(row, 0)
+                        if not item:
+                            continue
+                        idx = item.index()
+                        val = idx.data(Qt.UserRole)
+                        is_scene_item = idx.data(Qt.UserRole + 1)
+                        
+                        if is_scene_item:
+                            if isinstance(val, str) and val.lower() == norm_p_lower:
+                                return idx
+                        else:
+                            if isinstance(val, str):
+                                val_norm = os.path.normpath(os.path.abspath(val)).lower()
+                                if val_norm == norm_p_lower:
+                                    return idx
+                            elif val == norm_p:
+                                return idx
+                                
+                        if item.rowCount() > 0:
+                            found = find_item_by_val(item)
+                            if found.isValid():
+                                return found
+                    return QModelIndex()
+                    
+                source_idx = find_item_by_val(model.invisibleRootItem())
                         
             if source_idx.isValid():
                 proxy_idx = self.proxy.mapFromSource(source_idx)

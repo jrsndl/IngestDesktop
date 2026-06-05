@@ -190,7 +190,16 @@ class TextNoteItem(QGraphicsObject):
             # and make it appear behind thumbnails.
             if isinstance(value, BackdropItem):
                 return None  # reject reparenting
+        elif change == QGraphicsItem.ItemSelectedChange:
+            if not value:  # Deselected
+                QTimer.singleShot(0, self._safe_deselect)
         return super().itemChange(change, value)
+
+    def _safe_deselect(self):
+        if not self.isSelected():
+            self.on_text_focus_out(None)
+            if self.text_item.hasFocus():
+                self.text_item.clearFocus()
         
     def mouseDoubleClickEvent(self, event):
         self.text_item.setAcceptedMouseButtons(Qt.LeftButton)
@@ -205,10 +214,18 @@ class TextNoteItem(QGraphicsObject):
     def on_text_focus_out(self, event):
         self.text_item.setTextInteractionFlags(Qt.NoTextInteraction)
         self.text_item.setAcceptedMouseButtons(Qt.NoButton)
-        # Clear the text cursor selection without triggering a geometry change
-        # by using the document directly instead of setTextCursor()
-        self.text_item.textCursor().clearSelection()
+        # Clear the text cursor selection
+        cursor = self.text_item.textCursor()
+        cursor.clearSelection()
+        self.text_item.setTextCursor(cursor)
         self.update()
+        
+        # Notify that scene items changed (updates filter tree view label)
+        scene = self.scene()
+        if scene:
+            parent = scene.parent()
+            if parent and hasattr(parent, "scene_items_changed"):
+                parent.scene_items_changed.emit()
 
     def focusOutEvent(self, event):
         self.on_text_focus_out(event)
@@ -1795,6 +1812,19 @@ class ThumbnailArea(QWidget):
         self.model.modelReset.connect(self.add_items)
         self.model.dataChanged.connect(self._on_data_changed)
 
+    def clear_canvas(self):
+        """Completely clear the scene of all elements, including thumbnails, notes, and backdrops."""
+        if hasattr(self, "active_players"):
+            for player in list(self.active_players.values()):
+                player.clear_video()
+                player.deleteLater()
+            self.active_players.clear()
+        if hasattr(self, "video_player"):
+            self.video_player.clear_video()
+        self.scene.clear()
+        self.item_to_thumb.clear()
+        self.scene_items_changed.emit()
+
     def add_items(self, items=None):
         """Initial populate or full reset."""
         if hasattr(self, "active_players"):
@@ -1805,7 +1835,10 @@ class ThumbnailArea(QWidget):
         if hasattr(self, "video_player"):
             self.video_player.clear_video()
 
-        self.scene.clear()
+        # Remove only ThumbnailItem instances from the scene, preserving notes/backdrops
+        for item in list(self.scene.items()):
+            if isinstance(item, ThumbnailItem):
+                self.scene.removeItem(item)
         self.item_to_thumb.clear()
         
         if items is None and self.model:
