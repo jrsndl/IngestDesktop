@@ -46,13 +46,13 @@ class AyonClient:
             # Get all folders
             folders = list(ayon_api.get_folders(
                 project_name,
-                fields=["id", "name", "path", "type", "label", "status", "parentId"]
+                fields=["id", "name", "path", "type", "label", "status", "parentId", "thumbnailId"]
             ))
             
             # Get all tasks
             tasks = list(ayon_api.get_tasks(
                 project_name,
-                fields=["id", "name", "type", "label", "status", "folderId", "assignees"]
+                fields=["id", "name", "type", "label", "status", "folderId", "assignees", "thumbnailId"]
             ))
             
             # Organize into a map by ID for easy lookup

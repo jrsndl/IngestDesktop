@@ -141,6 +141,17 @@ class PreferencesDialog(QDialog):
         self.ingest_check = QCheckBox("Ingest Check")
         self.ingest_check.setChecked(self.config.get("ayon_ingest_check", True))
         
+        self.get_ayon_thumbnails = QCheckBox("get AYON Thumbnails")
+        self.get_ayon_thumbnails.setChecked(self.config.get("get_ayon_thumbnails", True))
+
+        self.ayon_thumbnails_cache = QLineEdit(self.config.get("ayon_thumbnails_cache", "_ayon_thumbs_cache"))
+        self.btn_browse_cache = QPushButton("Browse...")
+        self.btn_browse_cache.clicked.connect(self._on_browse_cache_folder)
+
+        self.cache_folder_layout = QHBoxLayout()
+        self.cache_folder_layout.addWidget(self.ayon_thumbnails_cache)
+        self.cache_folder_layout.addWidget(self.btn_browse_cache)
+        
         self.ayon_version_status = QLineEdit(self.config.get("ayon_version_status", "Pending Review"))
         self.set_version_status_after_check = QCheckBox("Set version status after Ingest Check")
         self.set_version_status_after_check.setChecked(self.config.get("set_version_status_after_check", True))
@@ -166,6 +177,8 @@ class PreferencesDialog(QDialog):
         self.ayon_form.addRow("CSV Preset:", self.csv_preset)
         self.ayon_form.addRow(self.ignore_validators)
         self.ayon_form.addRow(self.ingest_check)
+        self.ayon_form.addRow(self.get_ayon_thumbnails)
+        self.ayon_form.addRow("AYON Thumbnails Cache:", self.cache_folder_layout)
         self.ayon_form.addRow("Ingested Version Status:", self.ayon_version_status)
         self.ayon_form.addRow(self.set_version_status_after_check)
         self.ayon_form.addRow(self.play_sound_on_finish)
@@ -765,6 +778,13 @@ class PreferencesDialog(QDialog):
         if dir_path:
             self.ingest_log_folder.setText(os.path.normpath(dir_path))
 
+    def _on_browse_cache_folder(self):
+        from utils import expand_env_vars
+        init_dir = expand_env_vars(self.ayon_thumbnails_cache.text())
+        dir_path = QFileDialog.getExistingDirectory(self, "Select AYON Thumbnails Cache Folder", init_dir)
+        if dir_path:
+            self.ayon_thumbnails_cache.setText(os.path.normpath(dir_path))
+
     def _on_thumb_location_changed(self, text):
         is_custom_or_rel = text in ["Relative to Source Folder", "Custom"]
         self.thumb_location_path.setVisible(is_custom_or_rel)
@@ -858,6 +878,8 @@ class PreferencesDialog(QDialog):
             "sequence_regex": self.sequence_regex.text(),
             "episode_regex": self.episode_regex.text(),
             "ayon_project_name": self.ayon_project_name.text(),
+            "get_ayon_thumbnails": self.get_ayon_thumbnails.isChecked(),
+            "ayon_thumbnails_cache": self.ayon_thumbnails_cache.text(),
             "ayon_csv_ingest_folder": self.csv_ingest_folder.text(),
             "ayon_csv_ingest_task": self.csv_ingest_task.text(),
             "ayon_csv_preset": self.csv_preset.text(),

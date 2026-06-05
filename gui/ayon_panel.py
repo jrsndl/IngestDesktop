@@ -187,6 +187,9 @@ class AyonPanel(QWidget):
         self.tree.customContextMenuRequested.connect(self._on_context_menu)
         self.tree.selectionModel().selectionChanged.connect(self._on_selection_changed)
         
+        from PySide6.QtCore import QSize
+        self.tree.setIconSize(QSize(64, 36))
+        
         # Header setup for hideable columns
         header = self.tree.header()
         header.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -390,7 +393,13 @@ class AyonPanel(QWidget):
             
             # Store task data and reference to parent folder path
             full_path = f"{folder.get('path')}/{task.get('name')}"
-            task_data = {**task, "folder_path": folder.get('path'), "full_ayon_path": full_path}
+            t_thumb_id = task.get("thumbnailId") or folder.get("thumbnailId")
+            task_data = {
+                **task,
+                "folder_path": folder.get('path'),
+                "full_ayon_path": full_path,
+                "thumbnailId": t_thumb_id
+            }
             t_name_item.setData(task_data, Qt.UserRole)
             t_name_item.setEditable(False)
             
@@ -887,4 +896,42 @@ class AyonPanel(QWidget):
                 self.tree.scrollTo(proxy_idx)
                 return True
         return False
+
+    def refresh_icons(self, show_thumbs, cache_dir=None, project_name=None):
+        """Update task items in the tree view to show/hide thumbnail icons."""
+        import os
+        from PySide6.QtGui import QIcon, QPixmap
+        
+        def _recurse(parent_item):
+            for row in range(parent_item.rowCount()):
+                item = parent_item.child(row, 0)
+                if not item:
+                    continue
+                data = item.data(Qt.UserRole)
+                if data and "folderId" in data: # It's a task!
+                    t_name = data.get("name", "Unknown")
+                    thumb_id = data.get("thumbnailId")
+                    
+                    if show_thumbs and thumb_id and cache_dir and project_name:
+                        thumb_path = os.path.join(cache_dir, project_name, f"{thumb_id}.jpg")
+                        if os.path.exists(thumb_path):
+                            pixmap = QPixmap(thumb_path)
+                            if not pixmap.isNull():
+                                scaled = pixmap.scaledToHeight(36, Qt.SmoothTransformation)
+                                item.setIcon(QIcon(scaled))
+                            else:
+                                item.setIcon(QIcon())
+                            item.setText(f" {t_name}")
+                        else:
+                            # Thumbnail file doesn't exist yet, show bullet
+                            item.setIcon(QIcon())
+                            item.setText(f"• {t_name}")
+                    else:
+                        item.setIcon(QIcon())
+                        item.setText(f"• {t_name}")
+                        
+                _recurse(item)
+                
+        _recurse(self.model.invisibleRootItem())
+
 

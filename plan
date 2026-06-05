@@ -503,6 +503,7 @@ Thumbnail view: top controls, add tri state toggle button: "Player: Stop", "Play
 * this will control how many items will play
 
 Feature: display AYON Thumbnails:
+* Preferences - AYON: Add checkbox "get AYON Thumbnails", defaults to on, to enable/disable the feature
 * when getting AYON hierarchy, also get the thumbnail ID for each task from the server
 * Preferences - AYON: Add text box "AYON Thumbnails Cache" for folder path where app should store jpeg thumbnails files downloaded from AYON server
 * Start downloading and caching AYON thumbnails to "AYON Thumbnails Cache"/"AYON Project Name" folder after thumb and review conversion is done. Skip downloading thumbs already present in the cache folder.

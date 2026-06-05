@@ -1259,6 +1259,8 @@ class MainWindow(QMainWindow):
             self.start_conversions(new_items)
         elif self.config.get("run_review_after_scan", False):
             self.start_review_conversions()
+        else:
+            self.trigger_ayon_thumbnail_downloads()
 
     def start_conversions(self, items, force=False):
         """Start background conversion of thumbnails based on preferences."""
@@ -1278,6 +1280,7 @@ class MainWindow(QMainWindow):
     def start_review_conversions(self, force=False, reset=False, force_overwrite=False):
         """Triggered after thumbnail conversions are done or scan finished."""
         if not force and not self.config.get("run_review_after_scan", False):
+            self.trigger_ayon_thumbnail_downloads()
             return
             
         if self._review_worker and self._review_worker.isRunning():
@@ -1322,6 +1325,7 @@ class MainWindow(QMainWindow):
         if self._queue_dialog:
             self._queue_dialog.set_queue_status("Done")
         self._refresh_tables()
+        self.trigger_ayon_thumbnail_downloads()
 
     def show_queue_dialog(self):
         if not self._queue_dialog:
@@ -1442,10 +1446,13 @@ class MainWindow(QMainWindow):
                 self.start_conversions(new_items)
             elif self.config.get("run_review_after_scan", False):
                 self.start_review_conversions()
+            else:
+                self.trigger_ayon_thumbnail_downloads()
                 
             self.log_message(f"Rescan complete. Added {len(new_items)} new items.", "success")
         else:
             self.log_message("Rescan complete. No new items found.")
+            self.trigger_ayon_thumbnail_downloads()
 
     def _on_project_changed(self, project_name):
         """Called when user selects a different project in the top bar."""
@@ -1642,6 +1649,7 @@ class MainWindow(QMainWindow):
         self._hier_thread.finished.connect(self.ayon_panel.set_hierarchy)
         self._hier_thread.finished.connect(self._update_ayon_visuals)
         self._hier_thread.finished.connect(self._restore_ayon_selection)
+        self._hier_thread.finished.connect(self._refresh_ayon_panel_icons)
         self._hier_thread.start()
 
     def resizeEvent(self, event):
@@ -1827,6 +1835,7 @@ class MainWindow(QMainWindow):
             self.config["ayon_project"] = self.ayon_panel.combo_project.currentText()
             self.config["ayon_search_text"] = self.ayon_panel.search_edit.text()
             self.config["ayon_search_column"] = self.ayon_panel.search_combo.currentIndex()
+            self.config["ayon_show_thumbs"] = self.ayon_panel.btn_show_thumbs.isChecked()
             
             # Selected folder & task in AYON tree
             ayon_folder = ""
@@ -1880,6 +1889,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, "ayon_panel") and self.ayon_panel:
             self.ayon_panel.search_edit.setText(self.config.get("ayon_search_text", ""))
             self.ayon_panel.search_combo.setCurrentIndex(self.config.get("ayon_search_column", 0))
+            self.ayon_panel.btn_show_thumbs.setChecked(self.config.get("ayon_show_thumbs", True))
 
         # 2. Thumbnails Panel
         if hasattr(self, "thumb_area") and self.thumb_area:
@@ -3922,6 +3932,68 @@ class MainWindow(QMainWindow):
         if checked:
             self.update_ayon_thumbnails()
         self.model.layoutChanged.emit()
+        self._refresh_ayon_panel_icons()
+
+    def _refresh_ayon_panel_icons(self):
+        show_thumbs = self.ayon_panel.btn_show_thumbs.isChecked()
+        cache_root = self.config.get("ayon_thumbnails_cache", "")
+        if not cache_root:
+            cache_root = "_ayon_thumbs_cache"
+        from utils import expand_env_vars
+        cache_root = expand_env_vars(cache_root)
+        
+        project_name = self.ayon_panel.combo_project.currentText()
+        if project_name:
+            self.ayon_panel.refresh_icons(show_thumbs, cache_root, project_name)
+
+    def trigger_ayon_thumbnail_downloads(self):
+        if not self.config.get("get_ayon_thumbnails", True):
+            self.log_message("AYON task thumbnails download is disabled in preferences.", "info")
+            return
+
+        project_name = self.ayon_panel.combo_project.currentText()
+        if not project_name:
+            return
+
+        # Find all task thumbnail IDs from the current tree
+        tasks_info = []
+        def _recurse_model(parent_item):
+            for row in range(parent_item.rowCount()):
+                item = parent_item.child(row, 0)
+                if not item:
+                    continue
+                data = item.data(Qt.UserRole)
+                if data and "folderId" in data: # It's a task!
+                    thumb_id = data.get("thumbnailId")
+                    if thumb_id:
+                        tasks_info.append({
+                            "name": data.get("name"),
+                            "thumbnailId": thumb_id
+                        })
+                _recurse_model(item)
+
+        _recurse_model(self.ayon_panel.model.invisibleRootItem())
+        
+        if not tasks_info:
+            return
+            
+        if hasattr(self, "_ayon_thumb_download_thread") and self._ayon_thumb_download_thread.isRunning():
+            return # Let the current run finish
+            
+        cache_root = self.config.get("ayon_thumbnails_cache", "")
+        if not cache_root:
+            cache_root = "_ayon_thumbs_cache"
+        from utils import expand_env_vars
+        cache_root = expand_env_vars(cache_root)
+        
+        project_cache_dir = os.path.join(cache_root, project_name)
+        
+        self._ayon_thumb_download_thread = AyonThumbnailDownloadThread(
+            project_name, tasks_info, project_cache_dir
+        )
+        self._ayon_thumb_download_thread.log.connect(lambda msg: self.log_message(msg, "info"))
+        self._ayon_thumb_download_thread.finished.connect(self._refresh_ayon_panel_icons)
+        self._ayon_thumb_download_thread.start()
 
 
     def update_ayon_thumbnails(self):
@@ -4687,5 +4759,45 @@ class AyonFolderThumbnailThread(QThread):
         except Exception as e:
             print(f"Error fetching thumbnail for folder {self.folder_id}: {e}")
             self.download_finished.emit(self.folder_id, b"")
+
+
+class AyonThumbnailDownloadThread(QThread):
+    finished = Signal()
+    log = Signal(str)
+
+    def __init__(self, project_name, tasks_info, cache_dir):
+        super().__init__()
+        self.project_name = project_name
+        self.tasks_info = tasks_info
+        self.cache_dir = cache_dir
+
+    def run(self):
+        import os
+        import ayon_api
+        from PySide6.QtGui import QImage
+        os.makedirs(self.cache_dir, exist_ok=True)
+
+        download_count = 0
+        skip_count = 0
+        for info in self.tasks_info:
+            thumb_id = info["thumbnailId"]
+            target_path = os.path.join(self.cache_dir, f"{thumb_id}.jpg")
+            if os.path.exists(target_path):
+                skip_count += 1
+                continue
+
+            try:
+                thumbnail = ayon_api.get_thumbnail_by_id(self.project_name, thumb_id)
+                if thumbnail and thumbnail.content:
+                    image = QImage()
+                    if image.loadFromData(thumbnail.content):
+                        image.save(target_path, "JPG")
+                        download_count += 1
+            except Exception as e:
+                pass
+
+        if download_count > 0 or skip_count > 0:
+            self.log.emit(f"AYON task thumbnails update finished. Downloaded: {download_count}, Skipped: {skip_count}")
+        self.finished.emit()
 
 
