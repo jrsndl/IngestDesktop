@@ -334,6 +334,7 @@ class MainWindow(QMainWindow):
         self.ayon = AyonClient()
         self.ayon_thumb_cache = {}
         self.ayon_thumb_downloading = set()
+        self.ayon_thumb_states = {}
         self._thumb_threads = []
         
         # Configure logging to console
@@ -1459,6 +1460,9 @@ class MainWindow(QMainWindow):
         if not project_name or not self.ayon.is_connected:
             return
             
+        # Clear "not available" states
+        self.ayon_thumb_states = {k: v for k, v in self.ayon_thumb_states.items() if v != "not available"}
+        
         # Save last project to config
         self.config["last_ayon_project"] = project_name
         self.save_config()
@@ -1557,6 +1561,9 @@ class MainWindow(QMainWindow):
         if hasattr(self, "_conn_thread") and self._conn_thread.isRunning():
             return
             
+        # Clear "not available" states so we can retry them
+        self.ayon_thumb_states = {k: v for k, v in self.ayon_thumb_states.items() if v != "not available"}
+            
         # Force a reconnect if we aren't connected yet
         if not self.ayon.is_connected:
             reconnect = True
@@ -1650,6 +1657,7 @@ class MainWindow(QMainWindow):
         self._hier_thread.finished.connect(self._update_ayon_visuals)
         self._hier_thread.finished.connect(self._restore_ayon_selection)
         self._hier_thread.finished.connect(self._refresh_ayon_panel_icons)
+        self._hier_thread.finished.connect(self.trigger_ayon_thumbnail_downloads)
         self._hier_thread.start()
 
     def resizeEvent(self, event):
@@ -3931,6 +3939,7 @@ class MainWindow(QMainWindow):
         self.model.show_thumbs = checked
         if checked:
             self.update_ayon_thumbnails()
+            self.trigger_ayon_thumbnail_downloads()
         self.model.layoutChanged.emit()
         self._refresh_ayon_panel_icons()
 
@@ -3949,6 +3958,9 @@ class MainWindow(QMainWindow):
     def trigger_ayon_thumbnail_downloads(self):
         if not self.config.get("get_ayon_thumbnails", True):
             self.log_message("AYON task thumbnails download is disabled in preferences.", "info")
+            return
+
+        if not self.ayon_panel.btn_show_thumbs.isChecked():
             return
 
         project_name = self.ayon_panel.combo_project.currentText()
@@ -3988,12 +4000,37 @@ class MainWindow(QMainWindow):
         
         project_cache_dir = os.path.join(cache_root, project_name)
         
+        # Filter tasks_info based on local disk state and known states
+        filtered_tasks_info = []
+        for info in tasks_info:
+            thumb_id = info["thumbnailId"]
+            target_path = os.path.join(project_cache_dir, f"{thumb_id}.jpg")
+            
+            if os.path.exists(target_path):
+                self.ayon_thumb_states[thumb_id] = "cached"
+                continue
+                
+            state = self.ayon_thumb_states.get(thumb_id)
+            if state in ("not available", "downloading", "downloaded", "cached"):
+                continue
+                
+            filtered_tasks_info.append(info)
+            self.ayon_thumb_states[thumb_id] = "downloading"
+            
+        if not filtered_tasks_info:
+            self._refresh_ayon_panel_icons()
+            return
+            
         self._ayon_thumb_download_thread = AyonThumbnailDownloadThread(
-            project_name, tasks_info, project_cache_dir
+            project_name, filtered_tasks_info, project_cache_dir
         )
         self._ayon_thumb_download_thread.log.connect(lambda msg: self.log_message(msg, "info"))
+        self._ayon_thumb_download_thread.state_changed.connect(self._on_task_thumb_state_changed)
         self._ayon_thumb_download_thread.finished.connect(self._refresh_ayon_panel_icons)
         self._ayon_thumb_download_thread.start()
+
+    def _on_task_thumb_state_changed(self, thumb_id, state):
+        self.ayon_thumb_states[thumb_id] = state
 
 
     def update_ayon_thumbnails(self):
@@ -4026,17 +4063,36 @@ class MainWindow(QMainWindow):
                 item.ayon_thumbnail = self.ayon_thumb_cache[f_id]
                 continue
                 
-            # If not cached and not currently downloading, start download
-            if f_id not in self.ayon_thumb_downloading:
-                print(f"Downloading thumbnail for folder ID '{f_id}' in project '{project}' from AYON...")
-                self.ayon_thumb_downloading.add(f_id)
+            # Check local file first
+            try:
+                local_thumb_path = self._get_ayon_thumb_path(item)
+                if os.path.exists(local_thumb_path):
+                    from PySide6.QtGui import QPixmap
+                    pixmap = QPixmap(local_thumb_path)
+                    if not pixmap.isNull():
+                        self.ayon_thumb_cache[f_id] = pixmap
+                        self.ayon_thumb_states[f_id] = "cached"
+                        item.ayon_thumbnail = pixmap
+                        item.thumbnail = pixmap
+                        continue
+            except Exception as e:
+                print(f"Error checking/loading local thumbnail: {e}")
                 
-                # Start background thread
-                thread = AyonFolderThumbnailThread(self.ayon, project, f_id)
-                thread.download_finished.connect(self._on_ayon_thumbnail_downloaded)
-                # Keep thread reference
-                self._thumb_threads.append(thread)
-                thread.start()
+            state = self.ayon_thumb_states.get(f_id)
+            if state in ("not available", "downloading", "downloaded", "cached"):
+                continue
+                
+            # If not cached and not currently downloading, start download
+            print(f"Downloading thumbnail for folder ID '{f_id}' in project '{project}' from AYON...")
+            self.ayon_thumb_states[f_id] = "downloading"
+            self.ayon_thumb_downloading.add(f_id)
+            
+            # Start background thread
+            thread = AyonFolderThumbnailThread(self.ayon, project, f_id)
+            thread.download_finished.connect(self._on_ayon_thumbnail_downloaded)
+            # Keep thread reference
+            self._thumb_threads.append(thread)
+            thread.start()
 
     def _get_ayon_thumb_path(self, item):
         """Construct a thumbnail path using AYON folder path, replacing slashes with dashes, adding suffix '_thumbAyon'."""
@@ -4079,6 +4135,7 @@ class MainWindow(QMainWindow):
                 pixmap = QPixmap.fromImage(image)
                 # Cache it
                 self.ayon_thumb_cache[folder_id] = pixmap
+                self.ayon_thumb_states[folder_id] = "downloaded"
                 
                 # Assign to all items with matching folder path
                 path_map = self.ayon_panel.get_path_to_id_map()
@@ -4105,6 +4162,10 @@ class MainWindow(QMainWindow):
                 self.model.layoutChanged.emit()
                 if self.spreadsheet._is_csv_mode:
                     self.csv_preview_model._refresh_data()
+            else:
+                self.ayon_thumb_states[folder_id] = "not available"
+        else:
+            self.ayon_thumb_states[folder_id] = "not available"
 
     def _on_ayon_representations_requested(self, project, product_id):
         """Asynchronously load representations for the selected product."""
@@ -4764,6 +4825,7 @@ class AyonFolderThumbnailThread(QThread):
 class AyonThumbnailDownloadThread(QThread):
     finished = Signal()
     log = Signal(str)
+    state_changed = Signal(str, str)  # (thumb_id, state)
 
     def __init__(self, project_name, tasks_info, cache_dir):
         super().__init__()
@@ -4784,6 +4846,7 @@ class AyonThumbnailDownloadThread(QThread):
             target_path = os.path.join(self.cache_dir, f"{thumb_id}.jpg")
             if os.path.exists(target_path):
                 skip_count += 1
+                self.state_changed.emit(thumb_id, "cached")
                 continue
 
             try:
@@ -4793,8 +4856,13 @@ class AyonThumbnailDownloadThread(QThread):
                     if image.loadFromData(thumbnail.content):
                         image.save(target_path, "JPG")
                         download_count += 1
+                        self.state_changed.emit(thumb_id, "downloaded")
+                    else:
+                        self.state_changed.emit(thumb_id, "not available")
+                else:
+                    self.state_changed.emit(thumb_id, "not available")
             except Exception as e:
-                pass
+                self.state_changed.emit(thumb_id, "not available")
 
         if download_count > 0 or skip_count > 0:
             self.log.emit(f"AYON task thumbnails update finished. Downloaded: {download_count}, Skipped: {skip_count}")
