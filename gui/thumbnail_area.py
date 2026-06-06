@@ -212,6 +212,8 @@ class TextNoteItem(QGraphicsObject):
         super().mouseDoubleClickEvent(event)
 
     def on_text_focus_out(self, event):
+        if self.text_item.textInteractionFlags() == Qt.NoTextInteraction:
+            return
         self.text_item.setTextInteractionFlags(Qt.NoTextInteraction)
         self.text_item.setAcceptedMouseButtons(Qt.NoButton)
         # Clear the text cursor selection
@@ -224,7 +226,9 @@ class TextNoteItem(QGraphicsObject):
         scene = self.scene()
         if scene:
             parent = scene.parent()
-            if parent and hasattr(parent, "scene_items_changed"):
+            if parent and hasattr(parent, "notify_scene_items_changed"):
+                parent.notify_scene_items_changed()
+            elif parent and hasattr(parent, "scene_items_changed"):
                 parent.scene_items_changed.emit()
 
     def focusOutEvent(self, event):
@@ -1024,20 +1028,29 @@ class BackdropItem(QGraphicsObject):
         
         # Top-left
         painter.drawPolygon([QPointF(0,0), QPointF(cs, 0), QPointF(0, cs)])
-        # Top-right (also acts as delete button)
+        # Top-right
         painter.drawPolygon([QPointF(self.width,0), QPointF(self.width - cs, 0), QPointF(self.width, cs)])
         # Bottom-left
         painter.drawPolygon([QPointF(0, self.height), QPointF(cs, self.height), QPointF(0, self.height - cs)])
         # Bottom-right
         painter.drawPolygon([QPointF(self.width, self.height), QPointF(self.width - cs, self.height), QPointF(self.width, self.height - cs)])
 
-        # 7. Delete × symbol on the top-right corner triangle
-        # Draw a small × centered within the triangle's visual area
-        cross_cx = self.width - cs * 0.30  # x center of ×
-        cross_cy = cs * 0.30              # y center of ×
-        cross_r = cs * 0.13              # half-size of the × arms
-        cross_color = Qt.black if self.border_color.lightness() > 128 else Qt.white
-        cross_pen = QPen(cross_color, max(3, cs * 0.06))
+        # 7. Delete × symbol on the top bar's right end
+        btn_x = self.width - cs - self.top_bar_height
+        cross_cx = btn_x + self.top_bar_height / 2
+        cross_cy = self.top_bar_height / 2
+        cross_r = self.top_bar_height * 0.2
+        
+        # Decide contrast color
+        contrast_color = Qt.black if self.border_color.lightness() > 128 else Qt.white
+        
+        # Draw separator line
+        sep_pen = QPen(contrast_color, 2)
+        painter.setPen(sep_pen)
+        painter.drawLine(QPointF(btn_x, 0), QPointF(btn_x, self.top_bar_height))
+        
+        # Draw the × cross
+        cross_pen = QPen(contrast_color, max(3, self.top_bar_height * 0.06))
         cross_pen.setCapStyle(Qt.RoundCap)
         painter.setPen(cross_pen)
         painter.drawLine(QPointF(cross_cx - cross_r, cross_cy - cross_r),
@@ -1048,26 +1061,30 @@ class BackdropItem(QGraphicsObject):
         painter.restore()
 
     def _is_in_delete_zone(self, x, y):
-        """Check if (x, y) is within the top-right delete × area."""
+        """Check if (x, y) is within the top-bar right-side delete × area."""
         cs = self.corner_size
-        # The delete × is in the top-right triangle; require point is above the triangle hypotenuse
-        return x > self.width - cs and y < cs and ((self.width - x) + y) < cs
+        button_w = self.top_bar_height
+        return (self.width - cs - button_w <= x <= self.width - cs) and (0 <= y <= self.top_bar_height)
 
     def mousePressEvent(self, event):
         pos = event.pos()
         x, y = pos.x(), pos.y()
         cs = self.corner_size
+        print(f"DEBUG PRESS: x={x}, y={y}, is_movable={self.flags() & QGraphicsItem.ItemIsMovable}")
         
-        # Check delete button first (top-left corner triangle)
+        # Check delete button first
         if self._is_in_delete_zone(x, y):
             event.accept()
             self.delete_requested.emit(self)
             return
 
-        # Check resize corners (skip top-right since it's the delete zone)
+        # Check resize corners
         if x < cs and y < cs:
             self._resizing = True
             self._resize_corner = "top_left"
+        elif x > self.width - cs and y < cs:
+            self._resizing = True
+            self._resize_corner = "top_right"
         elif x < cs and y > self.height - cs:
             self._resizing = True
             self._resize_corner = "bottom_left"
@@ -1091,6 +1108,8 @@ class BackdropItem(QGraphicsObject):
                 # Populating offsets for items inside the backdrop (like thumbnails and text notes)
                 for item in self.scene().items(backdrop_rect):
                     if item == self or item.parentItem(): continue
+                    if not isinstance(item, (ThumbnailItem, TextNoteItem)):
+                        continue
                     if item.isSelected() and self.isSelected(): continue
                     if backdrop_rect.contains(item.sceneBoundingRect().center()):
                         self._content_offsets[item] = item.pos() - self.pos()
@@ -1150,9 +1169,9 @@ class BackdropItem(QGraphicsObject):
         self._resizing = False
         self._resize_corner = None
         self._is_dragging_top_bar = False
-        self._content_offsets = {}
         self.setFlag(QGraphicsItem.ItemIsMovable, True) # Restore for selection/other uses
         super().mouseReleaseEvent(event)
+        self._content_offsets = {}
 
     def itemChange(self, change, value):
         return super().itemChange(change, value)
@@ -1367,6 +1386,7 @@ class ThumbnailArea(QWidget):
         self._last_age_filter = (False, 0)
         self._last_search_text = ""
         self.tooltip_templates = {}
+        self._deferred_scene_items_change = False
         
         self.player_mode = "selected" # "stop", "selected", "all"
         self.active_players = {} # mapping: ThumbnailItem -> VideoPlayerOverlay
@@ -2077,6 +2097,8 @@ class ThumbnailArea(QWidget):
                     self.scene.clearSelection()
 
         if event.type() == QEvent.MouseButtonRelease:
+            # Process deferred change after the mouse release is finished
+            QTimer.singleShot(0, self._process_deferred_scene_items_changed)
             if self._is_panning:
                 self._is_panning = False
                 self.view.viewport().setCursor(Qt.ArrowCursor)
@@ -2648,6 +2670,17 @@ class ThumbnailArea(QWidget):
         item_data.is_high_res_loading = False
         if item_data in self.item_to_thumb:
             self.item_to_thumb[item_data].on_high_res_ready()
+
+    def notify_scene_items_changed(self):
+        if self.scene.mouseGrabberItem() is not None:
+            self._deferred_scene_items_change = True
+        else:
+            self.scene_items_changed.emit()
+
+    def _process_deferred_scene_items_changed(self):
+        if getattr(self, "_deferred_scene_items_change", False):
+            self._deferred_scene_items_change = False
+            self.scene_items_changed.emit()
 
     def get_scene_item_summaries(self):
         res = []
