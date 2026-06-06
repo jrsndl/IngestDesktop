@@ -1025,6 +1025,7 @@ class MainWindow(QMainWindow):
                     pos = saved_positions.get(item.file_path)
                     if pos is not None:
                         item.position = pos
+                        item.is_manually_moved = True
                         thumb.setPos(pos[0], pos[1])
                         thumb.is_manually_moved = True
 
@@ -3196,10 +3197,122 @@ class MainWindow(QMainWindow):
             self._selection_lock = False
 
     def _save_filter_toggles(self):
+        old_v_stack = getattr(self.model, "v_stack_enabled", False)
+        new_v_stack = self.filter_panel.btn_v_stack.isChecked()
+        
         self.config["filter_toggles"] = self.filter_panel.get_toggle_states()
         self.save_config()
         self._connect_filter_selection_signal()
-        self.model.v_stack_enabled = self.filter_panel.btn_v_stack.isChecked()
+        self.model.v_stack_enabled = new_v_stack
+        
+        if old_v_stack != new_v_stack:
+            if new_v_stack:
+                # Transition: Version Stack Off -> Version Stack On
+                # For every version stack, the highest stacked item (physically highest, i.e., min y coordinate)
+                # is the "base position" that will be used for the stack.
+                for key, stack in self.model.version_stacks.items():
+                    highest_item = None
+                    min_y = float('inf')
+                    
+                    for item in stack["items"]:
+                        thumb = self.thumb_area.item_to_thumb.get(item)
+                        pos = thumb.pos() if thumb else None
+                        if pos is None:
+                            pos = item.position
+                            
+                        if pos is not None:
+                            y_val = pos.y() if hasattr(pos, 'y') else pos[1]
+                            if y_val < min_y:
+                                min_y = y_val
+                                highest_item = item
+                                
+                    if highest_item:
+                        picked_ver = stack["picked"]
+                        picked_item = None
+                        for item in stack["items"]:
+                            if item.version == picked_ver:
+                                picked_item = item
+                                break
+                        if not picked_item:
+                            picked_item = stack["items"][0]
+                            
+                        h_thumb = self.thumb_area.item_to_thumb.get(highest_item)
+                        pos_to_use = h_thumb.pos() if h_thumb else highest_item.position
+                        is_manual = h_thumb.is_manually_moved if h_thumb else getattr(highest_item, "is_manually_moved", False)
+                        
+                        if pos_to_use is not None:
+                            pos_tuple = (pos_to_use.x(), pos_to_use.y()) if hasattr(pos_to_use, 'x') else pos_to_use
+                            picked_item.position = pos_tuple
+                            picked_item.is_manually_moved = is_manual
+                            
+                            p_thumb = self.thumb_area.item_to_thumb.get(picked_item)
+                            if p_thumb:
+                                p_thumb.setPos(pos_tuple[0], pos_tuple[1])
+                                p_thumb.is_manually_moved = is_manual
+            else:
+                # Transition: Version Stack On -> Version Stack Off
+                # For every version stack, the stacked item (picked version) is the "base position",
+                # and all other versions are positioned vertically below the base position in a way they are not overlapping.
+                # All these items should be marked as manually moved so they don't reflow.
+                for key, stack in self.model.version_stacks.items():
+                    picked_ver = stack["picked"]
+                    picked_item = None
+                    for item in stack["items"]:
+                        if item.version == picked_ver:
+                            picked_item = item
+                            break
+                    if not picked_item: continue
+                    
+                    p_thumb = self.thumb_area.item_to_thumb.get(picked_item)
+                    base_pos = p_thumb.pos() if p_thumb else picked_item.position
+                    if base_pos is None: continue
+                    
+                    base_x = base_pos.x() if hasattr(base_pos, 'x') else base_pos[0]
+                    base_y = base_pos.y() if hasattr(base_pos, 'y') else base_pos[1]
+                    
+                    # Sort other versions descending (highest version to lowest version)
+                    other_items = sorted([it for it in stack["items"] if it != picked_item], key=lambda it: it.version, reverse=True)
+                    
+                    current_y = base_y
+                    prev_item = picked_item
+                    prev_thumb = p_thumb
+                    
+                    for other_item in other_items:
+                        # Bounding height of prev_item
+                        if prev_thumb:
+                            prev_h = prev_thumb.boundingRect().height()
+                        else:
+                            # Calculate height fallback
+                            thumb_size = self.thumb_area.slider_thumb_size.value()
+                            show_text = self.thumb_area.btn_show_text.isChecked()
+                            font_size = self.thumb_area.slider_text_size.value()
+                            line_height = font_size * 1.5
+                            label_area = (line_height * 3.5) + 10 if show_text else 0
+                            
+                            w = prev_item.metadata.get("width", 1)
+                            h = prev_item.metadata.get("height", 1)
+                            try:
+                                fw = float(w) if w is not None else 1.0
+                                fh = float(h) if h is not None else 1.0
+                                aspect = fw / fh if fh > 0 else 1.0
+                            except (ValueError, TypeError):
+                                aspect = 1.0
+                            prev_h = (thumb_size / aspect) + 20 + label_area
+                            
+                        gap_v = self.thumb_area._last_arrange_vals.get("gap_v", 20)
+                        current_y += prev_h + gap_v
+                        
+                        other_item.position = (base_x, current_y)
+                        other_item.is_manually_moved = True
+                        
+                        o_thumb = self.thumb_area.item_to_thumb.get(other_item)
+                        if o_thumb:
+                            o_thumb.setPos(base_x, current_y)
+                            o_thumb.is_manually_moved = True
+                            
+                        prev_item = other_item
+                        prev_thumb = o_thumb
+                        
         self.spreadsheet.update_filtering()
         self.thumb_area.rearrange_items()
 
@@ -3614,9 +3727,29 @@ class MainWindow(QMainWindow):
                 
         if not new_picked: return
         
+        # Track selection state of old thumbnail
+        was_selected = False
+        old_thumb = self.thumb_area.item_to_thumb.get(old_picked) if old_picked else None
+        if old_thumb:
+            was_selected = old_thumb.isSelected()
+        
         # Synchronize tag
         if old_picked:
             new_picked.is_tagged = old_picked.is_tagged
+            
+            # Copy position and manual move state from old_picked to new_picked
+            new_thumb = self.thumb_area.item_to_thumb.get(new_picked)
+            
+            pos = old_thumb.pos() if old_thumb else old_picked.position
+            is_manual = old_thumb.is_manually_moved if old_thumb else getattr(old_picked, "is_manually_moved", False)
+            
+            if pos is not None:
+                pos_val = (pos.x(), pos.y()) if hasattr(pos, 'x') else pos
+                new_picked.position = pos_val
+                new_picked.is_manually_moved = is_manual
+                if new_thumb:
+                    new_thumb.setPos(pos_val[0], pos_val[1])
+                    new_thumb.is_manually_moved = is_manual
             
         # Set new picked version
         stack["picked"] = new_version
@@ -3637,6 +3770,12 @@ class MainWindow(QMainWindow):
             if hasattr(graphics_item, "cached_label"):
                 graphics_item.cached_label = ""
         self.thumb_area.rearrange_items()
+        
+        # Preserve selection
+        if was_selected:
+            new_thumb = self.thumb_area.item_to_thumb.get(new_picked)
+            if new_thumb:
+                new_thumb.setSelected(True)
         
         # Rebuild filter proxy cache
         self.filter_panel.proxy._rebuild_cache()

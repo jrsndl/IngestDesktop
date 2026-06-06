@@ -588,7 +588,7 @@ class ThumbnailItem(QGraphicsObject):
         self.data = item_data
         self.size = 150
         self.font_size = 10
-        self.is_manually_moved = False
+        self.is_manually_moved = getattr(item_data, "is_manually_moved", False)
         self.cached_bw = None
         self.is_editing = False
         self.setAcceptHoverEvents(True)
@@ -888,6 +888,7 @@ class ThumbnailItem(QGraphicsObject):
                                 area.inline_editor.hide()
 
                 self.is_manually_moved = True
+                self.data.is_manually_moved = True
                 self.data.position = (new_pos.x(), new_pos.y())
 
         return super().itemChange(change, value)
@@ -2181,6 +2182,59 @@ class ThumbnailArea(QWidget):
             if focus_item and isinstance(focus_item, QGraphicsTextItem):
                 return False
 
+            # Version stack hotkeys
+            modifiers = event.modifiers()
+            is_alt = bool(modifiers & Qt.AltModifier)
+            is_ctrl = bool(modifiers & Qt.ControlModifier)
+            key_code = event.key()
+            if key_code in (Qt.Key_Up, Qt.Key_Down) and is_alt:
+                if self.model:
+                    selected = self.scene.selectedItems()
+                    selected_thumbs = [it for it in selected if isinstance(it, ThumbnailItem)]
+                    if selected_thumbs:
+                        processed_keys = set()
+                        for thumb_item in selected_thumbs:
+                            item = thumb_item.data
+                            key = self.model.get_version_stack_key(item)
+                            if key in processed_keys:
+                                continue
+                            processed_keys.add(key)
+                            
+                            stack = self.model.version_stacks.get(key)
+                            if not stack or len(stack["items"]) <= 1:
+                                continue
+                                
+                            sorted_versions = sorted([it.version for it in stack["items"]])
+                            current_picked = stack["picked"]
+                            
+                            target_version = None
+                            if is_ctrl and key_code == Qt.Key_Up:
+                                # Max version
+                                max_v = sorted_versions[-1]
+                                if current_picked != max_v:
+                                    target_version = max_v
+                            elif is_ctrl and key_code == Qt.Key_Down:
+                                # Min version
+                                min_v = sorted_versions[0]
+                                if current_picked != min_v:
+                                    target_version = min_v
+                            elif not is_ctrl and key_code == Qt.Key_Up:
+                                # Next version
+                                for v in sorted_versions:
+                                    if v > current_picked:
+                                        target_version = v
+                                        break
+                            elif not is_ctrl and key_code == Qt.Key_Down:
+                                # Previous version
+                                for v in reversed(sorted_versions):
+                                    if v < current_picked:
+                                        target_version = v
+                                        break
+                                        
+                            if target_version is not None:
+                                self.change_version_requested.emit(item, target_version)
+                        return True
+
             # Global shortcuts (only when editor is NOT active)
             if event.key() == Qt.Key_Space:
                 if self.view.underMouse():
@@ -2487,23 +2541,45 @@ class ThumbnailArea(QWidget):
             key = self.model.get_version_stack_key(item)
             stack = self.model.version_stacks.get(key)
             if stack and len(stack["items"]) > 1:
-                sub_menu = menu.addMenu("Version Stack")
-                sorted_items = sorted(stack["items"], key=lambda it: it.version, reverse=True)
-                for v_item in sorted_items:
-                    v = v_item.version
-                    is_picked = (v == stack["picked"])
-                    if is_picked:
-                        action = QAction(f"> {v}", self)
-                        action.setIcon(self._get_green_arrow_icon())
-                        font = action.font()
-                        font.setBold(True)
-                        action.setFont(font)
-                    else:
-                        action = QAction(str(v), self)
-                    action.triggered.connect(lambda checked=False, item_obj=item, ver=v: self.change_version_requested.emit(item_obj, ver))
-                    sub_menu.addAction(action)
+                v_stack_enabled = getattr(self.model, "v_stack_enabled", False)
+                if v_stack_enabled:
+                    sub_menu = menu.addMenu("Version Stack")
+                    sorted_items = sorted(stack["items"], key=lambda it: it.version, reverse=True)
+                    for v_item in sorted_items:
+                        v = v_item.version
+                        is_picked = (v == stack["picked"])
+                        if is_picked:
+                            action = QAction(f"> {v}", self)
+                            action.setIcon(self._get_green_arrow_icon())
+                            font = action.font()
+                            font.setBold(True)
+                            action.setFont(font)
+                        else:
+                            action = QAction(str(v), self)
+                        action.triggered.connect(lambda checked=False, item_obj=item, ver=v: self.change_version_requested.emit(item_obj, ver))
+                        sub_menu.addAction(action)
+                else:
+                    select_action = QAction("Version Stack Select", self)
+                    select_action.triggered.connect(lambda checked=False, it_obj=item: self._select_all_items_in_stack(it_obj))
+                    menu.addAction(select_action)
+                    menu.addSeparator()
 
         menu.exec(event.globalPos())
+
+    def _select_all_items_in_stack(self, item):
+        if not self.model: return
+        key = self.model.get_version_stack_key(item)
+        stack = self.model.version_stacks.get(key)
+        if not stack: return
+        
+        self.scene.blockSignals(True)
+        self.scene.clearSelection()
+        for it in stack["items"]:
+            thumb = self.item_to_thumb.get(it)
+            if thumb:
+                thumb.setSelected(True)
+        self.scene.blockSignals(False)
+        self.scene.selectionChanged.emit()
 
     def move_selected_to_front(self):
         """Raise selected ThumbnailItems above all other thumbnails."""
@@ -2697,6 +2773,7 @@ class ThumbnailArea(QWidget):
             
             item.setPos(new_x, new_y)
             item.is_manually_moved = True
+            item.data.is_manually_moved = True
             item.data.position = (new_x, new_y)
             
         self.scene.update()

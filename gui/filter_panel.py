@@ -774,22 +774,29 @@ class FilterPanel(QWidget):
                 key = self.main_model.get_version_stack_key(item)
                 stack = self.main_model.version_stacks.get(key)
                 if stack and len(stack["items"]) > 1:
-                    sub_menu = menu.addMenu("Version Stack")
-                    sorted_items = sorted(stack["items"], key=lambda it: it.version, reverse=True)
-                    for v_item in sorted_items:
-                        v = v_item.version
-                        is_picked = (v == stack["picked"])
-                        if is_picked:
-                            action = QAction(f"> {v}", self)
-                            action.setIcon(self._get_green_arrow_icon())
-                            font = action.font()
-                            font.setBold(True)
-                            action.setFont(font)
-                        else:
-                            action = QAction(str(v), self)
-                        action.triggered.connect(lambda checked=False, item_obj=item, ver=v: self.change_version_requested.emit(item_obj, ver))
-                        sub_menu.addAction(action)
-                    menu.addSeparator()
+                    v_stack_enabled = getattr(self.main_model, "v_stack_enabled", False)
+                    if v_stack_enabled:
+                        sub_menu = menu.addMenu("Version Stack")
+                        sorted_items = sorted(stack["items"], key=lambda it: it.version, reverse=True)
+                        for v_item in sorted_items:
+                            v = v_item.version
+                            is_picked = (v == stack["picked"])
+                            if is_picked:
+                                action = QAction(f"> {v}", self)
+                                action.setIcon(self._get_green_arrow_icon())
+                                font = action.font()
+                                font.setBold(True)
+                                action.setFont(font)
+                            else:
+                                action = QAction(str(v), self)
+                            action.triggered.connect(lambda checked=False, item_obj=item, ver=v: self.change_version_requested.emit(item_obj, ver))
+                            sub_menu.addAction(action)
+                        menu.addSeparator()
+                    else:
+                        select_action = QAction("Version Stack Select", self)
+                        select_action.triggered.connect(lambda checked=False, it_obj=item: self._select_all_items_in_stack(it_obj))
+                        menu.addAction(select_action)
+                        menu.addSeparator()
         
         act_rename = QAction("Rename to Label", self)
         act_rename.triggered.connect(lambda: self.rename_to_label_requested.emit(paths))
@@ -850,3 +857,10 @@ class FilterPanel(QWidget):
         painter.drawLine(11, 8, 4, 13)
         painter.end()
         return QIcon(pixmap)
+
+    def _select_all_items_in_stack(self, item):
+        key = self.main_model.get_version_stack_key(item)
+        stack = self.main_model.version_stacks.get(key)
+        if not stack: return
+        paths = [it.file_path for it in stack["items"]]
+        self.select_paths(paths)

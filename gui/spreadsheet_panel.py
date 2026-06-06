@@ -2,7 +2,7 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QTableView, QC
                              QPushButton, QHeaderView, QStyledItemDelegate, QMenu, QLabel, 
                              QSpinBox, QSlider, QAbstractItemView, QLineEdit)
 from PySide6.QtGui import QAction
-from PySide6.QtCore import Signal, Qt, QSize, QEvent, QModelIndex
+from PySide6.QtCore import Signal, Qt, QSize, QEvent, QModelIndex, QItemSelection, QItemSelectionModel
 
 class ScalingDelegate(QStyledItemDelegate):
     def paint(self, painter, option, index):
@@ -343,6 +343,23 @@ class SpreadsheetPanel(QWidget):
     def _on_context_menu(self, pos):
         menu = QMenu(self.window())
         
+        # Check Version Stack Select
+        model = self.table.model()
+        if model and not self.btn_csv.isChecked():
+            v_stack_enabled = getattr(model, "v_stack_enabled", False)
+            selected_rows = self.table.selectionModel().selectedRows()
+            if not v_stack_enabled and len(selected_rows) == 1:
+                row = selected_rows[0].row()
+                if row < len(model.items):
+                    item = model.items[row]
+                    key = model.get_version_stack_key(item)
+                    stack = model.version_stacks.get(key)
+                    if stack and len(stack["items"]) > 1:
+                        select_action = QAction("Version Stack Select", self)
+                        select_action.triggered.connect(lambda checked=False, it_obj=item: self._select_all_items_in_stack(it_obj))
+                        menu.addAction(select_action)
+                        menu.addSeparator()
+        
         tag_action = QAction("Enable/Disable Selected", self)
         tag_action.triggered.connect(lambda: self.label_action_requested.emit("tag", None))
         menu.addAction(tag_action)
@@ -380,6 +397,24 @@ class SpreadsheetPanel(QWidget):
         menu.addAction(trim_left_action)
         
         menu.exec(self.table.viewport().mapToGlobal(pos))
+
+    def _select_all_items_in_stack(self, item):
+        model = self.table.model()
+        if not model: return
+        key = model.get_version_stack_key(item)
+        stack = model.version_stacks.get(key)
+        if not stack: return
+        
+        selection_model = self.table.selectionModel()
+        selection = QItemSelection()
+        for r in range(model.rowCount()):
+            row_item = model.items[r]
+            if row_item in stack["items"]:
+                index_first = model.index(r, 0)
+                index_last = model.index(r, model.columnCount() - 1)
+                selection.select(index_first, index_last)
+                
+        selection_model.select(selection, QItemSelectionModel.ClearAndSelect)
 
     def _on_header_context_menu(self, pos):
         menu = QMenu(self.window())

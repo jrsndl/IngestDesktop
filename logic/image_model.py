@@ -45,6 +45,7 @@ class ImageItem:
         self.modification_time = 0
         self.age_minutes = 0 
         self.position = (0, 0) # (x, y)
+        self.is_manually_moved = False
         self.preset_name = preset_name
         self.variant = variant
         self.product_type = product_type
