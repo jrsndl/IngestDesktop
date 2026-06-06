@@ -418,6 +418,7 @@ class MainWindow(QMainWindow):
         self.thumb_area.paste_requested.connect(self.perform_paste_image)
         self.thumb_area.queue_requested.connect(self.show_queue_dialog)
         self.thumb_area.scene_items_changed.connect(self._sync_scene_items_to_filter)
+        self.thumb_area.change_version_requested.connect(self.change_version_stack_picked_version)
         self.v_splitter.addWidget(self.thumb_area)
         
         self.spreadsheet = SpreadsheetPanel(self)
@@ -450,12 +451,14 @@ class MainWindow(QMainWindow):
         # Load initial toggle states
         toggles = self.config.get("filter_toggles", {})
         self.filter_panel.set_toggle_states(toggles)
+        self.model.v_stack_enabled = self.filter_panel.btn_v_stack.isChecked()
         
         self._connect_filter_selection_signal()
         self.filter_panel.rename_to_label_requested.connect(self._on_rename_to_label_requested)
         self.filter_panel.delete_scene_items_requested.connect(self._on_filter_delete_scene_items)
         self.filter_panel.edit_scene_item_requested.connect(self._on_filter_edit_scene_item)
         self.filter_panel.move_front_back_requested.connect(self._on_filter_move_front_back)
+        self.filter_panel.change_version_requested.connect(self.change_version_stack_picked_version)
         self.h_splitter.addWidget(self.filter_panel)
 
         self.main_layout.addWidget(self.h_splitter, 1)
@@ -1269,7 +1272,7 @@ class MainWindow(QMainWindow):
         else:
             self.trigger_ayon_thumbnail_downloads()
 
-    def start_conversions(self, items, force=False):
+    def start_conversions(self, items, force=False, force_review=False):
         """Start background conversion of thumbnails based on preferences."""
         if self._conv_worker and self._conv_worker.isRunning():
             self._conv_worker.cancel()
@@ -1281,7 +1284,7 @@ class MainWindow(QMainWindow):
         self._conv_worker.item_updated.connect(self._on_conversion_item_updated)
         self._conv_worker.log.connect(lambda msg: self.log_message(msg))
         self._conv_worker.status_text.connect(lambda txt: self.statusBar().showMessage(txt))
-        self._conv_worker.finished.connect(self.start_review_conversions)
+        self._conv_worker.finished.connect(lambda: self.start_review_conversions(force=force_review))
         self._conv_worker.start()
 
     def start_review_conversions(self, force=False, reset=False, force_overwrite=False):
@@ -1738,9 +1741,13 @@ class MainWindow(QMainWindow):
         self.thumb_area.set_tooltip_templates(tt_templates)
         
         # Update Filter Panel sequence display
+        version_regex = self.config.get("version_regex", r"([._]v|v)(\d+)")
+        self.model.version_regex = version_regex
+        self.model.rebuild_version_stacks()
+        
         self.filter_panel.set_sequence_detection(
             self.config.get("detect_sequences", True),
-            self.config.get("version_regex", r"([._]v|v)(\d+)")
+            version_regex
         )
         
         if save:
@@ -3088,7 +3095,11 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, "Deadline Submission Summary", summary_msg)
 
     def _get_tagged_for_ingest(self):
-        tagged_items = [item for item in self.model.items if item.is_tagged]
+        v_stack_enabled = getattr(self.model, "v_stack_enabled", False)
+        tagged_items = [
+            item for item in self.model.items 
+            if item.is_tagged and (not v_stack_enabled or self.model.is_item_visible_by_v_stack(item, True))
+        ]
         if not tagged_items:
             QMessageBox.warning(self, "Ingest", "No images tagged for ingest.")
             return None
@@ -3188,6 +3199,9 @@ class MainWindow(QMainWindow):
         self.config["filter_toggles"] = self.filter_panel.get_toggle_states()
         self.save_config()
         self._connect_filter_selection_signal()
+        self.model.v_stack_enabled = self.filter_panel.btn_v_stack.isChecked()
+        self.spreadsheet.update_filtering()
+        self.thumb_area.rearrange_items()
 
     def _connect_filter_selection_signal(self):
         try:
@@ -3575,6 +3589,60 @@ class MainWindow(QMainWindow):
             it.setSelected(True)
 
 
+
+    def change_version_stack_picked_version(self, item, new_version):
+        key = self.model.get_version_stack_key(item)
+        stack = self.model.version_stacks.get(key)
+        if not stack: return
+        
+        old_version = stack["picked"]
+        if old_version == new_version: return
+        
+        # Get old picked item
+        old_picked = None
+        for it in stack["items"]:
+            if it.version == old_version:
+                old_picked = it
+                break
+                
+        # Get new picked item
+        new_picked = None
+        for it in stack["items"]:
+            if it.version == new_version:
+                new_picked = it
+                break
+                
+        if not new_picked: return
+        
+        # Synchronize tag
+        if old_picked:
+            new_picked.is_tagged = old_picked.is_tagged
+            
+        # Set new picked version
+        stack["picked"] = new_version
+        
+        # Set review status to waiting if review is enabled in presets
+        p_data = new_picked.preset_data or {}
+        if p_data.get("Convert Review", True):
+            new_picked.review_status = "waiting"
+        else:
+            new_picked.review_status = "do not convert"
+            
+        # Refresh UI
+        self.model.layoutChanged.emit()
+        self.spreadsheet.update_filtering()
+        
+        # Reset cached labels in all ThumbnailItems and rearrange
+        for graphics_item in self.thumb_area.scene.items():
+            if hasattr(graphics_item, "cached_label"):
+                graphics_item.cached_label = ""
+        self.thumb_area.rearrange_items()
+        
+        # Rebuild filter proxy cache
+        self.filter_panel.proxy._rebuild_cache()
+        
+        # Start conversion for the newly picked item
+        self.start_conversions([new_picked], force=False, force_review=True)
 
     def _on_label_action(self, action, data):
         if action in ["tag", "enable"]:

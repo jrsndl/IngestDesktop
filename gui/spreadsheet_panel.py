@@ -259,7 +259,9 @@ class SpreadsheetPanel(QWidget):
         age_enabled, age_val = self._last_age_filter
         search_term = self._last_search_text
         
-        if not selected_only and not tagged_only and not assigned_only and not age_enabled and not search_term:
+        v_stack_enabled = getattr(self.table.model(), "v_stack_enabled", False)
+        
+        if not selected_only and not tagged_only and not assigned_only and not age_enabled and not search_term and not v_stack_enabled:
             for row in range(self.table.model().rowCount()):
                 self.table.setRowHidden(row, False)
             return
@@ -285,6 +287,9 @@ class SpreadsheetPanel(QWidget):
             if age_enabled and not is_young_enough:
                 hidden = True
             if search_term and not matches_search:
+                hidden = True
+            
+            if v_stack_enabled and not self.table.model().is_item_visible_by_v_stack(item, True):
                 hidden = True
                 
             self.table.setRowHidden(row, hidden)

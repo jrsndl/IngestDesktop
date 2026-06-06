@@ -8,7 +8,7 @@ from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtCore import Qt, QRectF, QPointF, Signal, QSize, QEvent, QTimer, QRegularExpression, QRunnable, QThreadPool, QObject
 from PySide6.QtGui import (QPainter, QPen, QColor, QAction, QPixmap, QFontMetrics, 
                          QRegularExpressionValidator, QImage, QFont, QTextOption, 
-                         QHelpEvent, QTextCharFormat, QTextCursor, QPainterPath, QPolygonF)
+                         QHelpEvent, QTextCharFormat, QTextCursor, QPainterPath, QPolygonF, QIcon)
 from PySide6.QtWidgets import QToolTip
 
 class NoteTextItem(QGraphicsTextItem):
@@ -805,7 +805,14 @@ class ThumbnailItem(QGraphicsObject):
             label_rect = QRectF(label_x, thumb_rect.bottom() + 5, label_w, label_height)
             
             if not self.cached_label:
-                self.cached_label = f"{self.data.label} (v{self.data.version})"
+                v_stack_enabled = getattr(self.data.model, "v_stack_enabled", False) if self.data.model else False
+                key = self.data.model.get_version_stack_key(self.data) if (self.data.model and v_stack_enabled) else None
+                stack = self.data.model.version_stacks.get(key) if (key and self.data.model) else None
+                
+                if v_stack_enabled and stack and len(stack["items"]) > 1:
+                    self.cached_label = f"{self.data.label} <{stack['min']}-{stack['max']}>@{stack['picked']}"
+                else:
+                    self.cached_label = f"{self.data.label} (v{self.data.version})"
             
             t_opt = QTextOption(Qt.AlignLeft | Qt.AlignTop)
             t_opt.setWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
@@ -1367,6 +1374,7 @@ class ThumbnailArea(QWidget):
     paste_requested = Signal()
     queue_requested = Signal()
     scene_items_changed = Signal()
+    change_version_requested = Signal(object, int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1933,6 +1941,8 @@ class ThumbnailArea(QWidget):
         age_enabled, age_val = self._last_age_filter
         search_term = self._last_search_text
 
+        v_stack_enabled = getattr(self.model, "v_stack_enabled", False)
+
         visible_items = []
         for item_data in self.model.items:
             item = self.item_to_thumb.get(item_data)
@@ -1953,7 +1963,9 @@ class ThumbnailArea(QWidget):
                               search_term in item_data.label.lower() or 
                               search_term in item_data.filename.lower())
             
-            if show_by_tag and in_path and is_young_enough and matches_search:
+            is_visible_ver = not v_stack_enabled or self.model.is_item_visible_by_v_stack(item_data, True)
+            
+            if show_by_tag and in_path and is_young_enough and matches_search and is_visible_ver:
                 item.show()
                 visible_items.append(item)
             else:
@@ -2091,10 +2103,27 @@ class ThumbnailArea(QWidget):
                     self.view.viewport().setCursor(Qt.ClosedHandCursor)
                     return True
                     
-                if not self.view.itemAt(event.pos()):
-                    # Exit edit mode on any active text note before clearing selection
-                    self._exit_active_note_edit()
-                    self.scene.clearSelection()
+                if event.button() == Qt.RightButton:
+                    # Select the item under the mouse if it's not already selected,
+                    # but do not clear selection if right-clicking empty space or a selected item.
+                    item = self.view.itemAt(event.pos())
+                    selectable_item = None
+                    temp = item
+                    while temp:
+                        if temp.flags() & QGraphicsItem.ItemIsSelectable:
+                            selectable_item = temp
+                            break
+                        temp = temp.parentItem()
+                        
+                    if selectable_item:
+                        if not selectable_item.isSelected():
+                            self.scene.clearSelection()
+                            selectable_item.setSelected(True)
+                else:
+                    if not self.view.itemAt(event.pos()):
+                        # Exit edit mode on any active text note before clearing selection
+                        self._exit_active_note_edit()
+                        self.scene.clearSelection()
 
         if event.type() == QEvent.MouseButtonRelease:
             # Process deferred change after the mouse release is finished
@@ -2452,6 +2481,28 @@ class ThumbnailArea(QWidget):
             open_review_action.triggered.connect(_open_video)
             menu.addAction(open_review_action)
             
+        if len(selected_thumbs) == 1 and self.model:
+            thumb_item = selected_thumbs[0]
+            item = thumb_item.data
+            key = self.model.get_version_stack_key(item)
+            stack = self.model.version_stacks.get(key)
+            if stack and len(stack["items"]) > 1:
+                sub_menu = menu.addMenu("Version Stack")
+                sorted_items = sorted(stack["items"], key=lambda it: it.version, reverse=True)
+                for v_item in sorted_items:
+                    v = v_item.version
+                    is_picked = (v == stack["picked"])
+                    if is_picked:
+                        action = QAction(f"> {v}", self)
+                        action.setIcon(self._get_green_arrow_icon())
+                        font = action.font()
+                        font.setBold(True)
+                        action.setFont(font)
+                    else:
+                        action = QAction(str(v), self)
+                    action.triggered.connect(lambda checked=False, item_obj=item, ver=v: self.change_version_requested.emit(item_obj, ver))
+                    sub_menu.addAction(action)
+
         menu.exec(event.globalPos())
 
     def move_selected_to_front(self):
@@ -2886,3 +2937,14 @@ class ThumbnailArea(QWidget):
         else:
             self.remove_backdrop_safely(backdrop)
         self.scene_items_changed.emit()
+
+    def _get_green_arrow_icon(self):
+        pixmap = QPixmap(16, 16)
+        pixmap.fill(Qt.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(QPen(QColor("#4caf50"), 3))
+        painter.drawLine(4, 3, 11, 8)
+        painter.drawLine(11, 8, 4, 13)
+        painter.end()
+        return QIcon(pixmap)

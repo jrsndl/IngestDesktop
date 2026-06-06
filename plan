@@ -534,3 +534,54 @@ Thumbnail View Enhancement: draw precedence
 - text notes above thumbnails and backdrops
 
 text note: when not in text edit mode, and only text note(s) are selected, pressinf delete key deletes the note(s)
+
+
+
+Version Stack Feature:
+This feature allows user to pick the version (in the filter panel) to display / ingest, and ignore other versions.
+After scanning for files, check for files with identical file names and extensions, that only differ in the version number (version already parsed with preferences - autoassign - version regex).
+When "Version Stack" toggle button is on in the right panel, collapse all the matching file names to just one line. To indicate the line is a version stack, show version notation in a form filename.ext <1-7>@7 in the right panel. This indicates the lowest version, highest version, and user-picked version ( <min-max>@picked ). The user picked version is the highest version by default. Use the same <min-max>@picked version stack indication in thumbnail view (replacing the (version) text if item is a version stack).
+
+User can hand pick the version by using the filter panel or thumbnail panel context menu. When user selects the version stack (single select only), context menu adds the version stack item (submenu); when clicking it, it displays the version numbers detected for the version stack, sorted so maximum version is displayed on top. Currently picked version is marked by preciding it with green bold ">".
+Clicking different version number than the picked one (changing the picked vertsion) will:
+* refresh the version stack indicator: <min-max>@picked where picked will be newly picked version, in right panel and thumbnail view
+* convert / load thumbnail for that version
+* convert / load review for that version
+
+
+please do not consider the path to file for the version stack at all, only the file name. for example those two file sequences will be considered a stack: (same clean nam,e "seq", version match 1/3)
+* c:\fooo\bar\seq_v001.[1001-1010].exr
+* d:/some/other\seq_v003.[1001-1012].exr
+
+those two will not be considered a stack (extension differs)
+* c:\foo\bar\seq_v001.[1001-1010].exr
+* c:\foo\bar\seq_v001.[1001-1010].jpg
+
+for checking version stack, consider the category:
+file sequence category (example seq_v001.[1001-1010].exr): 
+1. remove file counter: seq_v001..exr
+2. remove file counter separator if exist (underscore or dot just before the file counter): seq_v001.exr
+3. remove the version by the regex, make sure to remove the whole regex match not the number only. For regex _v(\d+)  : seq.exr (so removing _v001, and storing version number "001" as int 1)
+
+still / video / other category (example seq_v001.mov): 
+1. remove the version by the regex, make sure to remove the whole regex match not the number only. For regex _v(\d+)  : seq.mov (so removing _v001, and storing version number "001" as int 1)
+
+Version Stack: Thumbnail View Item Position Handling:
+In Version Stack mode (on):
+* when user picks a different version for the stack, the item (thumbnail) position should be copied from original to changed version, so thumbnail doesn't change position while switching version.
+* when switching from Version Stack On to Version Stack Off, for every version stack, the stacked item is the "base position", and all other versions are positioned vertically below the base position in a way they are not overlapping.
+  
+In Version Stack mode (off):
+* when switching from Version Stack Off to Version Stack On, for every version stack, the highest stacked item is the "base position" that will be used for the stack
+
+Context menu for Thumbnail view and right panel: Add "Version Stack Select", this will only be available in Version Stack mode (off) and single item selected, if item can be part of the version stack. This context menu commmad will not collapse the items to version stack, but will selectg all items that would be part of the same version stack
+  
+
+
+
+
+
+
+Backdrop Enhancements:
+* the top bar / handle left corner: the cross symbol to delete the backdrop (but not in's content!) should be moved from the top left corner to the very right of the top bar, so backdrop resize is working even for top right corner
+  

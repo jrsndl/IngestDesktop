@@ -4,6 +4,20 @@ from utils import strip_sequence_counter, app_dir
 from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex, Signal
 from PySide6.QtGui import QPixmap, QColor
 
+def parse_version_folder(directory, version_regex):
+    if not directory:
+        return None, None
+    base = os.path.basename(directory)
+    match = re.match(r"^" + version_regex + r"$", base, re.IGNORECASE)
+    if match:
+        try:
+            ver = int(match.group(2))
+            parent = os.path.dirname(directory)
+            return parent, ver
+        except (IndexError, ValueError):
+            pass
+    return None, None
+
 class ImageItem:
     def __init__(self, file_path, label=None, version=1, category="Other", 
                  preset_name=None, variant=None, product_type=None, camel_case=True,
@@ -47,6 +61,7 @@ class ImageItem:
         self.version_collision = None
         self.comment = comment
         self.ingest_status = "unknown"
+        self.model = None
 
 class ImageTableModel(QAbstractTableModel):
     data_changed = Signal()
@@ -56,9 +71,21 @@ class ImageTableModel(QAbstractTableModel):
         "Last Version", "Age", "Review", "AYON Path", "Key Value Pairs", "Ingest Status"
     ]
 
+    @property
+    def items(self):
+        return self._items
+
+    @items.setter
+    def items(self, value):
+        self._items = value
+        self.rebuild_version_stacks()
+
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.items = []
+        self._items = []
+        self.v_stack_enabled = False
+        self.version_regex = r"([._]v|v)(\d+)"
+        self.version_stacks = {}
         self.presets = {} # category -> preset_name
         self.age_unit = "minutes" # minutes, hours, days
         self.label_allowed_regex = "^[a-zA-Z0-9_\\-\\.\\s]*$"
@@ -239,7 +266,8 @@ class ImageTableModel(QAbstractTableModel):
 
     def clear(self):
         self.beginResetModel()
-        self.items = []
+        self._items = []
+        self.version_stacks = {}
         self.endResetModel()
 
     def set_age_unit(self, unit):
@@ -249,15 +277,78 @@ class ImageTableModel(QAbstractTableModel):
 
     def add_items(self, new_items):
         for item in new_items:
+            item.model = self
             if hasattr(item, "thumbnail_image") and item.thumbnail_image:
                 item.thumbnail = QPixmap.fromImage(item.thumbnail_image)
                 try:
                     delattr(item, "thumbnail_image")
                 except AttributeError:
                     pass
-        self.beginInsertRows(QModelIndex(), len(self.items), len(self.items) + len(new_items) - 1)
-        self.items.extend(new_items)
+        self.beginInsertRows(QModelIndex(), len(self._items), len(self._items) + len(new_items) - 1)
+        self._items.extend(new_items)
+        self.rebuild_version_stacks()
         self.endInsertRows()
+
+    def get_version_stack_key(self, item):
+        import os
+        import re
+        from utils import strip_sequence_counter
+        
+        filename = os.path.basename(item.file_path)
+        version_regex = getattr(self, "version_regex", r"([._]v|v)(\d+)")
+        
+        if item.is_sequence:
+            # 1. remove file counter
+            base_no_counter = strip_sequence_counter(filename)
+            
+            # Get extension
+            ext = os.path.splitext(filename)[1].lower()
+            if ext and re.match(r"^\.\d+$", ext):
+                ext = ""
+            name_no_counter = f"{base_no_counter}{ext}"
+            
+            # 2. remove the version by the regex (entire match)
+            clean_name = re.sub(version_regex, "", name_no_counter, flags=re.IGNORECASE)
+            return (clean_name.lower(), True)
+        else:
+            # Still / video / other category:
+            # 1. remove the version by the regex (entire match)
+            clean_name = re.sub(version_regex, "", filename, flags=re.IGNORECASE)
+            return (clean_name.lower(), False)
+
+    def rebuild_version_stacks(self):
+        old_picked = {key: stack["picked"] for key, stack in getattr(self, "version_stacks", {}).items() if stack["picked"] is not None}
+        self.version_stacks = {}
+        for item in self._items:
+            item.model = self
+            key = self.get_version_stack_key(item)
+            if key not in self.version_stacks:
+                self.version_stacks[key] = {
+                    "items": [],
+                    "picked": None,
+                    "min": None,
+                    "max": None
+                }
+            self.version_stacks[key]["items"].append(item)
+        
+        for key, stack in self.version_stacks.items():
+            versions = [item.version for item in stack["items"]]
+            stack["min"] = min(versions) if versions else 1
+            stack["max"] = max(versions) if versions else 1
+            
+            if key in old_picked and old_picked[key] in versions:
+                stack["picked"] = old_picked[key]
+            else:
+                stack["picked"] = stack["max"]
+
+    def is_item_visible_by_v_stack(self, item, v_stack_enabled):
+        if not v_stack_enabled:
+            return True
+        key = self.get_version_stack_key(item)
+        if key in self.version_stacks:
+            stack = self.version_stacks[key]
+            return item.version == stack["picked"]
+        return True
 
     def toggle_tag_selection(self, selection_model):
         """Toggle ingest tag for all selected rows."""

@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QPushButton, QLineEdit,
 from PySide6.QtCore import Signal, Qt, QDir, QSortFilterProxyModel, QItemSelectionModel, QModelIndex, QRect
 from PySide6.QtGui import QColor, QStandardItemModel, QStandardItem, QPalette, QFont, QPen, QIcon, QPixmap, QPainter, QShortcut, QKeySequence
 from utils import strip_sequence_counter, get_version_from_name, get_sequence_counter
+from logic.image_model import parse_version_folder
 
 def get_review_icon(review_status, ingest_status="unknown"):
     cache_key = (review_status, ingest_status)
@@ -84,6 +85,7 @@ class TagColorProxyModel(QSortFilterProxyModel):
         # Fast lookup: normalized_abs_path -> (is_tagged, age_minutes, label)
         self._path_info = {}
         self._sequence_map = {} # (dir, base, ext, ver) -> item
+        self._path_to_item = {} # abs_path -> ImageItem
         self._rebuild_cache()
         
         self.main_model.dataChanged.connect(self._on_model_data_changed)
@@ -108,9 +110,11 @@ class TagColorProxyModel(QSortFilterProxyModel):
         self._path_info = {}
         self._sequence_map = {}
         self._max_version_map = {} # (dir, base, ext) -> max_version
+        self._path_to_item = {} # abs_path -> ImageItem
         
         for item in self.main_model.items:
             abs_path = os.path.normpath(os.path.abspath(item.file_path))
+            self._path_to_item[abs_path] = item
             self._path_info[abs_path] = (item.is_tagged, item.age_minutes, item.label, item.review_status, item.filename, getattr(item, "ingest_status", "unknown"))
             
             directory = os.path.dirname(abs_path)
@@ -119,16 +123,19 @@ class TagColorProxyModel(QSortFilterProxyModel):
             name_no_ver = re.sub(self.version_regex, "", filename, flags=re.IGNORECASE)
             ext = os.path.splitext(filename)[1].lower()
             
+            parent_dir, folder_ver = parse_version_folder(directory, self.version_regex)
+            directory_key = parent_dir if parent_dir is not None else directory
+            
             # For Version Stack
             if version is not None:
-                base_key = (directory, name_no_ver, ext)
+                base_key = (directory_key, name_no_ver, ext)
                 if base_key not in self._max_version_map or version > self._max_version_map[base_key]:
                     self._max_version_map[base_key] = version
             
             if self.detect_sequences and item.is_sequence:
                 if get_sequence_counter(name_no_ver):
                     base_name = strip_sequence_counter(name_no_ver)
-                    key = (directory, base_name, ext, version)
+                    key = (directory_key, base_name, ext, version)
                     self._sequence_map[key] = item
                 
         self.invalidateFilter()
@@ -172,6 +179,27 @@ class TagColorProxyModel(QSortFilterProxyModel):
             if not abs_path or abs_path not in self._path_info:
                 return False
             
+        if is_dir and abs_path:
+            parent_dir, folder_ver = parse_version_folder(abs_path, self.version_regex)
+            if parent_dir is not None:
+                if self.v_stack:
+                    parent_dir_lower = parent_dir.lower()
+                    has_active_stack = False
+                    should_show = False
+                    for key, stack in self.main_model.version_stacks.items():
+                        for it in stack["items"]:
+                            it_dir = os.path.dirname(os.path.abspath(it.file_path))
+                            it_parent = os.path.dirname(it_dir)
+                            if os.path.normpath(it_parent).lower() == parent_dir_lower:
+                                has_active_stack = True
+                                if folder_ver == stack["picked"]:
+                                    should_show = True
+                                    break
+                        if should_show:
+                            break
+                    if has_active_stack and not should_show:
+                        return False
+
         if not is_dir and abs_path:
             directory = os.path.dirname(abs_path)
             filename = os.path.basename(abs_path)
@@ -180,10 +208,10 @@ class TagColorProxyModel(QSortFilterProxyModel):
             ext = os.path.splitext(filename)[1].lower()
  
             # Version Stack logic
-            if self.v_stack and version is not None:
-                base_key = (directory, name_no_ver, ext)
-                if base_key in self._max_version_map:
-                    if version < self._max_version_map[base_key]:
+            if self.v_stack:
+                item = self._path_to_item.get(abs_path)
+                if item:
+                    if not self.main_model.is_item_visible_by_v_stack(item, True):
                         return False
  
             # Sequence logic
@@ -200,26 +228,39 @@ class TagColorProxyModel(QSortFilterProxyModel):
         return super().filterAcceptsRow(source_row, source_parent)
 
     def data(self, index, role=Qt.DisplayRole):
-        if role == Qt.DisplayRole and self.detect_sequences:
+        if role == Qt.DisplayRole:
             source_index = self.mapToSource(index)
             abs_path, is_dir, is_scene = self._get_item_info(source_index)
             
             if not is_dir and abs_path:
-                directory = os.path.dirname(abs_path)
-                filename = os.path.basename(abs_path)
-                
-                version = get_version_from_name(filename, self.version_regex)
-                name_no_ver = re.sub(self.version_regex, "", filename, flags=re.IGNORECASE)
-                if get_sequence_counter(name_no_ver):
-                    base_name = strip_sequence_counter(name_no_ver)
-                    ext = os.path.splitext(filename)[1].lower()
+                item = self._path_to_item.get(abs_path)
+                if item:
+                    key = self.main_model.get_version_stack_key(item)
+                    stack = self.main_model.version_stacks.get(key)
                     
-                    key = (directory, base_name, ext, version)
-                    if key in self._sequence_map:
-                        item = self._sequence_map[key]
-                        display_name = strip_sequence_counter(filename)
-                        # Nuke notation: filename[first-last].extension
-                        return f"{display_name}[{item.frame_start}-{item.frame_end}]{ext}"
+                    if self.v_stack and stack and len(stack["items"]) > 1:
+                        filename = os.path.basename(abs_path)
+                        name_no_ver = re.sub(self.version_regex, "", filename, flags=re.IGNORECASE)
+                        ext = os.path.splitext(filename)[1].lower()
+                        
+                        display_name = ""
+                        if self.detect_sequences and item.is_sequence:
+                            if get_sequence_counter(name_no_ver):
+                                base_name = strip_sequence_counter(name_no_ver)
+                                display_name = f"{base_name}[{item.frame_start}-{item.frame_end}]{ext}"
+                        
+                        if not display_name:
+                            display_name = name_no_ver
+                            
+                        return f"{display_name} <{stack['min']}-{stack['max']}>@{stack['picked']}"
+                    
+                    elif self.detect_sequences and item.is_sequence:
+                        filename = os.path.basename(abs_path)
+                        name_no_ver = re.sub(self.version_regex, "", filename, flags=re.IGNORECASE)
+                        ext = os.path.splitext(filename)[1].lower()
+                        if get_sequence_counter(name_no_ver):
+                            display_name = strip_sequence_counter(filename)
+                            return f"{display_name}[{item.frame_start}-{item.frame_end}]{ext}"
 
         if role == Qt.DecorationRole:
             source_index = self.mapToSource(index)
@@ -278,6 +319,7 @@ class FilterPanel(QWidget):
     delete_scene_items_requested = Signal(list) # list of UUIDs
     edit_scene_item_requested = Signal(str) # UUID
     move_front_back_requested = Signal(str, list) # direction ("front"/"back"), list of paths
+    change_version_requested = Signal(object, int) # item, new_version
 
     def __init__(self, main_model, parent=None):
         super().__init__(parent)
@@ -724,6 +766,30 @@ class FilterPanel(QWidget):
         menu.addAction(act_open)
         
         menu.addSeparator()
+
+        if len(paths) == 1:
+            abs_path = os.path.normpath(os.path.abspath(paths[0]))
+            item = self.proxy._path_to_item.get(abs_path)
+            if item:
+                key = self.main_model.get_version_stack_key(item)
+                stack = self.main_model.version_stacks.get(key)
+                if stack and len(stack["items"]) > 1:
+                    sub_menu = menu.addMenu("Version Stack")
+                    sorted_items = sorted(stack["items"], key=lambda it: it.version, reverse=True)
+                    for v_item in sorted_items:
+                        v = v_item.version
+                        is_picked = (v == stack["picked"])
+                        if is_picked:
+                            action = QAction(f"> {v}", self)
+                            action.setIcon(self._get_green_arrow_icon())
+                            font = action.font()
+                            font.setBold(True)
+                            action.setFont(font)
+                        else:
+                            action = QAction(str(v), self)
+                        action.triggered.connect(lambda checked=False, item_obj=item, ver=v: self.change_version_requested.emit(item_obj, ver))
+                        sub_menu.addAction(action)
+                    menu.addSeparator()
         
         act_rename = QAction("Rename to Label", self)
         act_rename.triggered.connect(lambda: self.rename_to_label_requested.emit(paths))
@@ -773,3 +839,14 @@ class FilterPanel(QWidget):
         for path in paths:
             if os.path.exists(path):
                 os.startfile(path)
+
+    def _get_green_arrow_icon(self):
+        pixmap = QPixmap(16, 16)
+        pixmap.fill(Qt.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(QPen(QColor("#4caf50"), 3))
+        painter.drawLine(4, 3, 11, 8)
+        painter.drawLine(11, 8, 4, 13)
+        painter.end()
+        return QIcon(pixmap)

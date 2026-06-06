@@ -1,7 +1,10 @@
 import os
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from PySide6.QtWidgets import QApplication
-from PySide6.QtCore import Qt, QItemSelectionModel, QModelIndex
+from PySide6.QtCore import Qt, QItemSelectionModel, QModelIndex, QEvent
 from gui.main_window import MainWindow
 from logic.image_model import ImageItem
 
@@ -111,6 +114,42 @@ def verify_sync():
         return False
     print("PASSED: Filter Panel sync logic")
 
+    # 5. Verify Right-click selection logic in Thumbnail Area
+    print("Testing Right-click selection logic...")
+    from PySide6.QtGui import QMouseEvent
+    from PySide6.QtCore import QPointF
+    
+    thumb1.setSelected(True)
+    thumb2.setSelected(False)
+    
+    pos = window.thumb_area.view.mapFromScene(thumb2.sceneBoundingRect().center())
+    press_event = QMouseEvent(QEvent.MouseButtonPress, QPointF(pos), Qt.RightButton, Qt.RightButton, Qt.NoModifier)
+    window.thumb_area.eventFilter(window.thumb_area.view.viewport(), press_event)
+    
+    if not thumb2.isSelected() or thumb1.isSelected():
+        print("FAILED: Right-clicking unselected item did not update selection correctly")
+        return False
+        
+    thumb1.setSelected(True)
+    thumb2.setSelected(True)
+    pos2 = window.thumb_area.view.mapFromScene(thumb2.sceneBoundingRect().center())
+    press_event2 = QMouseEvent(QEvent.MouseButtonPress, QPointF(pos2), Qt.RightButton, Qt.RightButton, Qt.NoModifier)
+    window.thumb_area.eventFilter(window.thumb_area.view.viewport(), press_event2)
+    
+    if not thumb1.isSelected() or not thumb2.isSelected():
+        print("FAILED: Right-clicking selected item deselected others")
+        return False
+        
+    pos_empty = window.thumb_area.view.mapFromScene(QPointF(-1000, -1000))
+    press_event_empty = QMouseEvent(QEvent.MouseButtonPress, QPointF(pos_empty), Qt.RightButton, Qt.RightButton, Qt.NoModifier)
+    window.thumb_area.eventFilter(window.thumb_area.view.viewport(), press_event_empty)
+    
+    if not thumb1.isSelected() or not thumb2.isSelected():
+        print("FAILED: Right-clicking empty space deselected items")
+        return False
+        
+    print("PASSED: Right-click selection logic")
+
     print("\nALL SELECTION SYNC TESTS PASSED!")
     return True
 
@@ -118,7 +157,10 @@ if __name__ == "__main__":
     # Run in a try-except to avoid hang if UI is involved
     try:
         success = verify_sync()
-        sys.exit(0 if success else 1)
+        if success:
+            import os
+            os._exit(0)
+        sys.exit(1)
     except Exception as e:
         print(f"ERROR: {e}")
         import traceback
