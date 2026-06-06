@@ -738,6 +738,7 @@ class MainWindow(QMainWindow):
                 "is_sequence": item.is_sequence,
                 "is_selected": is_selected,
                 "position": item.position,
+                "size": getattr(item, "size", 150),
                 "metadata": item.metadata,
                 "ingest_status": item.ingest_status,
                 "z_value": (self.thumb_area.item_to_thumb.get(item).zValue()
@@ -883,6 +884,7 @@ class MainWindow(QMainWindow):
                 item.ayon_path = it.get("ayon_path", "")
                 item.ayon_task_name = it.get("ayon_task_name", "")
                 item.position = tuple(it.get("position", (0, 0)))
+                item.size = it.get("size", 150)
                 item.metadata = it.get("metadata", {})
                 item.ingest_status = it.get("ingest_status", "unknown")
                 item._z_value = it.get("z_value", 0)  # saved draw order
@@ -927,6 +929,7 @@ class MainWindow(QMainWindow):
             saved_positions = {it.file_path: it.position for it in reconstructed_items}
             saved_selections = {it.file_path: it.is_selected for it in reconstructed_items}
             saved_z_values = {it.file_path: it._z_value for it in reconstructed_items if hasattr(it, "_z_value")}
+            saved_sizes = {it.file_path: getattr(it, "size", 150) for it in reconstructed_items}
 
             # Update Model
             self.thumb_area.clear_canvas()
@@ -1028,6 +1031,14 @@ class MainWindow(QMainWindow):
                         item.is_manually_moved = True
                         thumb.setPos(pos[0], pos[1])
                         thumb.is_manually_moved = True
+                        
+                    size = saved_sizes.get(item.file_path)
+                    if size is not None:
+                        item.size = size
+                        thumb.prepareGeometryChange()
+                        thumb.size = size
+                        thumb.cached_label = ""
+                        thumb.update()
 
                     z = saved_z_values.get(item.file_path, 0)
                     thumb.setZValue(z)

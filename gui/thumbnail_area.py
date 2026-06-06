@@ -840,6 +840,31 @@ class ThumbnailItem(QGraphicsObject):
             painter.setBrush(tri_color)
             painter.drawPolygon(triangle)
             painter.restore()
+
+        # 5. Draw resize handle grip in bottom-right corner
+        if lod > 0.4:
+            painter.save()
+            painter.setRenderHint(QPainter.Antialiasing)
+            is_hovered_handle = getattr(self, "_hovered_handle", False)
+            if is_hovered_handle:
+                color = QColor("#2196f3")
+            elif self.isSelected():
+                color = QColor("#ffffff")
+            else:
+                color = QColor("#888888")
+            
+            pen = QPen(color, 1.5)
+            painter.setPen(pen)
+            
+            img_rect = self.get_image_rect()
+            border_rect = img_rect.adjusted(-4, -4, 4, 4)
+            r = border_rect.right()
+            b = border_rect.bottom()
+            
+            painter.drawLine(QPointF(r - 12, b - 4), QPointF(r - 4, b - 12))
+            painter.drawLine(QPointF(r - 8, b - 4), QPointF(r - 4, b - 8))
+            painter.drawLine(QPointF(r - 4, b - 4), QPointF(r - 4, b - 4))
+            painter.restore()
         
         painter.restore()
 
@@ -892,6 +917,119 @@ class ThumbnailItem(QGraphicsObject):
                 self.data.position = (new_pos.x(), new_pos.y())
 
         return super().itemChange(change, value)
+
+    def _is_in_resize_handle(self, local_pos):
+        img_rect = self.get_image_rect()
+        border_rect = img_rect.adjusted(-4, -4, 4, 4)
+        handle_size = 15
+        in_x = border_rect.right() - handle_size <= local_pos.x() <= border_rect.right() + 4
+        in_y = border_rect.bottom() - handle_size <= local_pos.y() <= border_rect.bottom() + 4
+        return in_x and in_y
+
+    def hoverMoveEvent(self, event):
+        in_handle = self._is_in_resize_handle(event.pos())
+        if in_handle != getattr(self, "_hovered_handle", False):
+            self._hovered_handle = in_handle
+            self.update()
+            
+        if in_handle:
+            self.setCursor(Qt.SizeFDiagCursor)
+        else:
+            self.setCursor(Qt.ArrowCursor)
+        try:
+            super().hoverMoveEvent(event)
+        except TypeError:
+            pass
+
+    def hoverLeaveEvent(self, event):
+        if getattr(self, "_hovered_handle", False):
+            self._hovered_handle = False
+            self.update()
+        self.setCursor(Qt.ArrowCursor)
+        try:
+            super().hoverLeaveEvent(event)
+        except TypeError:
+            pass
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton and self._is_in_resize_handle(event.pos()):
+            self._resizing = True
+            self._drag_start_pos = event.scenePos()
+            self._drag_start_size = self.size
+            
+            # Collect other selected items and their start sizes
+            self._selected_resizers = []
+            if self.isSelected():
+                for it in self.scene().selectedItems():
+                    if isinstance(it, ThumbnailItem) and it != self:
+                        self._selected_resizers.append((it, it.size))
+            event.accept()
+            return
+            
+        try:
+            super().mousePressEvent(event)
+        except TypeError:
+            pass
+
+    def mouseMoveEvent(self, event):
+        if getattr(self, "_resizing", False):
+            delta = event.scenePos() - self._drag_start_pos
+            new_size = max(50, min(1500, self._drag_start_size + delta.x()))
+            
+            self.prepareGeometryChange()
+            self.size = new_size
+            self.data.size = new_size
+            self.cached_label = ""
+            self.update()
+            
+            for it, start_size in getattr(self, "_selected_resizers", []):
+                it.prepareGeometryChange()
+                it_new_size = max(50, min(1500, start_size + delta.x()))
+                it.size = it_new_size
+                it.data.size = it_new_size
+                it.cached_label = ""
+                it.update()
+                
+            event.accept()
+            return
+            
+        try:
+            super().mouseMoveEvent(event)
+        except TypeError:
+            pass
+
+    def mouseReleaseEvent(self, event):
+        if getattr(self, "_resizing", False):
+            self._resizing = False
+            
+            # Save position and manual move state on all resized items
+            self.data.position = (self.pos().x(), self.pos().y())
+            self.data.is_manually_moved = True
+            self.is_manually_moved = True
+            
+            for it, _ in getattr(self, "_selected_resizers", []):
+                it.data.position = (it.pos().x(), it.pos().y())
+                it.data.is_manually_moved = True
+                it.is_manually_moved = True
+                
+            self._selected_resizers = []
+            
+            # Notify scene items changed
+            if self.scene():
+                for view in self.scene().views():
+                    parent = view.parent()
+                    while parent:
+                        if hasattr(parent, "scene_items_changed"):
+                            parent.scene_items_changed.emit()
+                            break
+                        parent = parent.parent()
+            event.accept()
+            return
+            
+        try:
+            super().mouseReleaseEvent(event)
+        except TypeError:
+            pass
 
 class BackdropItem(QGraphicsObject):
     delete_requested = Signal(object)  # emits self
@@ -1881,7 +2019,11 @@ class ThumbnailArea(QWidget):
 
         for item_data in items:
             thumb = ThumbnailItem(item_data)
-            thumb.size = thumb_size
+            size_to_use = getattr(item_data, "size", None)
+            if size_to_use is None:
+                size_to_use = thumb_size
+                item_data.size = thumb_size
+            thumb.size = size_to_use
             thumb.font_size = font_size
             thumb.update_tooltip(self.tooltip_templates, self.model)
             self.scene.addItem(thumb)
@@ -1898,7 +2040,11 @@ class ThumbnailArea(QWidget):
             item_data = self.model.items[row]
             if item_data not in self.item_to_thumb:
                 thumb = ThumbnailItem(item_data)
-                thumb.size = thumb_size
+                size_to_use = getattr(item_data, "size", None)
+                if size_to_use is None:
+                    size_to_use = thumb_size
+                    item_data.size = thumb_size
+                thumb.size = size_to_use
                 thumb.font_size = font_size
                 thumb.update_tooltip(self.tooltip_templates, self.model)
                 self.scene.addItem(thumb)
@@ -2014,6 +2160,7 @@ class ThumbnailArea(QWidget):
         for item in self.item_to_thumb.values():
             item.prepareGeometryChange()
             item.size = new_size
+            item.data.size = new_size
             item.update()
         self.update_video_overlay_geometry()
 
