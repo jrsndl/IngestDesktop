@@ -1534,7 +1534,7 @@ class ThumbnailArea(QWidget):
         default_thumb_size = config.get("default_thumb_size", 150)
         
         default_gap_h = int(default_thumb_size * 0.20)
-        default_gap_v = int(default_thumb_size * 0.40)
+        default_gap_v = int(default_thumb_size * 0.20)
 
         self.item_to_thumb = {}
         self._last_arrange_vals = {
@@ -2101,6 +2101,9 @@ class ThumbnailArea(QWidget):
     def rearrange_items(self, age_filter=None, search_text=None, force=False):
         if not self.item_to_thumb or not self.model: return
         
+        for item in self.item_to_thumb.values():
+            item.cached_label = ""
+        
         if age_filter is not None:
             self._last_age_filter = age_filter
         if search_text is not None:
@@ -2147,6 +2150,34 @@ class ThumbnailArea(QWidget):
         # Use last arrangement values
         vals = self._last_arrange_vals.copy()
         
+        # Calculate horizontal gap dynamically: 20% of default thumbnail size
+        dynamic_gap_h = int(self.slider_thumb_size.value() * 0.20)
+        vals["gap_h"] = dynamic_gap_h
+        self._last_arrange_vals["gap_h"] = dynamic_gap_h
+        
+        # Calculate vertical gap dynamically: 40% of average thumbnail height (metadata-driven height)
+        total_h = 0.0
+        count = 0
+        for item in visible_items:
+            w = item.data.metadata.get("width", None)
+            h = item.data.metadata.get("height", None)
+            try:
+                fw = float(w) if w is not None else 1.0
+                fh = float(h) if h is not None else 1.0
+                aspect = fw / fh if fh > 0 else 1.0
+            except (ValueError, TypeError):
+                aspect = 1.0
+                
+            item_size = getattr(item, "size", self.slider_thumb_size.value())
+            total_h += item_size / aspect
+            count += 1
+            
+        if count > 0:
+            avg_height = total_h / count
+            dynamic_gap_v = int(avg_height * 0.20)
+            vals["gap_v"] = dynamic_gap_v
+            self._last_arrange_vals["gap_v"] = dynamic_gap_v
+            
         # Use (0,0) as anchor for the main layout
         self._apply_arrangement(visible_items, "grid", vals, anchor=(0, 0), ignore_manual=not force)
         self.scene.update()

@@ -585,3 +585,16 @@ Context menu for Thumbnail view and right panel: Add "Version Stack Select", thi
 Backdrop Enhancements:
 * the top bar / handle left corner: the cross symbol to delete the backdrop (but not in's content!) should be moved from the top left corner to the very right of the top bar, so backdrop resize is working even for top right corner
   
+
+Version stack: when turning off version stack, in thumbnail view:
+* make sure to apply the item scale of the version stack to all the items/thumbnails newly added for versions originally contaioned in the version stack.
+* make sure to change the text in all the items previously merged in the version stack, to properly indicate the version number; make sure to keep the (<min-max>@picked) version text indicator when version stack mode is on
+  
+
+
+adjust the initial layout of the items in thumbnail view:
+* make sure to use preferences - gui - Default columns for the grid layour start
+* make sure to use preferences - gui - Default text size for the grid layour start
+* make sure to use preferences - gui - Default thumbnail size for the grid layour start
+* to determine horizontal gap size, use 20% of Default thumbnail size 
+* to determine vertical gap size, use 40% of Default thumbnail size 

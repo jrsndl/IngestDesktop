@@ -1743,7 +1743,7 @@ class MainWindow(QMainWindow):
         default_thumb_size = self.config.get("default_thumb_size", 150)
         
         gap_h = int(default_thumb_size * 0.20)
-        gap_v = int(default_thumb_size * 0.40)
+        gap_v = int(default_thumb_size * 0.20)
         
         self.thumb_area._last_arrange_vals["cols"] = default_cols
         self.thumb_area._last_arrange_vals["gap_h"] = gap_h
@@ -1946,7 +1946,7 @@ class MainWindow(QMainWindow):
             default_thumb_size = self.config.get("default_thumb_size", 150)
             
             gap_h = int(default_thumb_size * 0.20)
-            gap_v = int(default_thumb_size * 0.40)
+            gap_v = int(default_thumb_size * 0.20)
             
             self.thumb_area._last_arrange_vals["cols"] = default_cols
             self.thumb_area._last_arrange_vals["gap_h"] = gap_h
@@ -3289,6 +3289,82 @@ class MainWindow(QMainWindow):
                 # For every version stack, the stacked item (picked version) is the "base position",
                 # and all other versions are positioned vertically below the base position in a way they are not overlapping.
                 # All these items should be marked as manually moved so they don't reflow.
+                # First pass: propagate size and scale to all stack versions
+                for key, stack in self.model.version_stacks.items():
+                    picked_ver = stack["picked"]
+                    picked_item = None
+                    for item in stack["items"]:
+                        if item.version == picked_ver:
+                            picked_item = item
+                            break
+                    if not picked_item: continue
+                    
+                    p_thumb = self.thumb_area.item_to_thumb.get(picked_item)
+                    if p_thumb:
+                        stack_size = p_thumb.size
+                        stack_is_custom = p_thumb.is_custom_size
+                    else:
+                        stack_size = getattr(picked_item, "size", 150)
+                        stack_is_custom = getattr(picked_item, "is_custom_size", False)
+                        
+                    for other_item in stack["items"]:
+                        if other_item != picked_item:
+                            other_item.size = stack_size
+                            other_item.is_custom_size = stack_is_custom
+                            
+                            o_thumb = self.thumb_area.item_to_thumb.get(other_item)
+                            if o_thumb:
+                                o_thumb.prepareGeometryChange()
+                                o_thumb.size = stack_size
+                                o_thumb.is_custom_size = stack_is_custom
+
+                # Second pass: calculate the new vertical gap size based on 40% of average thumbnail height of visible items
+                age_enabled, age_val = self.thumb_area._last_age_filter
+                search_term = self.thumb_area._last_search_text
+                
+                total_h = 0.0
+                count = 0
+                for item_data in self.model.items:
+                    # Check if it has a thumbnail in the GUI
+                    if item_data not in self.thumb_area.item_to_thumb:
+                        continue
+                        
+                    is_tagged = item_data.is_tagged
+                    item_abs = os.path.normpath(os.path.abspath(item_data.file_path))
+                    filter_abs = os.path.normpath(os.path.abspath(self.thumb_area._path_filter))
+                    in_path = not self.thumb_area._path_filter or (item_abs == filter_abs or item_abs.startswith(filter_abs + os.sep))
+                    
+                    show_by_tag = True
+                    if self.thumb_area._tag_filter_state == "enabled": show_by_tag = is_tagged
+                    elif self.thumb_area._tag_filter_state == "disabled": show_by_tag = not is_tagged
+                    
+                    is_young_enough = not age_enabled or (item_data.age_minutes <= age_val)
+                    matches_search = (not search_term or 
+                                      search_term in item_data.label.lower() or 
+                                      search_term in item_data.filename.lower())
+                    
+                    # Since v_stack_enabled is False now:
+                    is_visible_ver = True
+                    
+                    if show_by_tag and in_path and is_young_enough and matches_search and is_visible_ver:
+                        w = item_data.metadata.get("width", None)
+                        h = item_data.metadata.get("height", None)
+                        try:
+                            fw = float(w) if w is not None else 1.0
+                            fh = float(h) if h is not None else 1.0
+                            aspect = fw / fh if fh > 0 else 1.0
+                        except (ValueError, TypeError):
+                            aspect = 1.0
+                            
+                        item_size = getattr(item_data, "size", self.thumb_area.slider_thumb_size.value())
+                        total_h += item_size / aspect
+                        count += 1
+                    
+                if count > 0:
+                    new_gap_v = int((total_h / count) * 0.20)
+                    self.thumb_area._last_arrange_vals["gap_v"] = new_gap_v
+
+                # Third pass: position the unstacked items vertically below the picked item using the new gap
                 for key, stack in self.model.version_stacks.items():
                     picked_ver = stack["picked"]
                     picked_item = None
@@ -3311,14 +3387,17 @@ class MainWindow(QMainWindow):
                     current_y = base_y
                     prev_item = picked_item
                     prev_thumb = p_thumb
+                    gap_v = self.thumb_area._last_arrange_vals.get("gap_v", 20)
                     
                     for other_item in other_items:
+                        o_thumb = self.thumb_area.item_to_thumb.get(other_item)
+                        
                         # Bounding height of prev_item
                         if prev_thumb:
                             prev_h = prev_thumb.boundingRect().height()
                         else:
-                            # Calculate height fallback
-                            thumb_size = self.thumb_area.slider_thumb_size.value()
+                            # Calculate height fallback using the updated size of the item
+                            prev_item_size = getattr(prev_item, "size", self.thumb_area.slider_thumb_size.value())
                             show_text = self.thumb_area.btn_show_text.isChecked()
                             font_size = self.thumb_area.slider_text_size.value()
                             line_height = font_size * 1.5
@@ -3332,18 +3411,17 @@ class MainWindow(QMainWindow):
                                 aspect = fw / fh if fh > 0 else 1.0
                             except (ValueError, TypeError):
                                 aspect = 1.0
-                            prev_h = (thumb_size / aspect) + 20 + label_area
+                            prev_h = (prev_item_size / aspect) + 20 + label_area
                             
-                        gap_v = self.thumb_area._last_arrange_vals.get("gap_v", 20)
                         current_y += prev_h + gap_v
                         
                         other_item.position = (base_x, current_y)
                         other_item.is_manually_moved = True
                         
-                        o_thumb = self.thumb_area.item_to_thumb.get(other_item)
                         if o_thumb:
                             o_thumb.setPos(base_x, current_y)
                             o_thumb.is_manually_moved = True
+                            o_thumb.update()
                             
                         prev_item = other_item
                         prev_thumb = o_thumb

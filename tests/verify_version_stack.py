@@ -179,6 +179,13 @@ def test_version_stacking():
     print("-> Collapse stack to highest item position (Off -> On transition) PASSED.")
     
     # Now verify On -> Off transition:
+    # Set custom size/scale on the picked item (v3) representing the version stack
+    thumb_v3.prepareGeometryChange()
+    thumb_v3.size = 250
+    thumb_v3.is_custom_size = True
+    v3_in_win.size = 250
+    v3_in_win.is_custom_size = True
+    
     # Position the picked item (v3) at (200.0, 300.0)
     v3_in_win.position = (200.0, 300.0)
     thumb_v3.setPos(200.0, 300.0)
@@ -186,6 +193,12 @@ def test_version_stacking():
     # Toggle to Off (On -> Off transition)
     win.filter_panel.btn_v_stack.setChecked(False)
     win._save_filter_toggles()
+    
+    # Verify the item scale of the version stack (size=250, is_custom_size=True) was applied to the newly added versions (v1)
+    assert thumb_v1.size == 250, f"Expected v1 size to be 250, got {thumb_v1.size}"
+    assert thumb_v1.is_custom_size is True
+    assert v1_in_win.size == 250
+    assert v1_in_win.is_custom_size is True
     
     # v3 is picked (base position=200,300)
     # Other item (v1) should be positioned vertically below v3 (y = 300 + height + gap_v)
@@ -199,6 +212,31 @@ def test_version_stacking():
     assert abs(v1_in_win.position[1] - expected_y) < 1.0, f"Expected other version vertically below at {expected_y}, got {v1_in_win.position[1]}"
     assert v1_in_win.is_manually_moved is True
     assert thumb_v1.is_manually_moved is True
+    
+    # Verify the label updates on unstacked items
+    from PySide6.QtGui import QPixmap, QPainter
+    from PySide6.QtWidgets import QStyleOptionGraphicsItem
+    
+    pixmap = QPixmap(300, 300)
+    painter = QPainter(pixmap)
+    opt = QStyleOptionGraphicsItem()
+    thumb_v1.paint(painter, opt, None)
+    painter.end()
+    assert "(v1)" in thumb_v1.cached_label, f"Expected '(v1)' in label, got {thumb_v1.cached_label}"
+    
+    # Re-enable version stack and check version stack label indicator
+    win.filter_panel.btn_v_stack.setChecked(True)
+    win._save_filter_toggles()
+    
+    painter = QPainter(pixmap)
+    thumb_v3.paint(painter, opt, None)
+    painter.end()
+    assert "<1-3>@3" in thumb_v3.cached_label, f"Expected '<1-3>@3' in label, got {thumb_v3.cached_label}"
+    
+    # Put version stack back to OFF for the subsequent tests
+    win.filter_panel.btn_v_stack.setChecked(False)
+    win._save_filter_toggles()
+    
     print("-> Expand stack vertically below base position (On -> Off transition) PASSED.")
     
     # 5. Verify "Version Stack Select" action in Version Stack Mode OFF
