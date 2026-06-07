@@ -589,6 +589,7 @@ class ThumbnailItem(QGraphicsObject):
         self.size = 150
         self.font_size = 10
         self.is_manually_moved = getattr(item_data, "is_manually_moved", False)
+        self.is_custom_size = getattr(item_data, "is_custom_size", False)
         self.cached_bw = None
         self.is_editing = False
         self.setAcceptHoverEvents(True)
@@ -600,17 +601,6 @@ class ThumbnailItem(QGraphicsObject):
         self.setCacheMode(QGraphicsItem.NoCache)
         self.tooltip_templates = {}
 
-    def itemChange(self, change, value):
-        if change in (QGraphicsItem.ItemPositionHasChanged, QGraphicsItem.ItemTransformHasChanged):
-            if self.scene():
-                for view in self.scene().views():
-                    parent = view.parent()
-                    while parent:
-                        if hasattr(parent, "update_video_overlay_geometry"):
-                            parent.update_video_overlay_geometry()
-                            break
-                        parent = parent.parent()
-        return super().itemChange(change, value)
 
     def update_tooltip(self, templates, model):
         self.tooltip_templates = templates
@@ -916,6 +906,16 @@ class ThumbnailItem(QGraphicsObject):
                 self.data.is_manually_moved = True
                 self.data.position = (new_pos.x(), new_pos.y())
 
+        if change in (QGraphicsItem.ItemPositionHasChanged, QGraphicsItem.ItemTransformHasChanged):
+            if self.scene():
+                for view in self.scene().views():
+                    parent = view.parent()
+                    while parent:
+                        if hasattr(parent, "update_video_overlay_geometry"):
+                            parent.update_video_overlay_geometry()
+                            break
+                        parent = parent.parent()
+
         return super().itemChange(change, value)
 
     def _is_in_resize_handle(self, local_pos):
@@ -1006,17 +1006,23 @@ class ThumbnailItem(QGraphicsObject):
             self.data.position = (self.pos().x(), self.pos().y())
             self.data.is_manually_moved = True
             self.is_manually_moved = True
+            self.data.is_custom_size = True
+            self.is_custom_size = True
             
             for it, _ in getattr(self, "_selected_resizers", []):
                 it.data.position = (it.pos().x(), it.pos().y())
                 it.data.is_manually_moved = True
                 it.is_manually_moved = True
+                it.data.is_custom_size = True
+                it.is_custom_size = True
                 
             self._selected_resizers = []
             
             # Notify scene items changed
             if self.scene():
+                self.scene().update()
                 for view in self.scene().views():
+                    view.viewport().update()
                     parent = view.parent()
                     while parent:
                         if hasattr(parent, "scene_items_changed"):
@@ -1519,9 +1525,20 @@ class ThumbnailArea(QWidget):
         super().__init__(parent)
         
         # State Initialization
+        config = {}
+        if parent and hasattr(parent, "config") and parent.config:
+            config = parent.config
+        
+        default_cols = config.get("default_columns", 12)
+        default_text_size = config.get("default_text_size", 10)
+        default_thumb_size = config.get("default_thumb_size", 150)
+        
+        default_gap_h = int(default_thumb_size * 0.20)
+        default_gap_v = int(default_thumb_size * 0.40)
+
         self.item_to_thumb = {}
         self._last_arrange_vals = {
-            "cols": 10, "gap_h": 50, "gap_v": 50,
+            "cols": default_cols, "gap_h": default_gap_h, "gap_v": default_gap_v,
             "sort_by": "File Name", "reverse": False
         }
         self._arrange_dialog = None
@@ -1558,12 +1575,12 @@ class ThumbnailArea(QWidget):
 
         self.slider_text_size = QSlider(Qt.Horizontal)
         self.slider_text_size.setRange(4, 64)
-        self.slider_text_size.setValue(10)
+        self.slider_text_size.setValue(default_text_size)
         self.slider_text_size.setFixedWidth(100)
         self.slider_text_size.valueChanged.connect(self.update_font_size)
         self.slider_thumb_size = QSlider(Qt.Horizontal)
         self.slider_thumb_size.setRange(20, 2048)
-        self.slider_thumb_size.setValue(150)
+        self.slider_thumb_size.setValue(default_thumb_size)
         self.slider_thumb_size.setFixedWidth(100)
         self.slider_thumb_size.valueChanged.connect(self.update_thumb_size)
 
@@ -2019,11 +2036,14 @@ class ThumbnailArea(QWidget):
 
         for item_data in items:
             thumb = ThumbnailItem(item_data)
-            size_to_use = getattr(item_data, "size", None)
-            if size_to_use is None:
+            is_custom = getattr(item_data, "is_custom_size", False)
+            if not is_custom:
                 size_to_use = thumb_size
                 item_data.size = thumb_size
+            else:
+                size_to_use = getattr(item_data, "size", thumb_size)
             thumb.size = size_to_use
+            thumb.is_custom_size = is_custom
             thumb.font_size = font_size
             thumb.update_tooltip(self.tooltip_templates, self.model)
             self.scene.addItem(thumb)
@@ -2040,11 +2060,14 @@ class ThumbnailArea(QWidget):
             item_data = self.model.items[row]
             if item_data not in self.item_to_thumb:
                 thumb = ThumbnailItem(item_data)
-                size_to_use = getattr(item_data, "size", None)
-                if size_to_use is None:
+                is_custom = getattr(item_data, "is_custom_size", False)
+                if not is_custom:
                     size_to_use = thumb_size
                     item_data.size = thumb_size
+                else:
+                    size_to_use = getattr(item_data, "size", thumb_size)
                 thumb.size = size_to_use
+                thumb.is_custom_size = is_custom
                 thumb.font_size = font_size
                 thumb.update_tooltip(self.tooltip_templates, self.model)
                 self.scene.addItem(thumb)
@@ -2075,7 +2098,7 @@ class ThumbnailArea(QWidget):
                     thumb.update_tooltip(self.tooltip_templates, self.model)
                     thumb.update()
 
-    def rearrange_items(self, age_filter=None, search_text=None):
+    def rearrange_items(self, age_filter=None, search_text=None, force=False):
         if not self.item_to_thumb or not self.model: return
         
         if age_filter is not None:
@@ -2125,7 +2148,9 @@ class ThumbnailArea(QWidget):
         vals = self._last_arrange_vals.copy()
         
         # Use (0,0) as anchor for the main layout
-        self._apply_arrangement(visible_items, "grid", vals, anchor=(0, 0), ignore_manual=True)
+        self._apply_arrangement(visible_items, "grid", vals, anchor=(0, 0), ignore_manual=not force)
+        self.scene.update()
+        self.view.viewport().update()
         self.update_video_overlay_geometry()
 
     def set_path_filter(self, path):
@@ -2153,6 +2178,9 @@ class ThumbnailArea(QWidget):
             item.font_size = font_size
             item.cached_label = ""
             item.update()
+        self.rearrange_items()
+        self.scene.update()
+        self.view.viewport().update()
         self.update_video_overlay_geometry()
 
     def update_thumb_size(self):
@@ -2162,6 +2190,9 @@ class ThumbnailArea(QWidget):
             item.size = new_size
             item.data.size = new_size
             item.update()
+        self.rearrange_items()
+        self.scene.update()
+        self.view.viewport().update()
         self.update_video_overlay_geometry()
 
     def _update_paste_button_state(self):
@@ -2800,11 +2831,11 @@ class ThumbnailArea(QWidget):
         self._arrange_dialog = ArrangeDialog(mode, self._last_arrange_vals, self)
         
         # Connect live updates
-        self._arrange_dialog.valuesChanged.connect(lambda vals: self._apply_arrangement(target_items, mode, vals, anchor))
+        self._arrange_dialog.valuesChanged.connect(lambda vals: self._apply_arrangement(target_items, mode, vals, anchor, mark_manual=True))
         
         def finalize():
             vals = self._arrange_dialog.get_values()
-            self._apply_arrangement(target_items, mode, vals, anchor)
+            self._apply_arrangement(target_items, mode, vals, anchor, mark_manual=True)
             self._last_arrange_vals = vals # Save for next time
             self._arrange_dialog = None
             
@@ -2819,13 +2850,13 @@ class ThumbnailArea(QWidget):
         self._arrange_dialog.rejected.connect(revert)
         
         # Initial preview
-        self._apply_arrangement(target_items, mode, self._arrange_dialog.get_values(), anchor)
+        self._apply_arrangement(target_items, mode, self._arrange_dialog.get_values(), anchor, mark_manual=True)
         
         self._arrange_dialog.show()
         self._arrange_dialog.raise_()
         self._arrange_dialog.activateWindow()
 
-    def _apply_arrangement(self, items, mode, vals, anchor=None, ignore_manual=False):
+    def _apply_arrangement(self, items, mode, vals, anchor=None, ignore_manual=False, mark_manual=False):
         if not items: return
         
         if ignore_manual:
@@ -2919,9 +2950,10 @@ class ThumbnailArea(QWidget):
                 new_y = start_y + y_pos
             
             item.setPos(new_x, new_y)
-            item.is_manually_moved = True
-            item.data.is_manually_moved = True
             item.data.position = (new_x, new_y)
+            if mark_manual:
+                item.is_manually_moved = True
+                item.data.is_manually_moved = True
             
         self.scene.update()
 

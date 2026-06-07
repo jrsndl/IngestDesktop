@@ -429,7 +429,7 @@ class PreferencesDialog(QDialog):
         self.gui_form = QFormLayout()
 
         self.default_cols = QSpinBox()
-        self.default_cols.setRange(5, 100)
+        self.default_cols.setRange(1, 100)
         self.default_cols.setValue(self.config.get("default_columns", 12))
 
         self.default_text_size = QSpinBox()

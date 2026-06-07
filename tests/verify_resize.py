@@ -53,6 +53,7 @@ def test_thumbnail_resize():
     MainWindow.start_scan = lambda self, directory: None
     
     win = MainWindow()
+    win.thumb_area.slider_thumb_size.setValue(150)
     win.model.items = [item1, item2]
     
     # Rebuild items manually in ThumbnailArea

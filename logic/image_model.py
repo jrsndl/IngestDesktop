@@ -47,6 +47,7 @@ class ImageItem:
         self.position = (0, 0) # (x, y)
         self.size = 150
         self.is_manually_moved = False
+        self.is_custom_size = False
         self.preset_name = preset_name
         self.variant = variant
         self.product_type = product_type

@@ -739,6 +739,7 @@ class MainWindow(QMainWindow):
                 "is_selected": is_selected,
                 "position": item.position,
                 "size": getattr(item, "size", 150),
+                "is_custom_size": getattr(item, "is_custom_size", False),
                 "metadata": item.metadata,
                 "ingest_status": item.ingest_status,
                 "z_value": (self.thumb_area.item_to_thumb.get(item).zValue()
@@ -885,6 +886,7 @@ class MainWindow(QMainWindow):
                 item.ayon_task_name = it.get("ayon_task_name", "")
                 item.position = tuple(it.get("position", (0, 0)))
                 item.size = it.get("size", 150)
+                item.is_custom_size = it.get("is_custom_size", False)
                 item.metadata = it.get("metadata", {})
                 item.ingest_status = it.get("ingest_status", "unknown")
                 item._z_value = it.get("z_value", 0)  # saved draw order
@@ -1736,10 +1738,21 @@ class MainWindow(QMainWindow):
         self.config.update(new_config)
         self.secrets.update(new_secrets)
         
-        self.thumb_area._last_arrange_vals["cols"] = self.config.get("default_columns", 12)
-        self.thumb_area.rearrange_items()
-        self.thumb_area.slider_text_size.setValue(self.config.get("default_text_size", 10))
-        self.thumb_area.slider_thumb_size.setValue(self.config.get("default_thumb_size", 150))
+        default_cols = self.config.get("default_columns", 12)
+        default_text_size = self.config.get("default_text_size", 10)
+        default_thumb_size = self.config.get("default_thumb_size", 150)
+        
+        gap_h = int(default_thumb_size * 0.20)
+        gap_v = int(default_thumb_size * 0.40)
+        
+        self.thumb_area._last_arrange_vals["cols"] = default_cols
+        self.thumb_area._last_arrange_vals["gap_h"] = gap_h
+        self.thumb_area._last_arrange_vals["gap_v"] = gap_v
+        
+        # Update sliders first so items are sized correctly before rearrange
+        self.thumb_area.slider_text_size.setValue(default_text_size)
+        self.thumb_area.slider_thumb_size.setValue(default_thumb_size)
+        self.thumb_area.rearrange_items(force=True)
         self.thumb_area.high_res_size = self.config.get("thumb_size", 512)
         
         # Apply label regex update
@@ -1928,10 +1941,21 @@ class MainWindow(QMainWindow):
 
         # 2. Thumbnails Panel
         if hasattr(self, "thumb_area") and self.thumb_area:
-            self.thumb_area._last_arrange_vals["cols"] = self.config.get("default_columns", 12)
-            self.thumb_area.rearrange_items()
-            self.thumb_area.slider_text_size.setValue(self.config.get("default_text_size", 10))
-            self.thumb_area.slider_thumb_size.setValue(self.config.get("default_thumb_size", 150))
+            default_cols = self.config.get("default_columns", 12)
+            default_text_size = self.config.get("default_text_size", 10)
+            default_thumb_size = self.config.get("default_thumb_size", 150)
+            
+            gap_h = int(default_thumb_size * 0.20)
+            gap_v = int(default_thumb_size * 0.40)
+            
+            self.thumb_area._last_arrange_vals["cols"] = default_cols
+            self.thumb_area._last_arrange_vals["gap_h"] = gap_h
+            self.thumb_area._last_arrange_vals["gap_v"] = gap_v
+            
+            # Update sliders first so items are sized correctly before rearrange
+            self.thumb_area.slider_text_size.setValue(default_text_size)
+            self.thumb_area.slider_thumb_size.setValue(default_thumb_size)
+            self.thumb_area.rearrange_items(force=True)
             
             show_text = self.config.get("thumbnails_show_text", True)
             self.thumb_area.btn_show_text.setChecked(show_text)
