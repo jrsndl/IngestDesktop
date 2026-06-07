@@ -451,12 +451,20 @@ class PreferencesDialog(QDialog):
         self.disable_inline_video = QCheckBox("Disable Inline Video Player (Always use default system player)")
         self.disable_inline_video.setChecked(self.config.get("disable_inline_video", False))
 
+        self.drawing_cache_location = QComboBox()
+        self.drawing_cache_location.addItems(["relative to source folder", "custom"])
+        self.drawing_cache_location.setCurrentText(self.config.get("drawing_cache_location", "relative to source folder"))
+
+        self.drawing_cache_path = QLineEdit(self.config.get("drawing_cache_path", "_drawcache"))
+
         self.gui_form.addRow("Default Columns:", self.default_cols)
         self.gui_form.addRow("Default Text Size:", self.default_text_size)
         self.gui_form.addRow("Default Thumbnail Size:", self.default_thumb_size)
         self.gui_form.addRow("Allowed Label Characters:", self.label_regex)
         self.gui_form.addRow("Low-Res Thumbnail Size:", self.low_res_size)
         self.gui_form.addRow("Inline Video Player:", self.disable_inline_video)
+        self.gui_form.addRow("Drawing Cache Location:", self.drawing_cache_location)
+        self.gui_form.addRow("Drawing Cache Path:", self.drawing_cache_path)
 
         self.gui_layout.addLayout(self.gui_form)
         self.gui_layout.addStretch()
@@ -851,6 +859,8 @@ class PreferencesDialog(QDialog):
             "thumb_suffix": self.thumb_suffix.text(),
             "thumb_format": self.thumb_format.currentText(),
             "thumb_quality": self.thumb_quality.value(),
+            "drawing_cache_location": self.drawing_cache_location.currentText(),
+            "drawing_cache_path": self.drawing_cache_path.text(),
             "cmd_sequences": self.cmd_sequences.toPlainText(),
             "cmd_stills": self.cmd_stills.toPlainText(),
             "cmd_videos": self.cmd_videos.toPlainText(),

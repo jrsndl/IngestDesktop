@@ -699,7 +699,8 @@ class MainWindow(QMainWindow):
             "source_folder": self.top_bar.path_display.text(),
             "items": [],
             "text_notes": [],
-            "backdrops": []
+            "backdrops": [],
+            "draw_items": []
         }
         
         # Gather items
@@ -748,7 +749,7 @@ class MainWindow(QMainWindow):
             project_data["items"].append(item_dict)
             
         # Gather Text Notes and Backdrops
-        from gui.thumbnail_area import TextNoteItem, BackdropItem
+        from gui.thumbnail_area import TextNoteItem, BackdropItem, DrawItem
         for graphics_item in self.thumb_area.scene.items():
             if isinstance(graphics_item, TextNoteItem):
                 parent_uuid = None
@@ -782,6 +783,17 @@ class MainWindow(QMainWindow):
                     "default_text_color": graphics_item.text_item.defaultTextColor().name()
                 }
                 project_data["text_notes"].append(note_dict)
+            elif isinstance(graphics_item, DrawItem):
+                draw_dict = {
+                    "uuid": graphics_item.uuid,
+                    "x": graphics_item.pos().x(),
+                    "y": graphics_item.pos().y(),
+                    "width": graphics_item.width,
+                    "height": graphics_item.height,
+                    "file_path": graphics_item.file_path,
+                    "is_custom_size": graphics_item.is_custom_size
+                }
+                project_data["draw_items"].append(draw_dict)
             elif isinstance(graphics_item, BackdropItem):
                 bd_dict = {
                     "uuid": graphics_item.uuid,
@@ -1022,6 +1034,37 @@ class MainWindow(QMainWindow):
                 note.moving_started.connect(self.thumb_area.note_toolbar.hide)
                 note.moving_finished.connect(self.thumb_area._update_note_toolbar)
                 self.thumb_area.scene.addItem(note)
+                
+            # Recreate draw items
+            from gui.thumbnail_area import DrawItem
+            draw_items = project_data.get("draw_items", [])
+            for di in draw_items:
+                file_path = di.get("file_path", "")
+                if not os.path.exists(file_path):
+                    base_name = os.path.basename(file_path)
+                    cache_dir = self.thumb_area.get_drawing_cache_dir()
+                    alt_path = os.path.join(cache_dir, base_name)
+                    if os.path.exists(alt_path):
+                        file_path = alt_path
+                    else:
+                        source_folder = self.model.source_folder
+                        if source_folder:
+                            path_setting = self.config.get("drawing_cache_path", "_drawcache")
+                            alt_path2 = os.path.join(source_folder, path_setting, base_name)
+                            if os.path.exists(alt_path2):
+                                file_path = alt_path2
+                
+                if os.path.exists(file_path):
+                    pos = QPointF(di.get("x", 0), di.get("y", 0))
+                    draw_item = DrawItem(
+                        pos, 
+                        file_path, 
+                        di.get("width", 200), 
+                        di.get("height", 200)
+                    )
+                    draw_item.uuid = di.get("uuid", draw_item.uuid)
+                    draw_item.is_custom_size = di.get("is_custom_size", False)
+                    self.thumb_area.scene.addItem(draw_item)
                 
             # Restore manual positions on reconstructed items in the scene using saved states
             for item in self.model.items:

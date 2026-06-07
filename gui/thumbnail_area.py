@@ -580,6 +580,613 @@ class NoteToolbar(QFrame):
             
     def mouseReleaseEvent(self, event):
         self._drag_pos = None
+
+import math
+from PySide6.QtGui import QPolygonF, QBitmap, QRegion
+from PySide6.QtCore import QPoint
+
+def draw_arrow(painter, p1, p2, thickness, color):
+    dx = p2.x() - p1.x()
+    dy = p2.y() - p1.y()
+    length = math.hypot(dx, dy)
+    if length < 1.0:
+        return
+    angle = math.atan2(dy, dx)
+    arrow_size = max(20.0, thickness * 5.0)
+    offset = min(length * 0.8, arrow_size * 0.5)
+    p_line_end = p2 - QPointF(offset * math.cos(angle), offset * math.sin(angle))
+    painter.drawLine(p1, p_line_end)
+    ap1 = p2 - QPointF(arrow_size * math.cos(angle - math.pi/6), arrow_size * math.sin(angle - math.pi/6))
+    ap2 = p2 - QPointF(arrow_size * math.cos(angle + math.pi/6), arrow_size * math.sin(angle + math.pi/6))
+    painter.save()
+    painter.setPen(Qt.NoPen)
+    painter.setBrush(color)
+    poly = QPolygonF([p2, ap1, ap2])
+    painter.drawPolygon(poly)
+    painter.restore()
+
+def get_non_transparent_rect(image):
+    pixmap = QPixmap.fromImage(image)
+    mask = pixmap.mask()
+    if mask.isNull():
+        return QRectF().toRect()
+    region = QRegion(mask)
+    return region.boundingRect()
+
+class DrawToolbar(QFrame):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.thumb_area = parent
+        self.setObjectName("DrawToolbar")
+        self.setWindowFlags(Qt.ToolTip | Qt.FramelessWindowHint)
+        self.setStyleSheet("""
+            #DrawToolbar {
+                background-color: #1e1e1e;
+                border: 1px solid #444444;
+                border-radius: 8px;
+            }
+            QPushButton {
+                background: transparent;
+                border: none;
+                color: #e0e0e0;
+                font-family: 'Segoe UI', Arial;
+                font-size: 16px;
+                padding: 4px 6px;
+                min-width: 25px;
+                border-radius: 4px;
+            }
+            QPushButton:hover {
+                background-color: #3d3d3d;
+            }
+            QPushButton:checked {
+                background-color: #555555;
+                color: white;
+            }
+            QPushButton#CloseBtn:hover {
+                background-color: #c62828;
+            }
+            QPushButton#RectBtn {
+                font-size: 19px;
+            }
+            QLabel {
+                color: #666666;
+                padding: 0 1px;
+            }
+            QLabel#Handle {
+                color: #888888;
+                font-size: 18px;
+                padding-right: 2px;
+            }
+            QComboBox {
+                background-color: #2b2b2b;
+                border: 1px solid #444444;
+                border-radius: 4px;
+                color: #e0e0e0;
+                padding: 2px 4px;
+                font-size: 13px;
+                min-width: 60px;
+            }
+        """)
+        
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(4, 2, 4, 2)
+        layout.setSpacing(4)
+        
+        self.handle = QLabel("⠿")
+        self.handle.setObjectName("Handle")
+        self.handle.setCursor(Qt.SizeAllCursor)
+        
+        self.btn_brush = QPushButton("✎")
+        self.btn_brush.setCheckable(True)
+        self.btn_brush.setChecked(True)
+        self.btn_brush.setFocusPolicy(Qt.NoFocus)
+        self.btn_brush.setToolTip("Brush (B)")
+        
+        self.btn_eraser = QPushButton("▱")
+        self.btn_eraser.setCheckable(True)
+        self.btn_eraser.setFocusPolicy(Qt.NoFocus)
+        self.btn_eraser.setToolTip("Eraser (E)")
+        
+        self.btn_circle = QPushButton("◯")
+        self.btn_circle.setCheckable(True)
+        self.btn_circle.setFocusPolicy(Qt.NoFocus)
+        self.btn_circle.setToolTip("Circle")
+        
+        self.btn_arrow = QPushButton("↗")
+        self.btn_arrow.setCheckable(True)
+        self.btn_arrow.setFocusPolicy(Qt.NoFocus)
+        self.btn_arrow.setToolTip("Arrow (A)")
+        
+        self.btn_rect = QPushButton("▭")
+        self.btn_rect.setObjectName("RectBtn")
+        self.btn_rect.setCheckable(True)
+        self.btn_rect.setFocusPolicy(Qt.NoFocus)
+        self.btn_rect.setToolTip("Rectangle")
+        
+        self.btn_brush.clicked.connect(self._on_brush_clicked)
+        self.btn_eraser.clicked.connect(self._on_eraser_clicked)
+        self.btn_circle.clicked.connect(self._on_circle_clicked)
+        self.btn_arrow.clicked.connect(self._on_arrow_clicked)
+        self.btn_rect.clicked.connect(self._on_rect_clicked)
+        
+        sep1 = QLabel("|")
+        
+        self.btn_color = QPushButton("")
+        self.btn_color.setObjectName("ColorBtn")
+        self.btn_color.setFocusPolicy(Qt.NoFocus)
+        self.btn_color.setToolTip("Brush Color (C)")
+        self.btn_color.clicked.connect(self._on_pick_color)
+        
+        cfg = self.thumb_area.get_config() if self.thumb_area else {}
+        default_color_hex = cfg.get("draw_default_color", "#ff0000")
+        default_thickness = cfg.get("draw_default_thickness", "5 px")
+        default_style = cfg.get("draw_default_style", "Normal")
+        
+        default_color = QColor(default_color_hex)
+        if not default_color.isValid():
+            default_color = QColor(255, 0, 0)
+        self.update_color_button(default_color)
+        
+        self.combo_thickness = QComboBox()
+        self.combo_thickness.addItems(["2 px", "5 px", "10 px", "20 px"])
+        self.combo_thickness.setCurrentText(default_thickness)
+        self.combo_thickness.setFocusPolicy(Qt.NoFocus)
+        self.combo_thickness.setToolTip("Brush Thickness ([ / ])")
+        
+        self.combo_style = QComboBox()
+        self.combo_style.addItems(["Normal", "Dashed"])
+        self.combo_style.setCurrentText(default_style)
+        self.combo_style.setFocusPolicy(Qt.NoFocus)
+        self.combo_style.setToolTip("Stroke Style")
+        
+        self.combo_thickness.currentTextChanged.connect(self._on_thickness_changed)
+        self.combo_style.currentTextChanged.connect(self._on_style_changed)
+        
+        sep2 = QLabel("|")
+        
+        self.btn_delete = QPushButton("✕")
+        self.btn_delete.setFocusPolicy(Qt.NoFocus)
+        self.btn_delete.setToolTip("Delete Drawing (Delete)")
+        self.btn_delete.clicked.connect(self._on_delete_clicked)
+        
+        self.btn_close = QPushButton("✓")
+        self.btn_close.setFocusPolicy(Qt.NoFocus)
+        self.btn_close.setObjectName("CloseBtn")
+        self.btn_close.setToolTip("Done (Esc / Right Click)")
+        self.btn_close.clicked.connect(self._on_close_clicked)
+        
+        layout.addWidget(self.handle)
+        layout.addWidget(self.btn_brush)
+        layout.addWidget(self.btn_eraser)
+        layout.addWidget(self.btn_circle)
+        layout.addWidget(self.btn_arrow)
+        layout.addWidget(self.btn_rect)
+        layout.addWidget(sep1)
+        layout.addWidget(self.btn_color)
+        layout.addWidget(self.combo_thickness)
+        layout.addWidget(self.combo_style)
+        layout.addWidget(sep2)
+        layout.addWidget(self.btn_delete)
+        layout.addWidget(self.btn_close)
+        
+        self._drag_pos = None
+        
+    def update_color_button(self, color):
+        self.btn_color.setStyleSheet(f"""
+            QPushButton#ColorBtn {{
+                background-color: {color.name()};
+                border: 1px solid #555555;
+                border-radius: 3px;
+                min-width: 16px;
+                max-width: 16px;
+                min-height: 16px;
+                max-height: 16px;
+                padding: 0px;
+            }}
+            QPushButton#ColorBtn:hover {{
+                border-color: #888888;
+            }}
+        """)
+        
+    def _on_brush_clicked(self):
+        self.btn_brush.setChecked(True)
+        self.btn_eraser.setChecked(False)
+        self.btn_circle.setChecked(False)
+        self.btn_arrow.setChecked(False)
+        self.btn_rect.setChecked(False)
+        if self.thumb_area and self.thumb_area._canvas_item:
+            self.thumb_area._canvas_item.active_tool = "brush"
+            
+    def _on_eraser_clicked(self):
+        self.btn_eraser.setChecked(True)
+        self.btn_brush.setChecked(False)
+        self.btn_circle.setChecked(False)
+        self.btn_arrow.setChecked(False)
+        self.btn_rect.setChecked(False)
+        if self.thumb_area and self.thumb_area._canvas_item:
+            self.thumb_area._canvas_item.active_tool = "eraser"
+
+    def _on_circle_clicked(self):
+        self.btn_circle.setChecked(True)
+        self.btn_brush.setChecked(False)
+        self.btn_eraser.setChecked(False)
+        self.btn_arrow.setChecked(False)
+        self.btn_rect.setChecked(False)
+        if self.thumb_area and self.thumb_area._canvas_item:
+            self.thumb_area._canvas_item.active_tool = "circle"
+
+    def _on_arrow_clicked(self):
+        self.btn_arrow.setChecked(True)
+        self.btn_brush.setChecked(False)
+        self.btn_eraser.setChecked(False)
+        self.btn_circle.setChecked(False)
+        self.btn_rect.setChecked(False)
+        if self.thumb_area and self.thumb_area._canvas_item:
+            self.thumb_area._canvas_item.active_tool = "arrow"
+
+    def _on_rect_clicked(self):
+        self.btn_rect.setChecked(True)
+        self.btn_brush.setChecked(False)
+        self.btn_eraser.setChecked(False)
+        self.btn_circle.setChecked(False)
+        self.btn_arrow.setChecked(False)
+        if self.thumb_area and self.thumb_area._canvas_item:
+            self.thumb_area._canvas_item.active_tool = "rectangle"
+            
+    def _on_pick_color(self):
+        from PySide6.QtWidgets import QColorDialog
+        color = QColorDialog.getColor(self.thumb_area._canvas_item.active_color, self, "Select Brush Color")
+        if color.isValid():
+            self.thumb_area._canvas_item.active_color = color
+            self.update_color_button(color)
+            if self.thumb_area:
+                cfg = self.thumb_area.get_config()
+                cfg["draw_default_color"] = color.name()
+                self.thumb_area.save_config_if_possible()
+
+    def _on_thickness_changed(self, text):
+        if self.thumb_area:
+            cfg = self.thumb_area.get_config()
+            cfg["draw_default_thickness"] = text
+            self.thumb_area.save_config_if_possible()
+
+    def _on_style_changed(self, text):
+        if self.thumb_area:
+            cfg = self.thumb_area.get_config()
+            cfg["draw_default_style"] = text
+            self.thumb_area.save_config_if_possible()
+            
+    def _on_delete_clicked(self):
+        if self.thumb_area:
+            self.thumb_area.clear_canvas_drawings()
+            
+    def _on_close_clicked(self):
+        if self.thumb_area:
+            self.thumb_area.exit_draw_mode(save=True)
+            
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._drag_pos = event.globalPos()
+            
+    def mouseMoveEvent(self, event):
+        if self._drag_pos:
+            delta = event.globalPos() - self._drag_pos
+            self.move(self.pos() + delta)
+            self._drag_pos = event.globalPos()
+            
+    def mouseReleaseEvent(self, event):
+        self._drag_pos = None
+
+class DrawingCanvasItem(QGraphicsItem):
+    def __init__(self, rect, thumb_area):
+        super().__init__()
+        self.canvas_rect = rect
+        self.thumb_area = thumb_area
+        self.toolbar = thumb_area.draw_toolbar
+        
+        self.setZValue(10000)
+        self.setFlag(QGraphicsItem.ItemIsSelectable, False)
+        self.setFlag(QGraphicsItem.ItemIsMovable, False)
+        self.setAcceptedMouseButtons(Qt.LeftButton | Qt.RightButton)
+        
+        self.strokes = []
+        self.current_stroke = None
+        
+        self.active_tool = "brush"
+        self.active_color = QColor(255, 0, 0)
+        
+        self.canvas_image = None
+        self.base_image = None
+        
+        self.canvas_image = QImage(self.canvas_rect.size().toSize(), QImage.Format_ARGB32_Premultiplied)
+        self.canvas_image.fill(Qt.transparent)
+        
+    @property
+    def active_thickness(self):
+        txt = self.toolbar.combo_thickness.currentText()
+        try:
+            return int(txt.split()[0])
+        except Exception:
+            return 5
+            
+    @property
+    def active_style(self):
+        return self.toolbar.combo_style.currentText().lower()
+        
+    def load_base_image(self, file_path, item_pos, item_width, item_height):
+        base_pix = QPixmap(file_path)
+        if base_pix.isNull():
+            return
+            
+        self.canvas_image = QImage(self.canvas_rect.size().toSize(), QImage.Format_ARGB32_Premultiplied)
+        self.canvas_image.fill(Qt.transparent)
+        
+        painter = QPainter(self.canvas_image)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform)
+        local_pos = item_pos - self.canvas_rect.topLeft()
+        painter.drawPixmap(
+            QRectF(local_pos.x(), local_pos.y(), item_width, item_height),
+            base_pix,
+            QRectF(0, 0, base_pix.width(), base_pix.height())
+        )
+        painter.end()
+        self.base_image = self.canvas_image.copy()
+        self.update()
+        
+    def boundingRect(self):
+        return self.canvas_rect
+        
+    def paint(self, painter, option, widget):
+        if not self.canvas_image:
+            self.canvas_image = self.render_canvas()
+        painter.drawImage(self.canvas_rect, self.canvas_image)
+        
+    def render_canvas(self):
+        image = QImage(self.canvas_rect.size().toSize(), QImage.Format_ARGB32_Premultiplied)
+        if self.base_image:
+            image = self.base_image.copy()
+        else:
+            image.fill(Qt.transparent)
+            
+        painter = QPainter(image)
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        for stroke in self.strokes:
+            self.draw_stroke(painter, stroke)
+            
+        if self.current_stroke:
+            self.draw_stroke(painter, self.current_stroke)
+            
+        painter.end()
+        return image
+        
+    def draw_stroke(self, painter, stroke):
+        tool = stroke["tool"]
+        style = stroke["style"]
+        color = stroke["color"]
+        thickness = stroke["thickness"]
+        points = stroke["points"]
+        
+        if not points:
+            return
+            
+        painter.save()
+        
+        pen = QPen(color, thickness, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+        if tool == "eraser":
+            painter.setCompositionMode(QPainter.CompositionMode_Clear)
+            pen.setWidth(thickness * 3)
+        else:
+            painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
+            if style == "dashed":
+                pen.setStyle(Qt.DashLine)
+                
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)
+        
+        if tool == "eraser":
+            path = QPainterPath()
+            path.moveTo(points[0])
+            for pt in points[1:]:
+                path.lineTo(pt)
+            painter.drawPath(path)
+        elif tool == "circle":
+            if len(points) >= 2:
+                p1 = points[0]
+                p2 = points[1]
+                dx = p2.x() - p1.x()
+                dy = p2.y() - p1.y()
+                radius = (dx*dx + dy*dy)**0.5
+                painter.drawEllipse(p1, radius, radius)
+        elif tool == "rectangle":
+            if len(points) >= 2:
+                p1 = points[0]
+                p2 = points[1]
+                rect = QRectF(p1, p2).normalized()
+                painter.drawRect(rect)
+        elif tool == "arrow" or style == "arrow":
+            if len(points) >= 2:
+                p1 = points[0]
+                p2 = points[-1]
+                draw_arrow(painter, p1, p2, thickness, color)
+        else:
+            path = QPainterPath()
+            path.moveTo(points[0])
+            for pt in points[1:]:
+                path.lineTo(pt)
+            painter.drawPath(path)
+                
+        painter.restore()
+        
+    def mousePressEvent(self, event):
+        if event.button() == Qt.RightButton:
+            self.thumb_area.exit_draw_mode(save=True)
+            event.accept()
+            return
+            
+        if event.button() == Qt.LeftButton:
+            canvas_p = event.pos() - self.canvas_rect.topLeft()
+            self.current_stroke = {
+                "tool": self.active_tool,
+                "style": self.active_style,
+                "color": self.active_color,
+                "thickness": self.active_thickness,
+                "points": [canvas_p]
+            }
+            self.canvas_image = None
+            self.update()
+            event.accept()
+            
+    def mouseMoveEvent(self, event):
+        if self.current_stroke:
+            canvas_p = event.pos() - self.canvas_rect.topLeft()
+            if self.current_stroke["tool"] in ("circle", "rectangle", "arrow"):
+                p1 = self.current_stroke["points"][0]
+                self.current_stroke["points"] = [p1, canvas_p]
+            else:
+                self.current_stroke["points"].append(canvas_p)
+            self.canvas_image = None
+            self.update()
+            event.accept()
+            
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton and self.current_stroke:
+            canvas_p = event.pos() - self.canvas_rect.topLeft()
+            if self.current_stroke["tool"] in ("circle", "rectangle", "arrow"):
+                p1 = self.current_stroke["points"][0]
+                self.current_stroke["points"] = [p1, canvas_p]
+            else:
+                self.current_stroke["points"].append(canvas_p)
+            self.strokes.append(self.current_stroke)
+            self.current_stroke = None
+            self.canvas_image = None
+            self.update()
+            event.accept()
+
+class DrawItem(QGraphicsObject):
+    moving_started = Signal()
+    moving_finished = Signal()
+    
+    def __init__(self, pos, file_path, width=200, height=200):
+        super().__init__()
+        self.setPos(pos)
+        self.file_path = file_path
+        self.width = width
+        self.height = height
+        self.uuid = str(uuid.uuid4())
+        self.is_custom_size = False
+        
+        self.setFlag(QGraphicsItem.ItemIsSelectable)
+        self.setFlag(QGraphicsItem.ItemIsMovable)
+        self.setFlag(QGraphicsItem.ItemSendsGeometryChanges)
+        self.setZValue(6000)
+        self.setCacheMode(QGraphicsItem.NoCache)
+        
+        self.pixmap = QPixmap(self.file_path)
+        self._resizing = False
+        self._resize_mode = None
+        self._resize_start_pos = None
+        self._resize_start_size = None
+        
+        self.setAcceptHoverEvents(True)
+        
+    def boundingRect(self):
+        margin = 15
+        return QRectF(-margin, -margin, self.width + margin*2, self.height + margin*2)
+        
+    def paint(self, painter, option, widget):
+        painter.save()
+        painter.setRenderHint(QPainter.SmoothPixmapTransform)
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        if not self.pixmap.isNull():
+            painter.drawPixmap(
+                QRectF(0, 0, self.width, self.height), 
+                self.pixmap, 
+                QRectF(0, 0, self.pixmap.width(), self.pixmap.height())
+            )
+            
+        if self.isSelected():
+            pen_w = 2
+            painter.setBrush(Qt.NoBrush)
+            painter.setPen(QPen(QColor("#00bcd4"), pen_w, Qt.DashLine))
+            painter.drawRect(0, 0, self.width, self.height)
+            
+            painter.setBrush(QColor("#00bcd4"))
+            painter.setPen(QPen(Qt.white, 1))
+            painter.drawEllipse(self.width - 8, self.height - 8, 10, 10)
+            painter.drawRoundedRect(self.width - 5, self.height // 2 - 10, 5, 20, 2, 2)
+            painter.drawRoundedRect(self.width // 2 - 10, self.height - 5, 20, 5, 2, 2)
+        painter.restore()
+        
+    def mousePressEvent(self, event):
+        if self.isSelected():
+            x, y = event.pos().x(), event.pos().y()
+            margin = 15
+            
+            if x > self.width - margin and y > self.height - margin:
+                self._resizing = True
+                self._resize_mode = "bottom_right"
+            elif x > self.width - margin:
+                self._resizing = True
+                self._resize_mode = "right"
+            elif y > self.height - margin:
+                self._resizing = True
+                self._resize_mode = "bottom"
+                
+            if self._resizing:
+                self._resize_start_pos = event.scenePos()
+                self._resize_start_size = (self.width, self.height)
+                event.accept()
+                return
+                
+        if event.button() == Qt.LeftButton:
+            self.moving_started.emit()
+        try:
+            super().mousePressEvent(event)
+        except TypeError:
+            pass
+            
+    def mouseMoveEvent(self, event):
+        if self._resizing:
+            delta = event.scenePos() - self._resize_start_pos
+            
+            new_w = self.width
+            new_h = self.height
+            if self._resize_mode in ["bottom_right", "right"]:
+                new_w = max(20, self._resize_start_size[0] + delta.x())
+            if self._resize_mode in ["bottom_right", "bottom"]:
+                new_h = max(20, self._resize_start_size[1] + delta.y())
+                
+            if new_w != self.width or new_h != self.height:
+                self.prepareGeometryChange()
+                self.width = new_w
+                self.height = new_h
+                self.is_custom_size = True
+                self.update()
+            event.accept()
+        else:
+            try:
+                super().mouseMoveEvent(event)
+            except TypeError:
+                pass
+            
+    def mouseReleaseEvent(self, event):
+        self._resizing = False
+        self._resize_mode = None
+        if event.button() == Qt.LeftButton:
+            self.moving_finished.emit()
+        try:
+            super().mouseReleaseEvent(event)
+        except TypeError:
+            pass
+        
+    def itemChange(self, change, value):
+        if change == QGraphicsItem.ItemParentChange:
+            if isinstance(value, BackdropItem):
+                return None
+        return super().itemChange(change, value)
+
 from utils import generate_thumbnail_image
 
 class ThumbnailItem(QGraphicsObject):
@@ -1645,6 +2252,13 @@ class ThumbnailArea(QWidget):
         self.note_toolbar.btn_delete.clicked.connect(self.delete_selected_notes)
         self._clip_timer.start(1000)
 
+        # Draw Mode State
+        self._draw_mode_active = False
+        self._canvas_item = None
+        self._edit_draw_item = None
+        self.draw_toolbar = DrawToolbar(self)
+        self.draw_toolbar.hide()
+
         # Graphics View
         self.view = QGraphicsView()
         self.view.setRenderHints(QPainter.Antialiasing | QPainter.SmoothPixmapTransform | QPainter.TextAntialiasing)
@@ -1951,6 +2565,9 @@ class ThumbnailArea(QWidget):
         self.update_video_overlay_geometry()
 
     def _update_note_toolbar(self):
+        if hasattr(self, "_draw_mode_active") and self._draw_mode_active:
+            self.note_toolbar.hide()
+            return
         selected = self.scene.selectedItems()
         notes = [it for it in selected if isinstance(it, TextNoteItem)]
         
@@ -2259,6 +2876,48 @@ class ThumbnailArea(QWidget):
             self.update_zoom_indicator()
 
     def eventFilter(self, source, event):
+        if self._draw_mode_active:
+            if event.type() in (QEvent.MouseButtonPress, QEvent.MouseButtonRelease, QEvent.MouseMove, QEvent.MouseButtonDblClick, QEvent.Wheel):
+                if source in (self.view, self.view.viewport()):
+                    return False
+            if event.type() == QEvent.KeyPress:
+                modifiers = event.modifiers()
+                if not (modifiers & (Qt.ControlModifier | Qt.AltModifier)):
+                    key = event.key()
+                    if key == Qt.Key_Escape:
+                        self.exit_draw_mode(save=True)
+                        return True
+                    elif key == Qt.Key_B:
+                        self.draw_toolbar.btn_brush.click()
+                        return True
+                    elif key == Qt.Key_E:
+                        self.draw_toolbar.btn_eraser.click()
+                        return True
+                    elif key == Qt.Key_A:
+                        self.draw_toolbar.btn_arrow.click()
+                        return True
+                    elif key == Qt.Key_C:
+                        self.draw_toolbar.btn_color.click()
+                        return True
+                    elif key in (Qt.Key_Delete, Qt.Key_Backspace):
+                        if self._edit_draw_item:
+                            self.delete_draw_item_safely(self._edit_draw_item)
+                            self._edit_draw_item = None
+                        self.clear_canvas_drawings()
+                        self.exit_draw_mode(save=False)
+                        return True
+                    elif key == Qt.Key_BracketLeft:
+                        idx = self.draw_toolbar.combo_thickness.currentIndex()
+                        if idx > 0:
+                            self.draw_toolbar.combo_thickness.setCurrentIndex(idx - 1)
+                        return True
+                    elif key == Qt.Key_BracketRight:
+                        idx = self.draw_toolbar.combo_thickness.currentIndex()
+                        if idx < self.draw_toolbar.combo_thickness.count() - 1:
+                            self.draw_toolbar.combo_thickness.setCurrentIndex(idx + 1)
+                        return True
+                return True
+
         if event.type() == QEvent.Enter:
             self.view.setFocus()
             
@@ -2391,6 +3050,11 @@ class ThumbnailArea(QWidget):
             if focus_item and isinstance(focus_item, QGraphicsTextItem):
                 return False
 
+            if event.key() == Qt.Key_D and not self._draw_mode_active:
+                if not self._editing_item:
+                    self.enter_draw_mode()
+                    return True
+
             # Version stack hotkeys
             modifiers = event.modifiers()
             is_alt = bool(modifiers & Qt.AltModifier)
@@ -2484,9 +3148,9 @@ class ThumbnailArea(QWidget):
             elif event.key() in (Qt.Key_Delete, Qt.Key_Backspace):
                 if self.view.underMouse() or self.view.hasFocus():
                     selected = self.scene.selectedItems()
-                    # Only act when the entire selection is text notes (not thumbnails/backdrops)
-                    notes = [it for it in selected if isinstance(it, TextNoteItem)]
-                    non_notes = [it for it in selected if not isinstance(it, TextNoteItem)]
+                    # Only act when the entire selection is notes, backdrops, or drawings (not thumbnails)
+                    notes = [it for it in selected if isinstance(it, (TextNoteItem, BackdropItem, DrawItem))]
+                    non_notes = [it for it in selected if not isinstance(it, (TextNoteItem, BackdropItem, DrawItem))]
                     if notes and not non_notes:
                         self.delete_selected_notes()
                         self.scene_items_changed.emit()
@@ -3099,16 +3763,206 @@ class ThumbnailArea(QWidget):
 
     def delete_selected_notes(self):
         selected = self.scene.selectedItems()
-        to_remove = [it for it in selected if isinstance(it, (TextNoteItem, BackdropItem))]
+        to_remove = [it for it in selected if isinstance(it, (TextNoteItem, BackdropItem, DrawItem))]
         if not to_remove: return
         
         for it in to_remove:
             if isinstance(it, BackdropItem):
                 self.remove_backdrop_safely(it)
+            elif isinstance(it, DrawItem):
+                self.delete_draw_item_safely(it)
             else:
                 self.scene.removeItem(it)
         self.scene_items_changed.emit()
         self._update_note_toolbar()
+
+    def get_main_window(self):
+        curr = self
+        while curr:
+            if hasattr(curr, "config") and hasattr(curr, "save_config"):
+                return curr
+            parent = None
+            if hasattr(curr, "parentWidget") and curr.parentWidget():
+                parent = curr.parentWidget()
+            elif hasattr(curr, "parent") and callable(curr.parent) and curr.parent():
+                parent = curr.parent()
+            curr = parent
+        return None
+
+    def get_config(self):
+        win = self.get_main_window()
+        if win:
+            return win.config
+        return {}
+
+    def save_config_if_possible(self):
+        win = self.get_main_window()
+        if win:
+            win.save_config()
+
+    def get_drawing_cache_dir(self):
+        config = self.get_config()
+        location = config.get("drawing_cache_location", "relative to source folder")
+        path_setting = config.get("drawing_cache_path", "_drawcache")
+        
+        if location == "relative to source folder":
+            source_folder = ""
+            if self.model and hasattr(self.model, "source_folder") and self.model.source_folder:
+                source_folder = self.model.source_folder
+            elif hasattr(self, "parent") and self.parent() and hasattr(self.parent(), "model") and self.parent().model and hasattr(self.parent().model, "source_folder"):
+                source_folder = self.parent().model.source_folder
+                
+            if not source_folder:
+                source_folder = os.getcwd()
+            
+            cache_dir = os.path.join(source_folder, path_setting)
+        else:
+            if not path_setting:
+                path_setting = "_drawcache"
+            if os.path.isabs(path_setting):
+                cache_dir = path_setting
+            else:
+                cache_dir = os.path.abspath(path_setting)
+                
+        os.makedirs(cache_dir, exist_ok=True)
+        return cache_dir
+
+    def enter_draw_mode(self):
+        if self._draw_mode_active:
+            return
+            
+        self.note_toolbar.hide()
+        
+        self._draw_mode_active = True
+        self.view.setDragMode(QGraphicsView.NoDrag)
+        
+        selected = self.scene.selectedItems()
+        self._edit_draw_item = None
+        if len(selected) == 1 and isinstance(selected[0], DrawItem):
+            self._edit_draw_item = selected[0]
+            self._edit_draw_item.setVisible(False)
+            
+        visible_rect = self.view.mapToScene(self.view.viewport().rect()).boundingRect()
+        if self._edit_draw_item:
+            self.canvas_rect = visible_rect.united(self._edit_draw_item.sceneBoundingRect())
+        else:
+            self.canvas_rect = visible_rect
+            
+        self._canvas_item = DrawingCanvasItem(self.canvas_rect, self)
+        
+        if self._edit_draw_item:
+            self._canvas_item.load_base_image(
+                self._edit_draw_item.file_path, 
+                self._edit_draw_item.pos(), 
+                self._edit_draw_item.width, 
+                self._edit_draw_item.height
+            )
+            
+        self.scene.addItem(self._canvas_item)
+        
+        cfg = self.get_config()
+        default_color_hex = cfg.get("draw_default_color", "#ff0000")
+        default_thickness = cfg.get("draw_default_thickness", "5 px")
+        default_style = cfg.get("draw_default_style", "Normal")
+        
+        default_color = QColor(default_color_hex)
+        if not default_color.isValid():
+            default_color = QColor(255, 0, 0)
+
+        self.draw_toolbar.btn_brush.setChecked(True)
+        self.draw_toolbar.btn_eraser.setChecked(False)
+        self.draw_toolbar.btn_circle.setChecked(False)
+        self.draw_toolbar.btn_arrow.setChecked(False)
+        self.draw_toolbar.btn_rect.setChecked(False)
+        self._canvas_item.active_tool = "brush"
+        self._canvas_item.active_color = default_color
+        self.draw_toolbar.update_color_button(default_color)
+        
+        self.draw_toolbar.combo_thickness.blockSignals(True)
+        self.draw_toolbar.combo_style.blockSignals(True)
+        self.draw_toolbar.combo_thickness.setCurrentText(default_thickness)
+        self.draw_toolbar.combo_style.setCurrentText(default_style)
+        self.draw_toolbar.combo_thickness.blockSignals(False)
+        self.draw_toolbar.combo_style.blockSignals(False)
+        
+        vp_rect = self.view.viewport().geometry()
+        self.draw_toolbar.adjustSize()
+        global_pos = self.view.viewport().mapToGlobal(
+            QPoint(vp_rect.width() // 2 - self.draw_toolbar.width() // 2, 20)
+        )
+        self.draw_toolbar.move(global_pos)
+        self.draw_toolbar.show()
+        self.view.setFocus()
+
+    def exit_draw_mode(self, save=True):
+        if not self._draw_mode_active:
+            return
+            
+        self._draw_mode_active = False
+        self.draw_toolbar.hide()
+        
+        self.view.setDragMode(QGraphicsView.RubberBandDrag)
+        
+        if self._canvas_item:
+            final_image = self._canvas_item.render_canvas()
+            rect = get_non_transparent_rect(final_image)
+            
+            self.scene.removeItem(self._canvas_item)
+            self._canvas_item = None
+            
+            cache_dir = self.get_drawing_cache_dir()
+            
+            if save and rect.isValid() and not rect.isEmpty():
+                cropped_image = final_image.copy(rect)
+                width = rect.width()
+                height = rect.height()
+                scene_pos = self.canvas_rect.topLeft() + rect.topLeft()
+                
+                if self._edit_draw_item:
+                    file_path = self._edit_draw_item.file_path
+                    cropped_image.save(file_path, "PNG")
+                    
+                    self._edit_draw_item.prepareGeometryChange()
+                    self._edit_draw_item.setPos(scene_pos)
+                    self._edit_draw_item.width = width
+                    self._edit_draw_item.height = height
+                    self._edit_draw_item.pixmap = QPixmap(file_path)
+                    self._edit_draw_item.setVisible(True)
+                    self._edit_draw_item.update()
+                else:
+                    item_uuid = str(uuid.uuid4())
+                    file_path = os.path.join(cache_dir, f"drawing_{item_uuid}.png")
+                    cropped_image.save(file_path, "PNG")
+                    
+                    draw_item = DrawItem(scene_pos, file_path, width, height)
+                    draw_item.uuid = item_uuid
+                    self.scene.addItem(draw_item)
+            else:
+                if self._edit_draw_item:
+                    if save:
+                        self.delete_draw_item_safely(self._edit_draw_item)
+                    else:
+                        self._edit_draw_item.setVisible(True)
+                        
+            self._edit_draw_item = None
+            
+        self.scene_items_changed.emit()
+
+    def delete_draw_item_safely(self, item):
+        if item in self.scene.items():
+            self.scene.removeItem(item)
+        if os.path.exists(item.file_path):
+            try:
+                os.remove(item.file_path)
+            except Exception as e:
+                print(f"Failed to delete drawing cache file: {e}")
+
+    def clear_canvas_drawings(self):
+        if self._canvas_item:
+            self._canvas_item.strokes = []
+            self._canvas_item.base_image = None
+            self._canvas_item.canvas_image = None
+            self._canvas_item.update()
 
     def add_backdrop(self):
         # 1. Calculate geometry

@@ -598,3 +598,36 @@ adjust the initial layout of the items in thumbnail view:
 * make sure to use preferences - gui - Default thumbnail size for the grid layour start
 * to determine horizontal gap size, use 20% of Default thumbnail size 
 * to determine vertical gap size, use 40% of Default thumbnail size 
+
+Feature: Sketching / Draw Mode:
+* Draw mode allows use to draw simple sketches in Thumbnail view
+* activate Draw mode by pressing D, exit by pressing Esc, or by right click
+* All strokes drawn wile in draw mode turn into one "draw item" that can be moved and resized same as Thumbnail Item. Internally this is bitmap with transparency, saved as high quality PNG file
+* When start drawing while only one item is selected, and it is a draw item, the newly drawed strokes will be merged to currently selected item after finishing the draw mode.
+* The draw item is always on top / in front of andy other item while in draw mode
+* The Draw Overlay Menu: similar to Text Note Menu, a floating toolbar with small icons:
+- Brush
+- Eraser
+- Brush Color Picker
+- Brush Thickness Picker
+- stoke style (normal / arrow / dashed stroke)
+- dust bin for deleting the drawing
+
+Add new preferences for Draw mode:
+* Preferences - GUI - "Drawing Cache Location", dropdown ["relative to source folder", "custom"], default is "relative to source folder"
+* Preferences - GUI - "Drawing Cache Path", text box, default is "_drawcache"
+Finished Drawing is cached as a PNG file.
+
+When in draw mode, use those hotkeys to switch tools: (add the hotkeys to tooltips)
+* "b" for brush
+* "e" for eraser
+* "a" for arrow
+* "c" for color picker
+* "esc" or right click for finishing the draw mode
+* "delete" key for deleting the current draw item
+* "[" for switching to next smaller brush size
+* "]" for switching to next bigger brush size
+
+Draw mode: implement basic, one step back undo/redo
+* make sure user can go back one step (ie finished brush or eraser stroke, arrow/circle/rectangle creation...)
+
