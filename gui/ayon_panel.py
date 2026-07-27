@@ -334,7 +334,53 @@ class AyonPanel(QWidget):
         self.combo_project.setCurrentText(project)
         self.combo_project.blockSignals(False)
 
+    def get_folder_expansion_state(self):
+        """Traverse tree view and collect expanded and collapsed folder paths."""
+        expanded_paths = set()
+        collapsed_paths = set()
+
+        def _recurse(parent_item):
+            for r in range(parent_item.rowCount()):
+                item = parent_item.child(r, 0)
+                if not item: continue
+                data = item.data(Qt.UserRole)
+                if data and "path" in data and "type" in data and data["type"] != "Task":
+                    path = data["path"]
+                    source_idx = item.index()
+                    proxy_idx = self.proxy.mapFromSource(source_idx)
+                    if proxy_idx.isValid():
+                        if self.tree.isExpanded(proxy_idx):
+                            expanded_paths.add(path)
+                        else:
+                            collapsed_paths.add(path)
+                _recurse(item)
+
+        _recurse(self.model.invisibleRootItem())
+        return expanded_paths, collapsed_paths
+
+    def restore_folder_expansion_state(self, expanded_paths, collapsed_paths):
+        """Restore expansion/collapse state for folders based on saved paths."""
+        def _recurse(parent_item):
+            for r in range(parent_item.rowCount()):
+                item = parent_item.child(r, 0)
+                if not item: continue
+                data = item.data(Qt.UserRole)
+                if data and "path" in data and "type" in data and data["type"] != "Task":
+                    path = data["path"]
+                    source_idx = item.index()
+                    proxy_idx = self.proxy.mapFromSource(source_idx)
+                    if proxy_idx.isValid():
+                        if path in collapsed_paths:
+                            self.tree.setExpanded(proxy_idx, False)
+                        elif path in expanded_paths:
+                            self.tree.setExpanded(proxy_idx, True)
+                _recurse(item)
+
+        _recurse(self.model.invisibleRootItem())
+
     def set_hierarchy(self, root_folders):
+        expanded_paths, collapsed_paths = self.get_folder_expansion_state()
+
         self.model.removeRows(0, self.model.rowCount())
         
         for folder in root_folders:
@@ -343,6 +389,9 @@ class AyonPanel(QWidget):
         self.tree.expandToDepth(2)
         self.tree.resizeColumnToContents(0)
         self.tree.sortByColumn(0, Qt.AscendingOrder)
+
+        if collapsed_paths or expanded_paths:
+            self.restore_folder_expansion_state(expanded_paths, collapsed_paths)
 
     def set_connection_status(self, is_connected, server_url=""):
         if is_connected:

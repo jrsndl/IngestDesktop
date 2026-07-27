@@ -385,6 +385,7 @@ class MainWindow(QMainWindow):
         self.top_bar.folder_selected.connect(self.start_scan)
         self.top_bar.prefs_requested.connect(self.show_preferences)
         self.top_bar.rescan_requested.connect(self.rescan_current)
+        self.top_bar.reveal_requested.connect(self.reveal_source_folder)
         self.top_bar.load_preset_requested.connect(self._on_preset_changed)
         self.main_layout.addWidget(self.top_bar, 0)
         self.main_layout.addSpacing(5)
@@ -1294,7 +1295,9 @@ class MainWindow(QMainWindow):
             thumb_location_path=self.config.get("thumb_location_path", "_thumbs"),
             timeout=self.config.get("timeout_seconds", 6),
             default_fps=self.config.get("default_fps", 25.0),
-            use_fps_from_metadata=self.config.get("use_fps_from_metadata", True)
+            use_fps_from_metadata=self.config.get("use_fps_from_metadata", True),
+            drawing_cache_location=self.config.get("drawing_cache_location", "relative to source folder"),
+            drawing_cache_path=self.config.get("drawing_cache_path", "_drawcache")
         )
         self.scanner.finished.connect(lambda items: self.log_message(f"Scan complete. Found {len(items)} items. Fetching metadata in background...", "success"))
         self.scanner.finished.connect(self._on_scan_finished)
@@ -1459,6 +1462,63 @@ class MainWindow(QMainWindow):
             self.log_message("No valid directory to rescan.", "warning")
             return
             
+        # Check that all files shown as items in the app still exist. If not, remove them.
+        version_regex = self.config.get("version_regex", r"([._]v|v)(\d+)")
+        items_to_remove = []
+        path_updated = False
+        
+        for item in list(self.model.items):
+            if os.path.exists(item.file_path):
+                continue
+                
+            exists = False
+            if item.is_sequence:
+                directory_path = os.path.dirname(item.file_path)
+                if os.path.exists(directory_path):
+                    orig_filename = os.path.basename(item.file_path)
+                    base, ext = os.path.splitext(orig_filename)
+                    ver_match = re.search(version_regex, orig_filename, re.IGNORECASE)
+                    ver_str = ver_match.group(0) if ver_match else ""
+                    
+                    name_no_ver = re.sub(version_regex, "", orig_filename, flags=re.IGNORECASE)
+                    from utils import strip_sequence_counter
+                    pattern_base = strip_sequence_counter(name_no_ver)
+                    
+                    try:
+                        all_dir_files = os.listdir(directory_path)
+                    except Exception:
+                        all_dir_files = []
+                        
+                    for f in all_dir_files:
+                        if not os.path.isfile(os.path.join(directory_path, f)):
+                            continue
+                        f_no_ver = re.sub(version_regex, "", f, flags=re.IGNORECASE)
+                        f_pattern_base = strip_sequence_counter(f_no_ver)
+                        f_ver_match = re.search(version_regex, f, re.IGNORECASE)
+                        f_ver_str = f_ver_match.group(0) if f_ver_match else ""
+                        
+                        if f_pattern_base == pattern_base and f_ver_str == ver_str and f.lower().endswith(ext.lower()):
+                            item.file_path = os.path.join(directory_path, f).replace("\\", "/")
+                            item.filename = f
+                            exists = True
+                            path_updated = True
+                            break
+            if not exists:
+                items_to_remove.append(item)
+                
+        if items_to_remove or path_updated:
+            self.model.beginResetModel()
+            if items_to_remove:
+                self.model.items = [it for it in self.model.items if it not in items_to_remove]
+            else:
+                self.model.rebuild_version_stacks()
+            self.model.endResetModel()
+            
+            if items_to_remove:
+                self.log_message(f"Removed {len(items_to_remove)} items whose files no longer exist.", "info")
+            if path_updated:
+                self.log_message("Updated paths for sequence items with missing representative frames.", "info")
+            
         self.log_message(f"Rescanning directory: {directory}")
         self.model.source_folder = directory
         if hasattr(self, "scanner") and self.scanner.isRunning():
@@ -1491,7 +1551,9 @@ class MainWindow(QMainWindow):
             thumb_location_path=self.config.get("thumb_location_path", "_thumbs"),
             timeout=self.config.get("timeout_seconds", 6),
             default_fps=self.config.get("default_fps", 25.0),
-            use_fps_from_metadata=self.config.get("use_fps_from_metadata", True)
+            use_fps_from_metadata=self.config.get("use_fps_from_metadata", True),
+            drawing_cache_location=self.config.get("drawing_cache_location", "relative to source folder"),
+            drawing_cache_path=self.config.get("drawing_cache_path", "_drawcache")
         )
         self.scanner.finished.connect(self._on_rescan_finished)
         self.scanner.item_updated.connect(self.model.update_item)
@@ -1520,6 +1582,20 @@ class MainWindow(QMainWindow):
         else:
             self.log_message("Rescan complete. No new items found.")
             self.trigger_ayon_thumbnail_downloads()
+
+    def reveal_source_folder(self):
+        """Open the current source folder in the OS file manager."""
+        import os
+        import subprocess
+        folder = self.top_bar.path_display.text().strip()
+        if not folder or not os.path.exists(folder):
+            folder = self.config.get("last_source_folder", "").strip()
+            
+        if folder and os.path.exists(folder):
+            folder = os.path.normpath(folder)
+            subprocess.run(['explorer', folder])
+        else:
+            QMessageBox.warning(self, "Reveal in Filesystem", "No valid source folder selected or folder does not exist.")
 
     def _on_project_changed(self, project_name):
         """Called when user selects a different project in the top bar."""
@@ -1923,7 +1999,9 @@ class MainWindow(QMainWindow):
     def _gather_gui_state(self):
         # 1. AYON Panel
         if hasattr(self, "ayon_panel") and self.ayon_panel:
-            self.config["ayon_project"] = self.ayon_panel.combo_project.currentText()
+            project_name = self.ayon_panel.combo_project.currentText()
+            self.config["ayon_project"] = project_name
+            self.config["ayon_project_name"] = project_name
             self.config["ayon_search_text"] = self.ayon_panel.search_edit.text()
             self.config["ayon_search_column"] = self.ayon_panel.search_combo.currentIndex()
             self.config["ayon_show_thumbs"] = self.ayon_panel.btn_show_thumbs.isChecked()
@@ -2171,10 +2249,18 @@ class MainWindow(QMainWindow):
 
     def _check_duplicates_in_list(self, items):
         """Returns a list of items that are considered duplicates within the provided list."""
+        dup_template = self.config.get("duplicate_identity", "{ayon_path_val}{prod_name}{variant}{item.version}")
         identity_map = {}
         for item in items:
             prod_name = self.model._expand_string(self.model.product_name_template, item, use_global_camel=True)
-            identity = f"{item.ayon_path}{prod_name}{item.version}"
+            ayon_path_val = item.ayon_path or ""
+            variant = self.model._expand_string(item.variant, item)
+            
+            identity = self.model._expand_string(dup_template, item, use_global_camel=True)
+            identity = identity.replace("{ayon_path_val}", ayon_path_val)
+            identity = identity.replace("{prod_name}", prod_name)
+            identity = identity.replace("{item.version}", str(item.version))
+            
             if identity not in identity_map:
                 identity_map[identity] = []
             identity_map[identity].append(item)
@@ -4324,7 +4410,7 @@ class MainWindow(QMainWindow):
 
     def _refresh_ayon_panel_icons(self):
         show_thumbs = self.ayon_panel.btn_show_thumbs.isChecked()
-        cache_root = self.config.get("ayon_thumbnails_cache", "")
+        cache_root = self.secrets.get("ayon_thumbnails_cache", "")
         if not cache_root:
             cache_root = "_ayon_thumbs_cache"
         from utils import expand_env_vars
@@ -4371,7 +4457,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, "_ayon_thumb_download_thread") and self._ayon_thumb_download_thread.isRunning():
             return # Let the current run finish
             
-        cache_root = self.config.get("ayon_thumbnails_cache", "")
+        cache_root = self.secrets.get("ayon_thumbnails_cache", "")
         if not cache_root:
             cache_root = "_ayon_thumbs_cache"
         from utils import expand_env_vars
@@ -4416,7 +4502,7 @@ class MainWindow(QMainWindow):
         self._ayon_thumb_download_thread.start()
 
     def load_ayon_thumb_states(self):
-        cache_root = self.config.get("ayon_thumbnails_cache", "")
+        cache_root = self.secrets.get("ayon_thumbnails_cache", "")
         if not cache_root:
             cache_root = "_ayon_thumbs_cache"
         from utils import expand_env_vars
@@ -4437,7 +4523,7 @@ class MainWindow(QMainWindow):
             self.ayon_thumb_states = {}
 
     def save_ayon_thumb_states(self):
-        cache_root = self.config.get("ayon_thumbnails_cache", "")
+        cache_root = self.secrets.get("ayon_thumbnails_cache", "")
         if not cache_root:
             cache_root = "_ayon_thumbs_cache"
         from utils import expand_env_vars
@@ -4651,6 +4737,7 @@ class MainWindow(QMainWindow):
 
     def _parse_item_tags(self, item):
         """Parse filename using regexes and store in item.metadata."""
+        from utils import apply_capitalization
         filename = os.path.splitext(os.path.basename(item.file_path))[0]
         
         # Version
@@ -4668,16 +4755,18 @@ class MainWindow(QMainWindow):
                     pass
         
         # New Tags
-        tag_regexes = {
-            "folder_name": self.config.get("folder_regex"),
-            "task_name": self.config.get("task_regex"),
-            "sequence": self.config.get("sequence_regex"),
-            "episode": self.config.get("episode_regex")
+        tag_config = {
+            "folder_name": (self.config.get("folder_regex"), self.config.get("folder_capitalization", "Keep Original")),
+            "task_name": (self.config.get("task_regex"), self.config.get("task_capitalization", "Keep Original")),
+            "variant_parsed": (self.config.get("variant_regex", r"^[^_]*_[^_]*_[^_]*_([^_]*).*$"), self.config.get("variant_capitalization", "Keep Original")),
+            "sequence": (self.config.get("sequence_regex"), self.config.get("sequence_capitalization", "Keep Original")),
+            "episode": (self.config.get("episode_regex"), self.config.get("episode_capitalization", "Keep Original"))
         }
         
-        for tag, pattern in tag_regexes.items():
+        for tag, (pattern, cap_style) in tag_config.items():
             if tag == "task_name" and self.config.get("fixed_task_name_enabled", False):
                 val = self.config.get("fixed_task_name", "")
+                val = apply_capitalization(val, cap_style)
                 item.metadata["task_name"] = val
                 logging.info(f"Using fixed task_name={val} for {filename}")
                 continue
@@ -4687,6 +4776,7 @@ class MainWindow(QMainWindow):
                 match = re.search(pattern, filename)
                 if match and match.groups():
                     val = match.group(1)
+                    val = apply_capitalization(val, cap_style)
                     item.metadata[tag] = val
                     logging.info(f"Parsed tag {tag}={val} from {filename}")
                 else:
@@ -4733,6 +4823,9 @@ class MainWindow(QMainWindow):
             if not folder_name:
                 # Fallback to leaf folder name of the local path
                 folder_name = os.path.basename(os.path.dirname(item.file_path))
+                from utils import apply_capitalization
+                folder_name = apply_capitalization(folder_name, self.config.get("folder_capitalization", "Keep Original"))
+                item.metadata["folder_name"] = folder_name
             
             if not folder_name:
                 continue
@@ -4805,13 +4898,19 @@ class MainWindow(QMainWindow):
                 self.csv_preview_model._refresh_data()
             return
 
-        # 2. Group by identity string: {ayon_path}{product_name}{version}
+        # 2. Group by identity string using configurable template
+        dup_template = self.config.get("duplicate_identity", "{ayon_path_val}{prod_name}{variant}{item.version}")
         identity_map = {}
         for item in candidates:
             # Product name expanded from template
             prod_name = self.model._expand_string(self.model.product_name_template, item, use_global_camel=True)
             ayon_path_val = item.ayon_path or ""
-            identity = f"{ayon_path_val}{prod_name}{item.version}"
+            variant = self.model._expand_string(item.variant, item)
+            
+            identity = self.model._expand_string(dup_template, item, use_global_camel=True)
+            identity = identity.replace("{ayon_path_val}", ayon_path_val)
+            identity = identity.replace("{prod_name}", prod_name)
+            identity = identity.replace("{item.version}", str(item.version))
             
             if identity not in identity_map:
                 identity_map[identity] = []
@@ -5187,6 +5286,7 @@ class MainWindow(QMainWindow):
                 return
                 
         try:
+            self._gather_gui_state()
             os.makedirs(presets_folder, exist_ok=True)
             
             # Keep identical structure to config.json

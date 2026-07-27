@@ -28,7 +28,9 @@ class ImageScanner(QThread):
                  oiiotool_path="oiiotool.exe", ocio_config="", stills_thumb_same=True,
                  thumb_suffix="_thumbnail", thumb_format=".jpg",
                  thumb_location="Relative to Source Folder", thumb_location_path="_thumbs",
-                 timeout=6, default_fps=25.0, use_fps_from_metadata=True):
+                 timeout=6, default_fps=25.0, use_fps_from_metadata=True,
+                  drawing_cache_location="relative to source folder",
+                  drawing_cache_path="_drawcache"):
         super().__init__()
         self.directory = directory
         self.recursive = recursive
@@ -55,6 +57,8 @@ class ImageScanner(QThread):
         self.timeout = timeout
         self.default_fps = default_fps
         self.use_fps_from_metadata = use_fps_from_metadata
+        self.drawing_cache_location = drawing_cache_location
+        self.drawing_cache_path = drawing_cache_path
         self._is_canceled = False
 
     def cancel(self):
@@ -93,6 +97,18 @@ class ImageScanner(QThread):
         others = []
         videos = []
 
+        # Resolve drawing cache directory absolute path for exclusion
+        cache_dir_lower = None
+        if self.drawing_cache_path:
+            if self.drawing_cache_location == "relative to source folder":
+                if self.directory:
+                    cache_dir_lower = os.path.normpath(os.path.join(self.directory, self.drawing_cache_path)).lower()
+            else:
+                if os.path.isabs(self.drawing_cache_path):
+                    cache_dir_lower = os.path.normpath(self.drawing_cache_path).lower()
+                else:
+                    cache_dir_lower = os.path.normpath(os.path.abspath(self.drawing_cache_path)).lower()
+
         for f in all_files:
             if self._is_canceled:
                 self.canceled.emit()
@@ -104,6 +120,12 @@ class ImageScanner(QThread):
                 self.status_text.emit(warning_msg)
                 self.finished.emit([])
                 return
+
+            # Exclude files inside the drawing cache folder
+            if cache_dir_lower:
+                f_norm_path = os.path.normpath(f).lower()
+                if f_norm_path.startswith(cache_dir_lower + os.sep) or f_norm_path == cache_dir_lower:
+                    continue
 
             # Completely ignore generated thumbnails
             filename_lower = f.lower()

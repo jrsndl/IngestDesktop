@@ -130,6 +130,9 @@ class PreferencesDialog(QDialog):
         self.ayon_form.addRow("Product Name Template:", self.product_name)
         self.ayon_form.addRow("Product Name camelCase:", self.product_name_camel)
 
+        self.duplicate_identity = QLineEdit(self.config.get("duplicate_identity", "{ayon_path_val}{prod_name}{variant}{item.version}"))
+        self.ayon_form.addRow("Duplicate Identity:", self.duplicate_identity)
+
         # New AYON settings
         self.ayon_project_name = QLineEdit(self.config.get("ayon_project_name", ""))
         self.csv_ingest_folder = QLineEdit(self.config.get("ayon_csv_ingest_folder", "/edit/csvingest"))
@@ -144,7 +147,7 @@ class PreferencesDialog(QDialog):
         self.get_ayon_thumbnails = QCheckBox("get AYON Thumbnails")
         self.get_ayon_thumbnails.setChecked(self.config.get("get_ayon_thumbnails", True))
 
-        self.ayon_thumbnails_cache = QLineEdit(self.config.get("ayon_thumbnails_cache", "_ayon_thumbs_cache"))
+        self.ayon_thumbnails_cache = QLineEdit(self.secrets.get("ayon_thumbnails_cache", "_ayon_thumbs_cache"))
         self.btn_browse_cache = QPushButton("Browse...")
         self.btn_browse_cache.clicked.connect(self._on_browse_cache_folder)
 
@@ -206,7 +209,14 @@ class PreferencesDialog(QDialog):
         # Regex fields
         self.version_regex = QLineEdit(self.config.get("version_regex", r"([._]v|v)(\d+)"))
         self.folder_regex = QLineEdit(self.config.get("folder_regex", r"^([^_]*_[^_]*)_.*$"))
+        self.folder_capitalization = QComboBox()
+        self.folder_capitalization.addItems(["Keep Original", "All Lowercase", "All Uppercase", "Pascal Case", "Snake Case"])
+        self.folder_capitalization.setCurrentText(self.config.get("folder_capitalization", "Keep Original"))
+
         self.task_regex = QLineEdit(self.config.get("task_regex", r"^[^_]*_[^_]*_([^_]*).*$"))
+        self.task_capitalization = QComboBox()
+        self.task_capitalization.addItems(["Keep Original", "All Lowercase", "All Uppercase", "Pascal Case", "Snake Case"])
+        self.task_capitalization.setCurrentText(self.config.get("task_capitalization", "Keep Original"))
         
         self.fixed_task_name_enabled = QCheckBox("Fixed Task Name")
         self.fixed_task_name_enabled.setChecked(self.config.get("fixed_task_name_enabled", False))
@@ -214,15 +224,33 @@ class PreferencesDialog(QDialog):
         self.fixed_task_name.setEnabled(self.fixed_task_name_enabled.isChecked())
         self.fixed_task_name_enabled.toggled.connect(self.fixed_task_name.setEnabled)
         
+        self.variant_regex = QLineEdit(self.config.get("variant_regex", r"^[^_]*_[^_]*_[^_]*_([^_]*).*$"))
+        self.variant_capitalization = QComboBox()
+        self.variant_capitalization.addItems(["Keep Original", "All Lowercase", "All Uppercase", "Pascal Case", "Snake Case"])
+        self.variant_capitalization.setCurrentText(self.config.get("variant_capitalization", "Keep Original"))
+
         self.sequence_regex = QLineEdit(self.config.get("sequence_regex", r"^[^_]*_([^_]*)_[^_]*.*$"))
+        self.sequence_capitalization = QComboBox()
+        self.sequence_capitalization.addItems(["Keep Original", "All Lowercase", "All Uppercase", "Pascal Case", "Snake Case"])
+        self.sequence_capitalization.setCurrentText(self.config.get("sequence_capitalization", "Keep Original"))
+
         self.episode_regex = QLineEdit(self.config.get("episode_regex", r"^[^_]*_([^_]*)_[^_]*.*$"))
+        self.episode_capitalization = QComboBox()
+        self.episode_capitalization.addItems(["Keep Original", "All Lowercase", "All Uppercase", "Pascal Case", "Snake Case"])
+        self.episode_capitalization.setCurrentText(self.config.get("episode_capitalization", "Keep Original"))
 
         self.auto_assign_form.addRow("Version Regex:", self.version_regex)
         self.auto_assign_form.addRow("Folder Regex {folder_name}:", self.folder_regex)
+        self.auto_assign_form.addRow("Folder Capitalization:", self.folder_capitalization)
         self.auto_assign_form.addRow("Task Regex {task_name}:", self.task_regex)
+        self.auto_assign_form.addRow("Task Capitalization:", self.task_capitalization)
         self.auto_assign_form.addRow(self.fixed_task_name_enabled, self.fixed_task_name)
+        self.auto_assign_form.addRow("Variant Regex {variant_parsed}:", self.variant_regex)
+        self.auto_assign_form.addRow("Variant Capitalization:", self.variant_capitalization)
         self.auto_assign_form.addRow("Sequence Regex {sequence}:", self.sequence_regex)
+        self.auto_assign_form.addRow("Sequence Capitalization:", self.sequence_capitalization)
         self.auto_assign_form.addRow("Episode Regex {episode}:", self.episode_regex)
+        self.auto_assign_form.addRow("Episode Capitalization:", self.episode_capitalization)
         
         self.auto_assign_form.addRow(self.auto_assign_multi_match)
         self.auto_assign_form.addRow(self.auto_assign_fallback_task)
@@ -884,12 +912,18 @@ class PreferencesDialog(QDialog):
             "fixed_task_name_enabled": self.fixed_task_name_enabled.isChecked(),
             "fixed_task_name": self.fixed_task_name.text(),
             "folder_regex": self.folder_regex.text(),
+            "folder_capitalization": self.folder_capitalization.currentText(),
             "task_regex": self.task_regex.text(),
+            "task_capitalization": self.task_capitalization.currentText(),
+            "variant_regex": self.variant_regex.text(),
+            "variant_capitalization": self.variant_capitalization.currentText(),
             "sequence_regex": self.sequence_regex.text(),
+            "sequence_capitalization": self.sequence_capitalization.currentText(),
             "episode_regex": self.episode_regex.text(),
+            "episode_capitalization": self.episode_capitalization.currentText(),
             "ayon_project_name": self.ayon_project_name.text(),
+            "duplicate_identity": self.duplicate_identity.text(),
             "get_ayon_thumbnails": self.get_ayon_thumbnails.isChecked(),
-            "ayon_thumbnails_cache": self.ayon_thumbnails_cache.text(),
             "ayon_csv_ingest_folder": self.csv_ingest_folder.text(),
             "ayon_csv_ingest_task": self.csv_ingest_task.text(),
             "ayon_csv_preset": self.csv_preset.text(),
@@ -931,6 +965,7 @@ class PreferencesDialog(QDialog):
             "deadline_group": self.deadline_group.text(),
             "deadline_priority": self.deadline_priority.value(),
             "deadline_machine_limit": self.deadline_machine_limit.value(),
-            "deadline_concurrent_tasks": self.deadline_concurrent_tasks.value()
+            "deadline_concurrent_tasks": self.deadline_concurrent_tasks.value(),
+            "ayon_thumbnails_cache": self.ayon_thumbnails_cache.text()
         }
         return new_config, new_secrets

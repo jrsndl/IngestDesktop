@@ -237,3 +237,28 @@ def expand_env_vars(path_str):
     res = res.replace("{IngestDesktop}", _ENV_CACHE.get("IngestDesktop", ""))
     res = res.replace("{IngestDesktopResources}", _ENV_CACHE.get("IngestDesktopResources", ""))
     return res
+
+def apply_capitalization(text, style):
+    """
+    Apply capitalization style to text.
+    Styles: "Keep Original", "All Lowercase", "All Uppercase", "Pascal Case", "Snake Case"
+    """
+    if not text or not style or style == "Keep Original":
+        return text
+    if style == "All Lowercase":
+        return text.lower()
+    if style == "All Uppercase":
+        return text.upper()
+        
+    s = re.sub(r'([a-z0-9])([A-Z])', r'\1 \2', text)
+    words = [w for w in re.split(r'[^a-zA-Z0-9]+', s) if w]
+    if not words:
+        return text
+
+    if style == "Pascal Case":
+        return "".join(w.capitalize() for w in words)
+    if style == "Snake Case":
+        return "_".join(w.lower() for w in words)
+
+    return text
+

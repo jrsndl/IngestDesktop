@@ -506,6 +506,7 @@ class ImageTableModel(QAbstractTableModel):
             "{product_type}": item.product_type or "",
             "{task_name}": task_name,
             "{folder_name}": folder_name,
+            "{variant_parsed}": item.metadata.get("variant_parsed", ""),
             "{sequence}": item.metadata.get("sequence", ""),
             "{episode}": item.metadata.get("episode", ""),
             "{parent_folder}": parent_folder,
@@ -584,7 +585,7 @@ class ImageTableModel(QAbstractTableModel):
                 pairs.append(f"{k}={val}")
         
         # Add metadata tokens EXCEPT the ones we already show as primary tokens
-        primary_names = ["folder_name", "task_name", "sequence", "episode"]
+        primary_names = ["folder_name", "task_name", "variant_parsed", "sequence", "episode"]
         for mk, mv in item.metadata.items():
             if mk not in primary_names:
                 pairs.append(f"{{metadata.{mk}}}={mv}")

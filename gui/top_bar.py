@@ -5,6 +5,7 @@ class TopBar(QWidget):
     folder_selected = Signal(str)
     prefs_requested = Signal()
     rescan_requested = Signal()
+    reveal_requested = Signal()
     load_preset_requested = Signal(str)
 
     def __init__(self, parent=None):
@@ -34,6 +35,10 @@ class TopBar(QWidget):
         self.btn_rescan = QPushButton("Rescan")
         self.btn_rescan.clicked.connect(self.rescan_requested.emit)
         self.layout.addWidget(self.btn_rescan)
+        
+        self.btn_reveal = QPushButton("Reveal in Filesystem")
+        self.btn_reveal.clicked.connect(self.reveal_requested.emit)
+        self.layout.addWidget(self.btn_reveal)
         
         self.layout.addStretch()
         
