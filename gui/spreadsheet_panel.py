@@ -38,6 +38,7 @@ class ScalingDelegate(QStyledItemDelegate):
 
 class SpreadsheetPanel(QWidget):
     check_duplicates_clicked = Signal()
+    version_check_clicked = Signal()
     version_collision_check_clicked = Signal()
     maximize_toggle_requested = Signal()
     label_action_requested = Signal(str, object)
@@ -67,7 +68,8 @@ class SpreadsheetPanel(QWidget):
         self.btn_assigned_only.setCheckable(True)
         self.btn_assigned_only.toggled.connect(lambda: self.update_filtering())
         
-        self.btn_check_ver = QPushButton("Version Check & Fix")
+        self.btn_check_ver_only = QPushButton("Version Check")
+        self.btn_check_ver = QPushButton("Version Check Fix")
         self.btn_check_dup = QPushButton("Check Duplicities")
         self.btn_tag_sel = QPushButton("Enable/Disable Selected")
         
@@ -75,6 +77,7 @@ class SpreadsheetPanel(QWidget):
         self.btn_csv.setCheckable(True)
         self.btn_csv.toggled.connect(self._on_csv_toggled)
         
+        self.btn_check_ver_only.clicked.connect(self.version_check_clicked.emit)
         self.btn_check_ver.clicked.connect(self.version_collision_check_clicked.emit)
         self.btn_check_dup.clicked.connect(self.check_duplicates_clicked.emit)
         
@@ -94,53 +97,64 @@ class SpreadsheetPanel(QWidget):
         controls_layout.addWidget(self.btn_selected_only)
         controls_layout.addWidget(self.btn_tagged_only)
         controls_layout.addWidget(self.btn_assigned_only)
+        controls_layout.addWidget(self.btn_check_ver_only)
         controls_layout.addWidget(self.btn_check_ver)
         controls_layout.addWidget(self.btn_check_dup)
         controls_layout.addWidget(self.btn_tag_sel)
         controls_layout.addWidget(self.btn_csv)
-        controls_layout.addSpacing(10)
+        controls_layout.addWidget(self.lbl_row_height)
+        controls_layout.addWidget(self.slider_row_height)
         controls_layout.addWidget(self.comment_field)
         controls_layout.addWidget(self.btn_add_comment)
         controls_layout.addStretch()
-        controls_layout.addWidget(self.lbl_row_height)
-        controls_layout.addWidget(self.slider_row_height)
+
         self.layout.addWidget(self.controls)
 
         # Table View
         self.table = QTableView()
-        self.table.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.SelectedClicked | QAbstractItemView.AnyKeyPressed)
+        self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(QTableView.SelectRows)
         self.table.setSelectionMode(QTableView.ExtendedSelection)
         self.table.setSortingEnabled(True)
-        self.table.verticalHeader().setVisible(True)
-        self.table.verticalHeader().setDefaultAlignment(Qt.AlignCenter)
-        self.table.verticalHeader().setStyleSheet("font-size: 9px; color: #888888;")
-        self.table.verticalHeader().setFixedWidth(25)
-        self.table.horizontalHeader().setStretchLastSection(True)
-        self.layout.addWidget(self.table)
-        
-        # Header Context Menu
-        self.table.horizontalHeader().setContextMenuPolicy(Qt.CustomContextMenu)
-        self.table.horizontalHeader().customContextMenuRequested.connect(self._on_header_context_menu)
-        
+        self.table.verticalHeader().hide()
+        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._on_context_menu)
         
+        # Install event filter to grab focus on hover and handle key press
         self.table.installEventFilter(self)
         self.table.viewport().installEventFilter(self)
         
+        # Header context menu for column visibility
+        self.table.horizontalHeader().setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table.horizontalHeader().customContextMenuRequested.connect(self._on_header_context_menu)
+
+        self.layout.addWidget(self.table)
+
         self.standard_model = None
         self.csv_model = None
         self._is_csv_mode = False
+        
+        # Filters state
         self._last_age_filter = (False, 0)
         self._last_search_text = ""
 
+    def setModel(self, standard_model, csv_model):
+        self.standard_model = standard_model
+        self.csv_model = csv_model
+        if self._is_csv_mode:
+            self._setup_csv_view()
+        else:
+            self._setup_standard_view()
+
     def set_model(self, model):
         self.standard_model = model
-        self.table.setModel(model)
-        self._setup_standard_view()
+        if not self._is_csv_mode:
+            self._setup_standard_view()
 
     def set_csv_model(self, model):
         self.csv_model = model
+        if self._is_csv_mode:
+            self._setup_csv_view()
 
     def _setup_standard_view(self):
         if not self.standard_model: return
@@ -167,6 +181,7 @@ class SpreadsheetPanel(QWidget):
         header.setSectionResizeMode(6, QHeaderView.Interactive) # Category
         header.setSectionResizeMode(7, QHeaderView.Interactive) # Preset
         header.setSectionResizeMode(8, QHeaderView.Interactive) # Version
+        header.setSectionResizeMode(9, QHeaderView.Interactive) # Version User
         
         # Initial fit
         self.table.setColumnWidth(0, 40)
@@ -178,8 +193,9 @@ class SpreadsheetPanel(QWidget):
         self.table.resizeColumnToContents(6) # Category
         self.table.resizeColumnToContents(7) # Preset
         self.table.resizeColumnToContents(8) # Version
+        self.table.resizeColumnToContents(9) # Version User
         
-        # Connect model data change to auto-resize Label column
+        # Connect model data change to auto-resize columns
         self.table.model().dataChanged.connect(self._on_model_data_changed)
 
     def _setup_csv_view(self):
@@ -210,6 +226,7 @@ class SpreadsheetPanel(QWidget):
             self._setup_standard_view()
         
         # Hide/Show other controls
+        self.btn_check_ver_only.setEnabled(True)
         self.btn_check_ver.setEnabled(True)
         self.btn_check_dup.setEnabled(True)
         self.btn_tag_sel.setEnabled(not checked)
@@ -227,12 +244,14 @@ class SpreadsheetPanel(QWidget):
         if bottom_right.column() - top_left.column() > 5:
             return
             
-        # If Label or Variant/User Variant column was changed, auto-resize them
-        if top_left.column() <= 4 <= bottom_right.column():
+        # If Label, Variant/User Variant or Version/User Version column was changed, auto-resize them
+        if top_left.column() <= 9 <= bottom_right.column() or top_left.column() <= 4 <= bottom_right.column():
             self.table.resizeColumnToContents(2)
             self.table.resizeColumnToContents(3) # Variant
             self.table.resizeColumnToContents(4) # Variant User
             self.table.resizeColumnToContents(5) # Product Name
+            self.table.resizeColumnToContents(8) # Version
+            self.table.resizeColumnToContents(9) # Version User
 
     def _on_row_height_change(self, value):
         # Non-linear mapping (quadratic)

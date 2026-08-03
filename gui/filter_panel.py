@@ -69,6 +69,11 @@ class TagColorProxyModel(QSortFilterProxyModel):
         super().__init__(parent)
         self.main_model = main_model
         
+        # Ignore filter state
+        self._ignore_enabled = True
+        self._ignore_text = ""
+        self._ignore_patterns = []
+
         # Current filter state for coloring
         self._search_text = ""
         self._age_limit = 0
@@ -93,6 +98,12 @@ class TagColorProxyModel(QSortFilterProxyModel):
         self.main_model.rowsInserted.connect(self._rebuild_cache)
         self.main_model.rowsRemoved.connect(self._rebuild_cache)
         self.main_model.layoutChanged.connect(self._rebuild_cache)
+
+    def set_ignore_filter(self, ignore_text, ignore_enabled=True):
+        self._ignore_enabled = ignore_enabled
+        self._ignore_text = ignore_text
+        self._ignore_patterns = [p.strip().lower() for p in ignore_text.split() if p.strip()]
+        self.invalidateFilter()
 
     def set_filters(self, search_text, age_limit, age_enabled):
         self._search_text = search_text.lower()
@@ -173,6 +184,11 @@ class TagColorProxyModel(QSortFilterProxyModel):
         file_name = source_model.fileName(idx) if hasattr(source_model, "fileName") else source_model.data(idx)
         if file_name and str(file_name).lower().endswith(("_thumbnail.png", "_thumbnail.jpg")):
             return False
+
+        if self._ignore_enabled and self._ignore_patterns and abs_path:
+            abs_path_lower = os.path.normpath(os.path.abspath(abs_path)).lower()
+            if any(pat in abs_path_lower for pat in self._ignore_patterns):
+                return False
 
         # Files Only logic
         if self.files_only and not is_dir:
@@ -311,6 +327,7 @@ class TagColorProxyModel(QSortFilterProxyModel):
 
 class FilterPanel(QWidget):
     search_changed = Signal(str)
+    ignore_changed = Signal(str, bool) # text, enabled
     age_changed = Signal(int, str, bool) # value, units, enabled
     folder_selected = Signal(str)
     rename_to_label_requested = Signal(list) # list of paths
@@ -340,6 +357,19 @@ class FilterPanel(QWidget):
         self.search_bar.textChanged.connect(self._on_search_change)
         search_layout.addWidget(self.search_bar)
         self.layout.addLayout(search_layout)
+
+        # Ignore Filter
+        ignore_layout = QHBoxLayout()
+        self.chk_ignore = QCheckBox("Ignore:")
+        self.chk_ignore.setChecked(True)
+        self.chk_ignore.toggled.connect(self._on_ignore_change)
+        ignore_layout.addWidget(self.chk_ignore)
+        
+        self.ignore_bar = QLineEdit()
+        self.ignore_bar.setPlaceholderText("ignore strings (space separated)")
+        self.ignore_bar.textChanged.connect(self._on_ignore_change)
+        ignore_layout.addWidget(self.ignore_bar)
+        self.layout.addLayout(ignore_layout)
 
         # Age Filter
         age_layout = QHBoxLayout()
@@ -684,6 +714,12 @@ class FilterPanel(QWidget):
         self.search_changed.emit(text)
         self._update_proxy_filters()
 
+    def _on_ignore_change(self, _=None):
+        text = self.ignore_bar.text()
+        enabled = self.chk_ignore.isChecked()
+        self.ignore_changed.emit(text, enabled)
+        self._update_proxy_filters()
+
     def _on_age_change(self, _=None):
         val = self.spin_age.value()
         units = self.combo_units.currentText()
@@ -703,6 +739,7 @@ class FilterPanel(QWidget):
         if units == "hours": minutes *= 60
         elif units == "days": minutes *= 1440
         
+        self.proxy.set_ignore_filter(self.ignore_bar.text(), self.chk_ignore.isChecked())
         self.proxy.set_filters(search_text, minutes, enabled)
 
     def _on_context_menu(self, pos):

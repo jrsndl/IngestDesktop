@@ -429,7 +429,8 @@ class MainWindow(QMainWindow):
         self.spreadsheet.set_csv_model(self.csv_preview_model)
         self.spreadsheet.btn_tag_sel.clicked.connect(self._on_tag_selection)
         self.spreadsheet.maximize_toggle_requested.connect(lambda: self.toggle_maximize("spreadsheet"))
-        self.spreadsheet.version_collision_check_clicked.connect(self.perform_version_collision_check)
+        self.spreadsheet.version_check_clicked.connect(lambda: self.perform_version_collision_check(fix=False))
+        self.spreadsheet.version_collision_check_clicked.connect(lambda: self.perform_version_collision_check(fix=True))
         self.spreadsheet.label_action_requested.connect(self._on_label_action)
         self.spreadsheet.add_comment_requested.connect(self._on_add_comment)
         self.spreadsheet.check_duplicates_clicked.connect(self.perform_duplicate_check)
@@ -580,7 +581,7 @@ class MainWindow(QMainWindow):
         file_menu = menubar.addMenu("&File")
         
         act_load_preset = QAction("Load Preset...", self)
-        act_load_preset.triggered.connect(self.show_preferences) # Preferences handles presets
+        act_load_preset.triggered.connect(self.perform_load_preset)
         file_menu.addAction(act_load_preset)
         
         act_save_preset = QAction("Save Preset As...", self)
@@ -747,9 +748,11 @@ class MainWindow(QMainWindow):
                 "label": item.label,
                 "is_tagged": item.is_tagged,
                 "version": item.version,
+                "version_user": getattr(item, "version_user", ""),
                 "comment": item.comment,
                 "category": item.category,
                 "variant": item.variant,
+                "variant_user": getattr(item, "variant_user", ""),
                 "product_type": item.product_type,
                 "representation": item.representation,
                 "colorspace": item.colorspace,
@@ -907,6 +910,8 @@ class MainWindow(QMainWindow):
                     version=it.get("version", 1),
                     category=it.get("category", "Other"),
                     variant=it.get("variant"),
+                    variant_user=it.get("variant_user", ""),
+                    version_user=it.get("version_user", ""),
                     product_type=it.get("product_type"),
                     representation=it.get("representation"),
                     colorspace=it.get("colorspace"),
@@ -1317,7 +1322,9 @@ class MainWindow(QMainWindow):
             default_fps=self.config.get("default_fps", 25.0),
             use_fps_from_metadata=self.config.get("use_fps_from_metadata", True),
             drawing_cache_location=self.config.get("drawing_cache_location", "relative to source folder"),
-            drawing_cache_path=self.config.get("drawing_cache_path", "_drawcache")
+            drawing_cache_path=self.config.get("drawing_cache_path", "_drawcache"),
+            ignore_enabled=self.filter_panel.chk_ignore.isChecked() if hasattr(self, "filter_panel") else True,
+            ignore_text=self.filter_panel.ignore_bar.text() if hasattr(self, "filter_panel") else ""
         )
         self.scanner.finished.connect(lambda items: self.log_message(f"Scan complete. Found {len(items)} items. Fetching metadata in background...", "success"))
         self.scanner.finished.connect(self._on_scan_finished)
@@ -1956,6 +1963,11 @@ class MainWindow(QMainWindow):
         if scan_affected and self.config.get("last_source_folder"):
             self.start_scan(self.config["last_source_folder"])
 
+        # Reload thumbnail cache states and refresh AYON panel icons
+        self.load_ayon_thumb_states()
+        self._refresh_ayon_panel_icons()
+        self.trigger_ayon_thumbnail_downloads()
+
         # Refresh AYON asynchronously
         self.refresh_ayon_async(reconnect=True)
         
@@ -2009,11 +2021,11 @@ class MainWindow(QMainWindow):
             source_time = item.modification_time if source == "Modification Date" else item.creation_time
             item.age_minutes = int((current_time - source_time) / 60)
         
-        # Notify the model that the age column (index 10) has changed
+        # Notify the model that the age column (index 11) has changed
         if self.model.items:
             self.model.dataChanged.emit(
-                self.model.index(0, 10), 
-                self.model.index(len(self.model.items)-1, 10)
+                self.model.index(0, 11), 
+                self.model.index(len(self.model.items)-1, 11)
             )
 
     def _gather_gui_state(self):
@@ -2065,6 +2077,8 @@ class MainWindow(QMainWindow):
         if hasattr(self, "filter_panel") and self.filter_panel:
             self.config["filter_search_enabled"] = self.filter_panel.chk_search.isChecked()
             self.config["filter_search_text"] = self.filter_panel.search_bar.text()
+            self.config["filter_ignore_enabled"] = self.filter_panel.chk_ignore.isChecked()
+            self.config["filter_ignore_text"] = self.filter_panel.ignore_bar.text()
             self.config["filter_age_enabled"] = self.filter_panel.chk_age.isChecked()
             self.config["filter_age_value"] = self.filter_panel.spin_age.value()
             self.config["filter_age_units"] = self.filter_panel.combo_units.currentText()
@@ -2106,6 +2120,8 @@ class MainWindow(QMainWindow):
         if hasattr(self, "filter_panel") and self.filter_panel:
             self.filter_panel.chk_search.setChecked(self.config.get("filter_search_enabled", True))
             self.filter_panel.search_bar.setText(self.config.get("filter_search_text", ""))
+            self.filter_panel.chk_ignore.setChecked(self.config.get("filter_ignore_enabled", True))
+            self.filter_panel.ignore_bar.setText(self.config.get("filter_ignore_text", ""))
             self.filter_panel.chk_age.setChecked(self.config.get("filter_age_enabled", False))
             self.filter_panel.spin_age.setValue(self.config.get("filter_age_value", 0))
             self.filter_panel.combo_units.setCurrentText(self.config.get("filter_age_units", "minutes"))
@@ -2254,7 +2270,7 @@ class MainWindow(QMainWindow):
                     prod_name = self.model._expand_string(self.model.product_name_template, item, use_global_camel=True)
                     key = f"{f_id}|{prod_name}|{item.product_type}"
                     last_v = v_map.get(key)
-                    if last_v is not None and last_v >= item.version:
+                    if last_v is not None and last_v >= item.effective_version:
                         collision_items.append(item)
             
             collision_set = set(collision_items)
@@ -2286,7 +2302,7 @@ class MainWindow(QMainWindow):
             identity = self.model._expand_string(dup_template, item, use_global_camel=True)
             identity = identity.replace("{ayon_path_val}", ayon_path_val)
             identity = identity.replace("{prod_name}", prod_name)
-            identity = identity.replace("{item.version}", str(item.version))
+            identity = identity.replace("{item.version}", str(item.effective_version))
             
             if identity not in identity_map:
                 identity_map[identity] = []
@@ -4385,8 +4401,8 @@ class MainWindow(QMainWindow):
                 affected += 1
         
         if affected:
-            # Column 12 is AYON Path
-            self.model.dataChanged.emit(self.model.index(0, 12), self.model.index(len(self.model.items)-1, 12))
+            # Column 13 is AYON Path
+            self.model.dataChanged.emit(self.model.index(0, 13), self.model.index(len(self.model.items)-1, 13))
             self.log_message(f"Cleared all AYON assignments from {affected} items.", "warning")
 
     def _on_ayon_info_requested(self, folder_id):
@@ -4435,13 +4451,19 @@ class MainWindow(QMainWindow):
         self.model.layoutChanged.emit()
         self._refresh_ayon_panel_icons()
 
-    def _refresh_ayon_panel_icons(self):
-        show_thumbs = self.ayon_panel.btn_show_thumbs.isChecked()
+    def _get_ayon_thumb_cache_root(self):
         cache_root = self.secrets.get("ayon_thumbnails_cache", "")
         if not cache_root:
             cache_root = "_ayon_thumbs_cache"
         from utils import expand_env_vars
         cache_root = expand_env_vars(cache_root)
+        if not os.path.isabs(cache_root):
+            cache_root = os.path.abspath(cache_root)
+        return cache_root
+
+    def _refresh_ayon_panel_icons(self):
+        show_thumbs = self.ayon_panel.btn_show_thumbs.isChecked()
+        cache_root = self._get_ayon_thumb_cache_root()
         
         project_name = self.ayon_panel.combo_project.currentText()
         if project_name:
@@ -4484,12 +4506,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, "_ayon_thumb_download_thread") and self._ayon_thumb_download_thread.isRunning():
             return # Let the current run finish
             
-        cache_root = self.secrets.get("ayon_thumbnails_cache", "")
-        if not cache_root:
-            cache_root = "_ayon_thumbs_cache"
-        from utils import expand_env_vars
-        cache_root = expand_env_vars(cache_root)
-        
+        cache_root = self._get_ayon_thumb_cache_root()
         project_cache_dir = os.path.join(cache_root, project_name)
         
         # Filter tasks_info based on local disk state and known states
@@ -4506,7 +4523,7 @@ class MainWindow(QMainWindow):
                 continue
                 
             state = self.ayon_thumb_states.get(thumb_id)
-            if state in ("not available", "downloading", "downloaded", "cached"):
+            if state in ("not available", "downloading"):
                 continue
                 
             filtered_tasks_info.append(info)
@@ -4529,11 +4546,7 @@ class MainWindow(QMainWindow):
         self._ayon_thumb_download_thread.start()
 
     def load_ayon_thumb_states(self):
-        cache_root = self.secrets.get("ayon_thumbnails_cache", "")
-        if not cache_root:
-            cache_root = "_ayon_thumbs_cache"
-        from utils import expand_env_vars
-        cache_root = expand_env_vars(cache_root)
+        cache_root = self._get_ayon_thumb_cache_root()
         os.makedirs(cache_root, exist_ok=True)
         
         path = os.path.join(cache_root, "ayon_thumb_states.json")
@@ -4550,11 +4563,7 @@ class MainWindow(QMainWindow):
             self.ayon_thumb_states = {}
 
     def save_ayon_thumb_states(self):
-        cache_root = self.secrets.get("ayon_thumbnails_cache", "")
-        if not cache_root:
-            cache_root = "_ayon_thumbs_cache"
-        from utils import expand_env_vars
-        cache_root = expand_env_vars(cache_root)
+        cache_root = self._get_ayon_thumb_cache_root()
         os.makedirs(cache_root, exist_ok=True)
         
         path = os.path.join(cache_root, "ayon_thumb_states.json")
@@ -4948,8 +4957,8 @@ class MainWindow(QMainWindow):
                     count += 1
         
         if count:
-            # Column 12 is AYON Path
-            self.model.dataChanged.emit(self.model.index(0, 12), self.model.index(len(self.model.items)-1, 12))
+            # Column 13 is AYON Path
+            self.model.dataChanged.emit(self.model.index(0, 13), self.model.index(len(self.model.items)-1, 13))
             self.log_message(f"Auto-assigned {count} items based on folder name matches.", "success")
             self._update_ayon_visuals()
         else:
@@ -5006,7 +5015,7 @@ class MainWindow(QMainWindow):
             identity = self.model._expand_string(dup_template, item, use_global_camel=True)
             identity = identity.replace("{ayon_path_val}", ayon_path_val)
             identity = identity.replace("{prod_name}", prod_name)
-            identity = identity.replace("{item.version}", str(item.version))
+            identity = identity.replace("{item.version}", str(item.effective_version))
             
             if identity not in identity_map:
                 identity_map[identity] = []
@@ -5030,7 +5039,7 @@ class MainWindow(QMainWindow):
         else:
             self.log_message("Duplicate check complete: No duplicates found among candidate items.", "success")
 
-    def perform_version_collision_check(self):
+    def perform_version_collision_check(self, fix=False):
         """Batch check current versions in AYON for tagged and filtered items."""
         project = self.ayon_panel.combo_project.currentText()
         if not project: 
@@ -5117,10 +5126,10 @@ class MainWindow(QMainWindow):
                 self.finished.emit(versions)
 
         self._ver_thread = VersionThread(self.ayon, project, list(folder_ids))
-        self._ver_thread.finished.connect(lambda v_map: self._on_versions_fetched(v_map, items_to_check))
+        self._ver_thread.finished.connect(lambda v_map: self._on_versions_fetched(v_map, items_to_check, fix=fix))
         self._ver_thread.start()
 
-    def _on_versions_fetched(self, v_map, items_to_check):
+    def _on_versions_fetched(self, v_map, items_to_check, fix=False):
         updated = 0
         collision_mode = self.config.get("version_collision", "fail")
         
@@ -5135,9 +5144,10 @@ class MainWindow(QMainWindow):
                 item.last_ayon_version = last_v
                 item.version_collision = (last_v >= item.version)
                 
-                if collision_mode == "lowest":
-                    item.version = last_v + 1
-                    item.version_collision = (last_v >= item.version)
+                if fix:
+                    eff_ver = item.effective_version
+                    if last_v >= eff_ver or collision_mode == "lowest":
+                        item.version_user = str(last_v + 1)
                     
                 updated += 1
             else:
@@ -5147,10 +5157,10 @@ class MainWindow(QMainWindow):
                 item.last_ayon_version = 0 
                 item.version_collision = None 
         
-        # Refresh Version (8), Last Version (9), and Key Value Pairs (13) columns
+        # Refresh Version (8), Version User (9), Last Version (10), and Key Value Pairs (14) columns
         self.model.dataChanged.emit(
             self.model.index(0, 8), 
-            self.model.index(len(self.model.items)-1, 13)
+            self.model.index(len(self.model.items)-1, 14)
         )
         if self.spreadsheet._is_csv_mode:
             self.csv_preview_model._refresh_data()
@@ -5237,6 +5247,48 @@ class MainWindow(QMainWindow):
             
         self.top_bar.combo_preset.blockSignals(False)
 
+    def perform_load_preset(self):
+        """Show dialog to select and load a preset from available presets."""
+        presets_folder = self.secrets.get("presets_folder")
+        available_presets = ["(None / Active)"]
+        if presets_folder and os.path.exists(presets_folder):
+            for f in os.listdir(presets_folder):
+                if f.endswith(".json"):
+                    available_presets.append(f[:-5])
+
+        for i in range(self.top_bar.combo_preset.count()):
+            text = self.top_bar.combo_preset.itemText(i)
+            if text and text not in available_presets:
+                available_presets.append(text)
+
+        current = self.top_bar.combo_preset.currentText()
+        curr_idx = available_presets.index(current) if current in available_presets else 0
+
+        preset_name, ok = QInputDialog.getItem(
+            self, "Load Preset", "Select Preset to load:", available_presets, curr_idx, False
+        )
+        if ok and preset_name:
+            idx = self.top_bar.combo_preset.findText(preset_name)
+            if idx >= 0:
+                self.top_bar.combo_preset.setCurrentIndex(idx)
+            self._on_preset_changed(preset_name)
+
+    def _apply_preset_ayon_project(self, target_project=None):
+        """Set AYON project from loaded config if available."""
+        project = target_project or (
+            self.config.get("ayon_project")
+            or self.config.get("ayon_project_name")
+            or self.config.get("last_ayon_project")
+        )
+        if project and hasattr(self, "ayon_panel") and self.ayon_panel:
+            if self.ayon_panel.combo_project.findText(project) < 0:
+                self.ayon_panel.combo_project.addItem(project)
+            if self.ayon_panel.combo_project.currentText() != project:
+                self.ayon_panel.combo_project.setCurrentText(project)
+            else:
+                self._on_project_changed(project)
+                self._restore_ayon_selection()
+
     def _on_preset_changed(self, preset_name):
         # Capture the actual active settings BEFORE loading the preset
         old_detect = self.config.get("detect_sequences", True)
@@ -5273,6 +5325,9 @@ class MainWindow(QMainWindow):
                 if last_folder: self.config["last_source_folder"] = last_folder
                 if recent: self.config["recent_folders"] = recent
                 
+                # Restore AYON selection project BEFORE save_config overwrites it
+                self._apply_preset_ayon_project()
+
                 # Save config
                 self.save_config()
                 
@@ -5286,14 +5341,6 @@ class MainWindow(QMainWindow):
                 if last_folder and os.path.exists(last_folder):
                     self.top_bar.path_display.setText(last_folder)
                     self.start_scan(last_folder)
-                
-                # Restore AYON selection
-                project = self.config.get("ayon_project")
-                if project:
-                    if self.ayon_panel.combo_project.currentText() != project:
-                        self.ayon_panel.combo_project.setCurrentText(project)
-                    else:
-                        self._restore_ayon_selection()
                 
                 self.log_message("Successfully reset to default (None / Active) config.", "success")
             except Exception as e:
@@ -5320,6 +5367,12 @@ class MainWindow(QMainWindow):
                 last_folder = preset_config.get("last_source_folder") or self.config.get("last_source_folder")
                 recent = self.config.get("recent_folders")
                 
+                target_project = (
+                    preset_config.get("ayon_project")
+                    or preset_config.get("ayon_project_name")
+                    or preset_config.get("last_ayon_project")
+                )
+
                 # Apply preset
                 self.config = preset_config
                 self.config["active_preset"] = preset_name
@@ -5331,6 +5384,9 @@ class MainWindow(QMainWindow):
                 if last_folder: self.config["last_source_folder"] = last_folder
                 if recent: self.config["recent_folders"] = recent
                 
+                # Restore AYON selection project BEFORE save_config overwrites it
+                self._apply_preset_ayon_project(target_project)
+
                 # Save it so config.json and user-centric json are actually the preset json!
                 self.save_config()
                 
@@ -5344,14 +5400,6 @@ class MainWindow(QMainWindow):
                 if last_folder and os.path.exists(last_folder):
                     self.top_bar.path_display.setText(last_folder)
                     self.start_scan(last_folder)
-                
-                # Restore AYON selection
-                project = self.config.get("ayon_project")
-                if project:
-                    if self.ayon_panel.combo_project.currentText() != project:
-                        self.ayon_panel.combo_project.setCurrentText(project)
-                    else:
-                        self._restore_ayon_selection()
                 
                 self.log_message(f"Successfully loaded preset '{preset_name}'.", "success")
             except Exception as e:

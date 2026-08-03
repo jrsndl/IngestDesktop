@@ -144,7 +144,9 @@ Note that only one folder & task can be selected in the AYON hierarchy
 #### 🎞️ Representations Panel
 Displays representations of the last version selected in the Products Panel above
 
+* **Collapse Checkbox**: When enabled (default), collapses representations to show only the highest version for each representation name.
 * **Columns**: Displays *Name* (typically extension), *Version*, *Status*, and *File Path*
+* **Double-Click Representation**: Executes the **OS Open** action to open the file with the default system application.
 * **Representations Context Menu**:
   * *Reveal in Filesystem*: Opens File Explorer with the selected representation file
   * *OS Open*: Opens representation file with default app.

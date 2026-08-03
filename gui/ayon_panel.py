@@ -395,6 +395,10 @@ class AyonPanel(QWidget):
         
         repre_header_layout = QHBoxLayout()
         repre_header_layout.addWidget(QLabel("<b>Representations:</b>"))
+        self.chk_collapse_repre = QCheckBox("collapse")
+        self.chk_collapse_repre.setChecked(True)
+        self.chk_collapse_repre.toggled.connect(self._on_collapse_repre_toggled)
+        repre_header_layout.addWidget(self.chk_collapse_repre)
         repre_header_layout.addStretch()
         self.repre_layout.addLayout(repre_header_layout)
         
@@ -406,6 +410,7 @@ class AyonPanel(QWidget):
         self.repre_view.setEditTriggers(QTreeView.NoEditTriggers)
         self.repre_view.setContextMenuPolicy(Qt.CustomContextMenu)
         self.repre_view.customContextMenuRequested.connect(self._on_repre_context_menu)
+        self.repre_view.doubleClicked.connect(self._on_repre_double_click)
         self.repre_layout.addWidget(self.repre_view)
         
         self.splitter.addWidget(self.repre_container)
@@ -430,6 +435,7 @@ class AyonPanel(QWidget):
         self.layout.addWidget(self.lbl_unreachable)
         
         self.all_products = [] # Cache for current selected task
+        self.all_repres = [] # Cache for current representations
         self.current_selected_folder_id = None
         self.current_selected_task_id = None
         self.current_selected_task_name = None
@@ -797,6 +803,7 @@ class AyonPanel(QWidget):
     def _refresh_product_list(self):
         self.product_model.removeRows(0, self.product_model.rowCount())
         # Also clear representations when list is refreshed
+        self.all_repres = []
         self.repre_model.removeRows(0, self.repre_model.rowCount())
         checked_types = self.combo_product_types.get_checked_items()
         
@@ -890,6 +897,7 @@ class AyonPanel(QWidget):
             
         indexes = self.product_view.selectionModel().selectedIndexes()
         if not indexes:
+            self.all_repres = []
             self.repre_model.removeRows(0, self.repre_model.rowCount())
             return
             
@@ -904,34 +912,75 @@ class AyonPanel(QWidget):
             project = self.combo_project.currentText()
             self.representations_requested.emit(project, p_data["id"])
 
+    def _on_collapse_repre_toggled(self, checked):
+        self._populate_representations()
+
     def set_representations(self, repres):
         """Populate the representations tree view."""
+        self.all_repres = repres or []
+        self._populate_representations()
+
+    def _populate_representations(self):
+        """Populate the representations tree view based on stored representations and collapse setting."""
         self.repre_model.removeRows(0, self.repre_model.rowCount())
-        
+        if not self.all_repres:
+            return
+
+        def get_ver(r):
+            ctx = r.get("context") or {}
+            v = ctx.get("version")
+            try:
+                return int(v) if v is not None else 0
+            except (ValueError, TypeError):
+                return 0
+
+        repres_to_show = self.all_repres
+        if self.chk_collapse_repre.isChecked():
+            highest_by_name = {}
+            for rep in self.all_repres:
+                name = rep.get("name", "")
+                ver = get_ver(rep)
+                if name not in highest_by_name:
+                    highest_by_name[name] = rep
+                else:
+                    existing_ver = get_ver(highest_by_name[name])
+                    if ver > existing_ver:
+                        highest_by_name[name] = rep
+            repres_to_show = list(highest_by_name.values())
+
         # Sort representations by version number (descending) and name (ascending)
         def sort_key(r):
-            v_num = r.get("context", {}).get("version", 0)
+            v_num = get_ver(r)
             name = r.get("name", "")
             return (-v_num, name)
-            
-        sorted_reps = sorted(repres, key=sort_key)
-        
+
+        sorted_reps = sorted(repres_to_show, key=sort_key)
+
         for rep in sorted_reps:
             name_item = QStandardItem(rep.get("name", ""))
-            
-            ver = rep.get("context", {}).get("version", 0)
+
+            ver = get_ver(rep)
             ver_item = QStandardItem(f"v{ver:03d}" if ver else "")
             ver_item.setTextAlignment(Qt.AlignCenter)
-            
+
             path = rep.get("attrib", {}).get("path", "")
             path_item = QStandardItem(path)
-            
+
             self.repre_model.appendRow([name_item, ver_item, path_item])
-            
+
         self.repre_view.resizeColumnToContents(0)
         self.repre_view.resizeColumnToContents(1)
         # Give path column a reasonable starting width
         self.repre_view.setColumnWidth(2, 400)
+
+    def _on_repre_double_click(self, index):
+        if not index.isValid():
+            return
+        row = index.row()
+        path_idx = self.repre_model.index(row, 2)
+        path = path_idx.data()
+        if path and isinstance(path, str):
+            self._on_repre_open([path])
 
     def _on_repre_context_menu(self, pos):
         index = self.repre_view.indexAt(pos)

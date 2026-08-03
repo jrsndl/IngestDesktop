@@ -47,6 +47,7 @@ class TopBar(QWidget):
         self.lbl_preset = QLabel("Preset:")
         self.combo_preset = QComboBox()
         self.combo_preset.setMinimumWidth(150)
+        self.combo_preset.textActivated.connect(self.load_preset_requested.emit)
         
         self.btn_load_preset = QPushButton("Load Preset")
         self.btn_load_preset.clicked.connect(self._on_load_preset_clicked)

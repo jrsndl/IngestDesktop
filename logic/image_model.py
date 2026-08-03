@@ -22,11 +22,12 @@ class ImageItem:
     def __init__(self, file_path, label=None, version=1, category="Other", 
                  preset_name=None, variant=None, product_type=None, camel_case=True,
                  representation=None, colorspace=None, rep_tags=None, is_sequence=False,
-                 preset_data=None, frame_start=None, frame_end=None, metadata=None, comment="", variant_user=""):
+                 preset_data=None, frame_start=None, frame_end=None, metadata=None, comment="", variant_user="", version_user=""):
         self.file_path = file_path
         self.filename = os.path.basename(file_path)
         self.label = label or os.path.splitext(self.filename)[0]
         self.version = version
+        self.version_user = str(version_user) if version_user is not None else ""
         self.category = category
         self.ayon_path = ""
         self.ayon_task_name = ""
@@ -67,12 +68,22 @@ class ImageItem:
         self.ingest_status = "unknown"
         self.model = None
 
+    @property
+    def effective_version(self):
+        v_user = str(getattr(self, "version_user", "")).strip()
+        if v_user:
+            try:
+                return int(v_user)
+            except ValueError:
+                return v_user
+        return self.version
+
 class ImageTableModel(QAbstractTableModel):
     data_changed = Signal()
 
     COLUMNS = [
         "Enable", "Thumbnail", "Label", "Variant", "Variant User", "Product Name", "Category", "Preset", "Version", 
-        "Last Version", "Age", "Review", "AYON Path", "Key Value Pairs", "Ingest Status"
+        "Version User", "Last Version", "Age", "Review", "AYON Path", "Key Value Pairs", "Ingest Status"
     ]
 
     @property
@@ -150,16 +161,35 @@ class ImageTableModel(QAbstractTableModel):
             if not item.is_tagged:
                 return QColor("#ff4444")
             
-            # Version conflict: if server version >= current version
-            if item.last_ayon_version is not None and item.last_ayon_version >= item.version:
-                if col in [8, 9]: # Version, Last Version
+            # Version conflict handling:
+            last_v = item.last_ayon_version
+            if last_v is not None:
+                eff_ver = item.effective_version
+                base_colliding = (last_v >= item.version) or getattr(item, "version_collision", False)
+                
+                try:
+                    eff_v_int = int(eff_ver)
+                    eff_colliding = (last_v >= eff_v_int)
+                except (ValueError, TypeError):
+                    eff_colliding = True
+
+                # Column 8 (Version): marked red if base version collided with last_v
+                if col == 8 and base_colliding:
+                    return QColor("#f44336")
+                    
+                # Column 9 (Version User): marked red if user version override still collides with last_v
+                if col == 9 and eff_colliding and str(getattr(item, "version_user", "")).strip():
+                    return QColor("#f44336")
+                    
+                # Column 10 (Last Version): marked orange if there is a version collision
+                if col == 10 and (base_colliding or eff_colliding):
                     return QColor("#ff8c00")
                     
-            # Dim non-editable text columns: Variant(3), Product Name(5), Category(6), Preset(7), Last Version(9), Age(10), Path(12)
-            if col in [3, 5, 6, 7, 9, 10, 11, 12, 13, 14]:
+            # Dim non-editable text columns
+            if col in [3, 5, 6, 7, 10, 11, 12, 13, 14, 15]:
                 return QColor("#888888")
             
-            if col == 14:
+            if col == 15:
                 if item.ingest_status == "OK":
                     return QColor("#4caf50")
                 elif item.ingest_status == "Failed":
@@ -180,9 +210,10 @@ class ImageTableModel(QAbstractTableModel):
             if col == 7: # Preset
                 return item.preset_name if item.preset_name else "-"
             if col == 8: return str(item.version)
+            if col == 9: return str(getattr(item, "version_user", ""))
             if role == Qt.DisplayRole:
-                if col == 9: return str(item.last_ayon_version) if item.last_ayon_version else "-"
-                if col == 10: 
+                if col == 10: return str(item.last_ayon_version) if item.last_ayon_version is not None else "-"
+                if col == 11: 
                     m = item.age_minutes
                     if self.age_unit == "minutes": return f"{m}m"
                     if self.age_unit == "hours": return f"{m//60}h"
@@ -192,11 +223,11 @@ class ImageTableModel(QAbstractTableModel):
                     if m < 60: return f"{m}m"
                     if m < 1440: return f"{m//60}h"
                     return f"{m//1440}d"
-                if col == 11: return item.review_status
-                if col == 12: return item.ayon_path
-                if col == 13: # Key Value Pairs
+                if col == 12: return item.review_status
+                if col == 13: return item.ayon_path
+                if col == 14: # Key Value Pairs
                     return self._get_all_tokens_string(item)
-                if col == 14: return item.ingest_status
+                if col == 15: return item.ingest_status
             else:
                 # For EditRole in non-editable columns
                 return None
@@ -249,6 +280,10 @@ class ImageTableModel(QAbstractTableModel):
                     item.version = int(value)
                 except ValueError:
                     return False
+            elif col == 9: # Version User
+                item.version_user = str(value).strip()
+                self.dataChanged.emit(self.index(index.row(), 0), self.index(index.row(), self.columnCount()-1))
+                return True
             self.dataChanged.emit(index, index)
             return True
 
@@ -269,7 +304,7 @@ class ImageTableModel(QAbstractTableModel):
         flags = Qt.ItemIsEnabled | Qt.ItemIsSelectable
         if index.column() == 0:
             flags |= Qt.ItemIsUserCheckable
-        if index.column() in [2, 4, 8]: # Label, Variant User, Version
+        if index.column() in [2, 4, 8, 9]: # Label, Variant User, Version, Version User
             flags |= Qt.ItemIsEditable
             
         return flags
@@ -438,10 +473,11 @@ class ImageTableModel(QAbstractTableModel):
             if column == 6: return item.category
             if column == 7: return item.preset_name or ""
             if column == 8: return item.version
-            if column == 9: return item.last_ayon_version or 0
-            if column == 10: return item.age_minutes
-            if column == 11: return item.review_status
-            if column == 12: return item.ayon_path
+            if column == 9: return getattr(item, "version_user", "") or ""
+            if column == 10: return item.last_ayon_version or 0
+            if column == 11: return item.age_minutes
+            if column == 12: return item.review_status
+            if column == 13: return item.ayon_path
             return ""
 
         reverse = (order == Qt.DescendingOrder)
@@ -553,8 +589,10 @@ class ImageTableModel(QAbstractTableModel):
             "{REPRE_COLOR}": p_data.get("Colorspace", ""),
             "{repre_tags}": p_data.get("Tags", ""),
             "{REPRE_TAGS}": p_data.get("Tags", ""),
-            "{version}": str(item.version),
-            "{VERSION}": str(item.version),
+            "{version}": str(item.effective_version),
+            "{VERSION}": str(item.effective_version),
+            "{version_user}": str(getattr(item, "version_user", "")),
+            "{VERSION_USER}": str(getattr(item, "version_user", "")),
             "{frame_start}": str(item.frame_start) if item.frame_start is not None else "",
             "{FRAME_START}": str(item.frame_start) if item.frame_start is not None else "",
             "{frame_end}": str(item.frame_end) if item.frame_end is not None else "",

@@ -28,9 +28,10 @@ class ImageScanner(QThread):
                  oiiotool_path="oiiotool.exe", ocio_config="", stills_thumb_same=True,
                  thumb_suffix="_thumbnail", thumb_format=".jpg",
                  thumb_location="Relative to Source Folder", thumb_location_path="_thumbs",
-                 timeout=6, default_fps=25.0, use_fps_from_metadata=True,
+                  timeout=6, default_fps=25.0, use_fps_from_metadata=True,
                   drawing_cache_location="relative to source folder",
-                  drawing_cache_path="_drawcache"):
+                  drawing_cache_path="_drawcache",
+                  ignore_enabled=True, ignore_text=""):
         super().__init__()
         self.directory = directory
         self.recursive = recursive
@@ -59,6 +60,8 @@ class ImageScanner(QThread):
         self.use_fps_from_metadata = use_fps_from_metadata
         self.drawing_cache_location = drawing_cache_location
         self.drawing_cache_path = drawing_cache_path
+        self.ignore_enabled = ignore_enabled
+        self.ignore_text = ignore_text
         self._is_canceled = False
 
     def cancel(self):
@@ -109,6 +112,10 @@ class ImageScanner(QThread):
                 else:
                     cache_dir_lower = os.path.normpath(os.path.abspath(self.drawing_cache_path)).lower()
 
+        ignore_patterns = []
+        if self.ignore_enabled and self.ignore_text:
+            ignore_patterns = [p.strip().lower() for p in self.ignore_text.split() if p.strip()]
+
         for f in all_files:
             if self._is_canceled:
                 self.canceled.emit()
@@ -120,6 +127,12 @@ class ImageScanner(QThread):
                 self.status_text.emit(warning_msg)
                 self.finished.emit([])
                 return
+
+            # Check ignore filter strings against full absolute path
+            if ignore_patterns:
+                abs_f_norm = os.path.normpath(os.path.abspath(f)).lower()
+                if any(pat in abs_f_norm for pat in ignore_patterns):
+                    continue
 
             # Exclude files inside the drawing cache folder
             if cache_dir_lower:
