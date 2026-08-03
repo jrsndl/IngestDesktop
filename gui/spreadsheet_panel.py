@@ -162,21 +162,22 @@ class SpreadsheetPanel(QWidget):
         header.setSectionResizeMode(0, QHeaderView.Fixed) # Enable
         header.setSectionResizeMode(2, QHeaderView.Interactive) # Label
         header.setSectionResizeMode(3, QHeaderView.Interactive) # Variant
-        header.setSectionResizeMode(4, QHeaderView.Interactive) # Product Name
-        header.setSectionResizeMode(5, QHeaderView.Interactive) # Category
-        header.setSectionResizeMode(6, QHeaderView.Interactive) # Preset
-        header.setSectionResizeMode(7, QHeaderView.Interactive) # Version
+        header.setSectionResizeMode(4, QHeaderView.Interactive) # Variant User
+        header.setSectionResizeMode(5, QHeaderView.Interactive) # Product Name
+        header.setSectionResizeMode(6, QHeaderView.Interactive) # Category
+        header.setSectionResizeMode(7, QHeaderView.Interactive) # Preset
+        header.setSectionResizeMode(8, QHeaderView.Interactive) # Version
         
         # Initial fit
         self.table.setColumnWidth(0, 40)
         self.table.resizeColumnToContents(1) # Thumbnail
-        # self.table.setColumnHidden(11, True) # Show Key Value Pairs by default now
-        self.table.resizeColumnToContents(2)
-        self.table.resizeColumnToContents(3)
-        self.table.resizeColumnToContents(4)
-        self.table.resizeColumnToContents(5)
-        self.table.resizeColumnToContents(6)
-        self.table.resizeColumnToContents(7)
+        self.table.resizeColumnToContents(2) # Label
+        self.table.resizeColumnToContents(3) # Variant
+        self.table.resizeColumnToContents(4) # Variant User
+        self.table.resizeColumnToContents(5) # Product Name
+        self.table.resizeColumnToContents(6) # Category
+        self.table.resizeColumnToContents(7) # Preset
+        self.table.resizeColumnToContents(8) # Version
         
         # Connect model data change to auto-resize Label column
         self.table.model().dataChanged.connect(self._on_model_data_changed)
@@ -226,11 +227,12 @@ class SpreadsheetPanel(QWidget):
         if bottom_right.column() - top_left.column() > 5:
             return
             
-        # If Label column (2) was changed, auto-resize it
-        if top_left.column() <= 2 <= bottom_right.column():
+        # If Label or Variant/User Variant column was changed, auto-resize them
+        if top_left.column() <= 4 <= bottom_right.column():
             self.table.resizeColumnToContents(2)
             self.table.resizeColumnToContents(3) # Variant
-            self.table.resizeColumnToContents(4) # Product Name
+            self.table.resizeColumnToContents(4) # Variant User
+            self.table.resizeColumnToContents(5) # Product Name
 
     def _on_row_height_change(self, value):
         # Non-linear mapping (quadratic)

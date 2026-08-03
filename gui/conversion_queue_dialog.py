@@ -6,20 +6,11 @@ from PySide6.QtGui import QColor
 class QueueProxyModel(QSortFilterProxyModel):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.column_map = [1, 10, 2, 11] # Thumbnail, Review (Status), Label, AYON Path (File)
-        # Wait, the user said "File". item.file_path is not in the columns list.
-        # I should probably add "File Path" to the COLUMNS if I want to show it easily,
-        # or handle it in the proxy.
-        # Actually, let's map to existing columns and handle the "File" separately.
-        # Let's check logic/image_model.py columns again.
-        # COLUMNS = ["Tag", "Thumbnail", "Label", "Variant", "Product Name", "Category", "Preset", "Version", "Last Version", "Age", "Review", "AYON Path", "Key Value Pairs"]
-        # Index 1 is Thumbnail, 10 is Review, 2 is Label, 11 is AYON Path.
-        # The user said "File". Maybe they mean the actual file path.
-        # I'll just use AYON Path or Label for now, or add File Path to the model.
+        self.column_map = [1, 11, 2, 12] # Thumbnail, Review (Status), Label, AYON Path (File)
         
     def filterAcceptsRow(self, source_row, source_parent):
         source_model = self.sourceModel()
-        index = source_model.index(source_row, 10, source_parent) # Review column
+        index = source_model.index(source_row, 11, source_parent) # Review column (index 11)
         status = source_model.data(index, Qt.DisplayRole)
         return status != "do not convert"
 

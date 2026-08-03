@@ -2009,11 +2009,11 @@ class MainWindow(QMainWindow):
             source_time = item.modification_time if source == "Modification Date" else item.creation_time
             item.age_minutes = int((current_time - source_time) / 60)
         
-        # Notify the model that the age column (index 9) has changed
+        # Notify the model that the age column (index 10) has changed
         if self.model.items:
             self.model.dataChanged.emit(
-                self.model.index(0, 9), 
-                self.model.index(len(self.model.items)-1, 9)
+                self.model.index(0, 10), 
+                self.model.index(len(self.model.items)-1, 10)
             )
 
     def _gather_gui_state(self):
@@ -4268,9 +4268,9 @@ class MainWindow(QMainWindow):
             item.ayon_task_type = task_type
             item.ayon_task_assignee = assignee
             
-        # Notify the model that the AYON Path column (10) has changed for these rows
-        start_idx = self.model.index(min(selected_rows), 10)
-        end_idx = self.model.index(max(selected_rows), 10)
+        # Notify the model that the AYON Path column (12) has changed for these rows
+        start_idx = self.model.index(min(selected_rows), 12)
+        end_idx = self.model.index(max(selected_rows), 12)
         self.model.dataChanged.emit(start_idx, end_idx)
         
         # Feedback
@@ -4335,7 +4335,7 @@ class MainWindow(QMainWindow):
                 affected += 1
         
         if affected:
-            self.model.dataChanged.emit(self.model.index(0, 7), self.model.index(len(self.model.items)-1, 7))
+            self.model.dataChanged.emit(self.model.index(0, 8), self.model.index(len(self.model.items)-1, 8))
             self.log_message(f"Unassigned '{ayon_path}' from {affected} items.")
             # Bold status will update via dataChanged signal -> _update_ayon_visuals
 
@@ -4385,8 +4385,8 @@ class MainWindow(QMainWindow):
                 affected += 1
         
         if affected:
-            # Column 10 is AYON Path
-            self.model.dataChanged.emit(self.model.index(0, 10), self.model.index(len(self.model.items)-1, 10))
+            # Column 12 is AYON Path
+            self.model.dataChanged.emit(self.model.index(0, 12), self.model.index(len(self.model.items)-1, 12))
             self.log_message(f"Cleared all AYON assignments from {affected} items.", "warning")
 
     def _on_ayon_info_requested(self, folder_id):
@@ -4948,8 +4948,8 @@ class MainWindow(QMainWindow):
                     count += 1
         
         if count:
-            # Column 10 is AYON Path
-            self.model.dataChanged.emit(self.model.index(0, 10), self.model.index(len(self.model.items)-1, 10))
+            # Column 12 is AYON Path
+            self.model.dataChanged.emit(self.model.index(0, 12), self.model.index(len(self.model.items)-1, 12))
             self.log_message(f"Auto-assigned {count} items based on folder name matches.", "success")
             self._update_ayon_visuals()
         else:
@@ -5147,10 +5147,10 @@ class MainWindow(QMainWindow):
                 item.last_ayon_version = 0 
                 item.version_collision = None 
         
-        # Refresh Version (7), Last Version (8), and Key Value Pairs (11) columns
+        # Refresh Version (8), Last Version (9), and Key Value Pairs (13) columns
         self.model.dataChanged.emit(
-            self.model.index(0, 7), 
-            self.model.index(len(self.model.items)-1, 11)
+            self.model.index(0, 8), 
+            self.model.index(len(self.model.items)-1, 13)
         )
         if self.spreadsheet._is_csv_mode:
             self.csv_preview_model._refresh_data()
