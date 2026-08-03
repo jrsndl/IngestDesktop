@@ -1,7 +1,8 @@
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QPushButton, QTreeView, 
                              QHBoxLayout, QLabel, QMenu, QLineEdit, QComboBox, QSplitter,
-                             QSizePolicy)
-from PySide6.QtGui import QStandardItemModel, QStandardItem, QIcon, QColor, QFont, QAction
+                             QSizePolicy, QDialog, QListWidget, QListWidgetItem,
+                             QDialogButtonBox, QAbstractItemView, QCheckBox)
+from PySide6.QtGui import QStandardItemModel, QStandardItem, QIcon, QColor, QFont, QAction, QPixmap, QPainter
 from PySide6.QtCore import Signal, Qt, QSortFilterProxyModel, QEvent
 
 class AyonFilterProxy(QSortFilterProxyModel):
@@ -96,6 +97,129 @@ class CheckableComboBox(QComboBox):
                     checked.append(str(text))
         return checked
 
+class TaskStatusDialog(QDialog):
+    def __init__(self, current_status, available_statuses, task_name="", show_task_checkbox=False, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Set Status - {task_name}" if task_name else "Set Status")
+        self.setMinimumWidth(340)
+        
+        # Calculate dynamic height based on screen geometry and item count
+        screen = self.screen() or (parent.screen() if parent else None)
+        max_height = 600
+        if screen:
+            avail_h = screen.availableGeometry().height()
+            max_height = int(avail_h * 0.8) # Up to 80% of screen height
+            
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
+        
+        self.chk_same_task = None
+        if show_task_checkbox:
+            self.chk_same_task = QCheckBox("Set the same status to Task")
+            self.chk_same_task.setChecked(True)
+            layout.addWidget(self.chk_same_task)
+        
+        # Header Label
+        lbl_info = QLabel(f"Select status for <b>{task_name}</b>:" if task_name else "Select status:")
+        lbl_info.setTextFormat(Qt.RichText)
+        layout.addWidget(lbl_info)
+        
+        # Unwrapped Dropdown (QListWidget)
+        self.list_widget = QListWidget()
+        self.list_widget.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.list_widget.setStyleSheet("""
+            QListWidget {
+                border: 1px solid #444;
+                border-radius: 4px;
+                background-color: #1e1e1e;
+                color: #ffffff;
+                padding: 4px;
+                font-size: 12px;
+            }
+            QListWidget::item {
+                padding: 8px 12px;
+                border-radius: 3px;
+                margin-bottom: 2px;
+            }
+            QListWidget::item:hover {
+                background-color: #2a2d32;
+            }
+            QListWidget::item:selected {
+                background-color: #0d5cad;
+                color: #ffffff;
+                font-weight: bold;
+            }
+        """)
+        
+        # Populate statuses
+        selected_item = None
+        for s in available_statuses:
+            if isinstance(s, dict):
+                s_name = s.get("name", "")
+                s_color = s.get("color", "")
+            else:
+                s_name = str(s)
+                s_color = ""
+                
+            if not s_name:
+                continue
+                
+            item = QListWidgetItem(s_name)
+            
+            if s_color:
+                pixmap = QPixmap(14, 14)
+                pixmap.fill(Qt.transparent)
+                painter = QPainter(pixmap)
+                painter.setRenderHint(QPainter.Antialiasing)
+                painter.setBrush(QColor(s_color))
+                painter.setPen(Qt.NoPen)
+                painter.drawEllipse(1, 1, 12, 12)
+                painter.end()
+                item.setIcon(QIcon(pixmap))
+                
+            self.list_widget.addItem(item)
+            
+            if current_status and s_name.lower() == str(current_status).lower():
+                selected_item = item
+                
+        if selected_item:
+            self.list_widget.setCurrentItem(selected_item)
+            self.list_widget.scrollToItem(selected_item)
+        elif self.list_widget.count() > 0:
+            self.list_widget.setCurrentRow(0)
+            
+        # Double click item accepts immediately
+        self.list_widget.itemDoubleClicked.connect(self.accept)
+        
+        # Calculate ideal list widget height based on row count
+        item_count = self.list_widget.count()
+        row_height = 36 # padding + text height
+        calc_list_h = item_count * row_height + 16
+        
+        # Dialog constraints
+        extra_h = 120 if show_task_checkbox else 90 # header + buttons + margins (+ checkbox)
+        ideal_dialog_h = calc_list_h + extra_h
+        final_h = min(ideal_dialog_h, max_height)
+        final_h = max(final_h, 220 if show_task_checkbox else 200)
+        
+        self.resize(340, final_h)
+        layout.addWidget(self.list_widget, 1)
+        
+        # Button box
+        btn_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btn_box.accepted.connect(self.accept)
+        btn_box.rejected.connect(self.reject)
+        layout.addWidget(btn_box)
+        
+    def get_selected_status(self):
+        item = self.list_widget.currentItem()
+        return item.text() if item else ""
+
+    def should_update_task(self):
+        return self.chk_same_task is not None and self.chk_same_task.isChecked()
+
+
 class AyonPanel(QWidget):
     # Signal emitted when a task is double-clicked: (folder_path, task_name, task_type, assignee)
     task_selected = Signal(str, str, str, str) 
@@ -109,6 +233,8 @@ class AyonPanel(QWidget):
     project_changed = Signal(str)
     representations_requested = Signal(str, str) # (project_name, product_id)
     show_thumbs_toggled = Signal(bool)
+    task_status_change_requested = Signal(str, str, str, str) # (project_name, task_id, task_name, current_status)
+    version_status_change_requested = Signal(str, str, str, str, str, str, int) # (project_name, version_id, display_title, current_status, task_id, task_name, row)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -250,10 +376,12 @@ class AyonPanel(QWidget):
         
         self.product_view = QTreeView()
         self.product_model = QStandardItemModel()
-        self.product_model.setHorizontalHeaderLabels(["Product Name", "Type", "Last Version"])
+        self.product_model.setHorizontalHeaderLabels(["Product Name", "Type", "Last Version", "Status"])
         self.product_view.setModel(self.product_model)
         self.product_view.setHeaderHidden(False)
         self.product_view.setEditTriggers(QTreeView.NoEditTriggers)
+        self.product_view.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.product_view.customContextMenuRequested.connect(self._on_product_context_menu)
         self.product_view.doubleClicked.connect(self._on_product_double_click)
         self.product_view.selectionModel().selectionChanged.connect(self._on_product_selection_changed)
         self.product_layout.addWidget(self.product_view)
@@ -272,7 +400,7 @@ class AyonPanel(QWidget):
         
         self.repre_view = QTreeView()
         self.repre_model = QStandardItemModel()
-        self.repre_model.setHorizontalHeaderLabels(["Name", "Version", "Status", "Path"])
+        self.repre_model.setHorizontalHeaderLabels(["Name", "Version", "Path"])
         self.repre_view.setModel(self.repre_model)
         self.repre_view.setHeaderHidden(False)
         self.repre_view.setEditTriggers(QTreeView.NoEditTriggers)
@@ -302,6 +430,9 @@ class AyonPanel(QWidget):
         self.layout.addWidget(self.lbl_unreachable)
         
         self.all_products = [] # Cache for current selected task
+        self.current_selected_folder_id = None
+        self.current_selected_task_id = None
+        self.current_selected_task_name = None
 
     def get_path_to_id_map(self):
         """Build a map of ayon_path -> folder_id from the current tree."""
@@ -590,7 +721,12 @@ class AyonPanel(QWidget):
 
     def _on_selection_changed(self, selected, deselected):
         indexes = self.tree.selectionModel().selectedIndexes()
-        if not indexes: return
+        if not indexes:
+            self.current_selected_folder_id = None
+            self.current_selected_task_id = None
+            self.current_selected_task_name = None
+            self._refresh_product_list()
+            return
         
         source_idx = self.proxy.mapToSource(indexes[0])
         first_col_index = self.model.index(source_idx.row(), 0, source_idx.parent())
@@ -599,15 +735,27 @@ class AyonPanel(QWidget):
         data = item.data(Qt.UserRole)
         
         if data:
-            if 'folderId' in data:
+            if 'folderId' in data: # Task selected
                 f_id = data.get('folderId')
-            elif 'id' in data:
-                f_id = data.get('id')
+                t_id = str(data.get('id')) if data.get('id') else None
+                t_name = data.get('name')
+            elif 'id' in data: # Folder / Shot selected
+                f_id = str(data.get('id'))
+                t_id = None
+                t_name = None
             else:
                 f_id = None
+                t_id = None
+                t_name = None
                 
+            self.current_selected_folder_id = f_id
+            self.current_selected_task_id = t_id
+            self.current_selected_task_name = t_name
+
             if f_id:
                 self.info_requested.emit(f_id)
+            
+            self._refresh_product_list()
 
     def set_products(self, products):
         """Populate the product info list and types dropdown."""
@@ -624,23 +772,105 @@ class AyonPanel(QWidget):
             
         self._refresh_product_list()
 
+    def _product_matches_task(self, p, task_id, task_name):
+        if not task_id and not task_name:
+            # Shot / Folder selected -> show all products in shot
+            return True
+            
+        p_task_id = p.get("task_id")
+        if p_task_id and task_id and str(p_task_id) == str(task_id):
+            return True
+            
+        p_task_name = p.get("task_name")
+        if p_task_name and task_name and p_task_name.lower() == task_name.lower():
+            return True
+            
+        # Fallback if no task_id / task_name on product metadata:
+        # Match product name containing task_name
+        if not p_task_id and not p_task_name and task_name:
+            if task_name.lower() in p.get("name", "").lower():
+                return True
+            return False
+            
+        return False
+
     def _refresh_product_list(self):
         self.product_model.removeRows(0, self.product_model.rowCount())
         # Also clear representations when list is refreshed
         self.repre_model.removeRows(0, self.repre_model.rowCount())
         checked_types = self.combo_product_types.get_checked_items()
         
+        task_id = self.current_selected_task_id
+        task_name = self.current_selected_task_name
+
         for p in self.all_products:
             if p['type'] in checked_types:
-                name_item = QStandardItem(p['name'])
-                name_item.setData(p, Qt.UserRole) # Store full product dictionary containing 'id'
-                type_item = QStandardItem(p['type'])
-                ver_item = QStandardItem(f"v{p['version']:03d}")
-                ver_item.setTextAlignment(Qt.AlignCenter)
-                self.product_model.appendRow([name_item, type_item, ver_item])
+                if self._product_matches_task(p, task_id, task_name):
+                    name_item = QStandardItem(p['name'])
+                    name_item.setData(p, Qt.UserRole) # Store full product dictionary containing 'id'
+                    type_item = QStandardItem(p['type'])
+                    ver_item = QStandardItem(f"v{p['version']:03d}")
+                    ver_item.setTextAlignment(Qt.AlignCenter)
+                    status_text = p.get('version_status') or p.get('status') or ""
+                    status_item = QStandardItem(status_text)
+                    status_item.setTextAlignment(Qt.AlignCenter)
+                    self.product_model.appendRow([name_item, type_item, ver_item, status_item])
                 
         self.product_view.resizeColumnToContents(0)
         self.product_view.resizeColumnToContents(1)
+        self.product_view.resizeColumnToContents(2)
+        self.product_view.resizeColumnToContents(3)
+
+    def _on_product_context_menu(self, pos):
+        index = self.product_view.indexAt(pos)
+        if not index.isValid():
+            return
+
+        row = index.row()
+        name_item = self.product_model.item(row, 0)
+        if not name_item:
+            return
+            
+        p = name_item.data(Qt.UserRole)
+        if not p:
+            return
+            
+        prod_name = p.get('name', '')
+        version_id = p.get('version_id')
+        ver_num = p.get('version', 0)
+        version_status = p.get('version_status') or p.get('status') or ''
+        
+        task_id = p.get('task_id') or self.current_selected_task_id
+        task_name = p.get('task_name') or self.current_selected_task_name
+        
+        proj_name = self.combo_project.currentText()
+        
+        if version_id and proj_name:
+            menu = QMenu(self.window())
+            status_action = QAction("Set Status", self)
+            display_title = f"{prod_name} v{ver_num:03d}"
+            status_action.triggered.connect(lambda checked=False, pr=proj_name, vid=version_id, dt=display_title, vs=version_status, tid=task_id, tn=task_name, r=row:
+                self.version_status_change_requested.emit(pr, vid, dt, vs, tid or "", tn or "", r)
+            )
+            menu.addAction(status_action)
+            menu.exec(self.product_view.viewport().mapToGlobal(pos))
+
+    def update_version_status_in_product_list(self, row, new_status):
+        """Update status column and user role data of a product version at row."""
+        name_item = self.product_model.item(row, 0)
+        status_item = self.product_model.item(row, 3)
+        if name_item:
+            p = name_item.data(Qt.UserRole)
+            if isinstance(p, dict):
+                v_id = p.get("version_id")
+                p["version_status"] = new_status
+                name_item.setData(p, Qt.UserRole)
+                if v_id:
+                    for prod in self.all_products:
+                        if prod.get("version_id") == v_id:
+                            prod["version_status"] = new_status
+        if status_item:
+            status_item.setText(new_status)
 
     def _on_product_selection_changed(self, selected, deselected):
         self._refresh_representations()
@@ -693,18 +923,15 @@ class AyonPanel(QWidget):
             ver_item = QStandardItem(f"v{ver:03d}" if ver else "")
             ver_item.setTextAlignment(Qt.AlignCenter)
             
-            status_item = QStandardItem(rep.get("status", ""))
-            
             path = rep.get("attrib", {}).get("path", "")
             path_item = QStandardItem(path)
             
-            self.repre_model.appendRow([name_item, ver_item, status_item, path_item])
+            self.repre_model.appendRow([name_item, ver_item, path_item])
             
         self.repre_view.resizeColumnToContents(0)
         self.repre_view.resizeColumnToContents(1)
-        self.repre_view.resizeColumnToContents(2)
         # Give path column a reasonable starting width
-        self.repre_view.setColumnWidth(3, 400)
+        self.repre_view.setColumnWidth(2, 400)
 
     def _on_repre_context_menu(self, pos):
         index = self.repre_view.indexAt(pos)
@@ -720,12 +947,12 @@ class AyonPanel(QWidget):
         paths = []
         if clicked_row in selected_rows:
             for r in selected_rows:
-                path_idx = self.repre_model.index(r, 3)
+                path_idx = self.repre_model.index(r, 2)
                 path = path_idx.data()
                 if path and isinstance(path, str):
                     paths.append(path)
         else:
-            path_idx = self.repre_model.index(clicked_row, 3)
+            path_idx = self.repre_model.index(clicked_row, 2)
             path = path_idx.data()
             if path and isinstance(path, str):
                 paths.append(path)
@@ -901,11 +1128,45 @@ class AyonPanel(QWidget):
             unassign_action.triggered.connect(lambda: self.unassign_requested.emit(ayon_path))
             menu.addAction(unassign_action)
             
-            select_action = QAction(f"Select assigned items", self)
-            select_action.triggered.connect(lambda: self.select_assigned_requested.emit(ayon_path))
-            menu.addAction(select_action)
-            
+        if 'folderId' in data: # Task item
+            status_action = QAction("Set Status", self)
+            proj_name = self.combo_project.currentText()
+            t_id = str(data.get('id')) if data.get('id') else ""
+            t_name = data.get('name', '')
+            t_status = data.get('status', '')
+            status_action.triggered.connect(lambda checked=False, p=proj_name, tid=t_id, tn=t_name, ts=t_status: 
+                self.task_status_change_requested.emit(p, tid, tn, ts)
+            )
+            menu.addAction(status_action)
+
         menu.exec(self.tree.viewport().mapToGlobal(pos))
+
+    def update_task_status_in_tree(self, task_id, new_status):
+        """Update the status column and user role data of a task in the tree view."""
+        def _recurse(parent_item):
+            for row in range(parent_item.rowCount()):
+                item = parent_item.child(row, 0)
+                if not item: continue
+                
+                data = item.data(Qt.UserRole)
+                if data and "folderId" in data: # It's a task
+                    t_id = str(data.get("id")) if data.get("id") else ""
+                    if t_id == str(task_id):
+                        # Update status in item data
+                        data["status"] = new_status
+                        item.setData(data, Qt.UserRole)
+                        
+                        # Column 2 is Status column
+                        status_item = parent_item.child(row, 2)
+                        if status_item:
+                            status_item.setText(new_status)
+                        return True
+                
+                if _recurse(item):
+                    return True
+            return False
+            
+        _recurse(self.model.invisibleRootItem())
 
     def select_path(self, folder_path, task_name=None):
         """Programmatically select and scroll to a folder or task in the tree view."""

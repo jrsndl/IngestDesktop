@@ -119,13 +119,75 @@ class AyonClient:
                 v_num = last_v["version"] if last_v else 0
                 p_name = prod["name"]
                 p_type = prod.get("productType") or prod.get("type")
+                
+                prod_data = prod.get("data") or {}
+                last_v_data = (last_v.get("data") or {}) if last_v else {}
+                
+                t_id = (
+                    prod.get("taskId") or
+                    prod_data.get("taskId") or
+                    prod_data.get("task_id") or
+                    (last_v.get("taskId") if last_v else None) or
+                    last_v_data.get("taskId") or
+                    last_v_data.get("task_id")
+                )
+                
+                t_name = (
+                    prod_data.get("task_name") or
+                    prod_data.get("taskName") or
+                    (prod_data.get("task", {}).get("name") if isinstance(prod_data.get("task"), dict) else None) or
+                    last_v_data.get("task_name") or
+                    last_v_data.get("taskName") or
+                    (last_v_data.get("task", {}).get("name") if isinstance(last_v_data.get("task"), dict) else None)
+                )
+                
                 res.append({
                     "id": str(prod["id"]),
                     "name": p_name,
                     "type": p_type,
-                    "version": v_num
+                    "version": v_num,
+                    "version_id": str(last_v["id"]) if last_v and last_v.get("id") else None,
+                    "version_status": str(last_v.get("status")) if last_v and last_v.get("status") else "",
+                    "task_id": str(t_id) if t_id else None,
+                    "task_name": str(t_name) if t_name else None,
                 })
             return res
         except Exception as e:
             self.log.error(f"Error fetching products for folder {folder_id}: {e}")
             return []
+
+    def get_project_statuses(self, project_name):
+        """Fetch all available statuses for a project."""
+        if not self.is_connected or not project_name:
+            return []
+        try:
+            proj = ayon_api.get_project(project_name, fields=["statuses"])
+            if not proj:
+                return []
+            return proj.get("statuses") or []
+        except Exception as e:
+            self.log.error(f"Error fetching statuses for project {project_name}: {e}")
+            return []
+
+    def update_task_status(self, project_name, task_id, status):
+        """Update status of a task on AYON server."""
+        if not self.is_connected or not project_name or not task_id:
+            return False
+        try:
+            ayon_api.update_task(project_name, task_id, status=status)
+            return True
+        except Exception as e:
+            self.log.error(f"Error updating task {task_id} status to '{status}': {e}")
+            return False
+
+    def update_version_status(self, project_name, version_id, status):
+        """Update status of a version on AYON server."""
+        if not self.is_connected or not project_name or not version_id:
+            return False
+        try:
+            ayon_api.update_version(project_name, version_id, status=status)
+            return True
+        except Exception as e:
+            self.log.error(f"Error updating version {version_id} status to '{status}': {e}")
+            return False
+

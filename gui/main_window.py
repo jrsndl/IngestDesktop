@@ -7,7 +7,7 @@ import subprocess
 import logging
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QSplitter, 
                              QPushButton, QMessageBox, QInputDialog, QApplication,
-                             QDialog, QLineEdit, QLabel, QHBoxLayout, QPlainTextEdit, QFormLayout, QScrollArea)
+                             QDialog, QLineEdit, QLabel, QHBoxLayout, QPlainTextEdit, QFormLayout, QScrollArea, QCheckBox)
 from PySide6.QtCore import Qt, QTimer, QItemSelectionModel, QItemSelection, QThread, Signal, QRect
 from PySide6.QtGui import QKeySequence, QCursor, QShortcut, QPainter, QColor, QImage, QAction
 
@@ -406,6 +406,8 @@ class MainWindow(QMainWindow):
         self.ayon_panel.info_requested.connect(self._on_ayon_info_requested)
         self.ayon_panel.representations_requested.connect(self._on_ayon_representations_requested)
         self.ayon_panel.show_thumbs_toggled.connect(self._on_show_thumbs_toggled)
+        self.ayon_panel.task_status_change_requested.connect(self._on_ayon_task_status_change)
+        self.ayon_panel.version_status_change_requested.connect(self._on_ayon_version_status_change)
         self.h_splitter.addWidget(self.ayon_panel)
 
         # 3. Center Area (Thumbnails + Spreadsheet)
@@ -466,6 +468,24 @@ class MainWindow(QMainWindow):
         self.main_layout.addSpacing(5)
 
         # 5. Big Ingest Button row
+        export_checks_layout = QHBoxLayout()
+        export_checks_layout.setContentsMargins(2, 0, 2, 2)
+        
+        self.chk_check_versions = QCheckBox("Check Versions")
+        self.chk_check_versions.setChecked(True)
+        self.chk_check_versions.setToolTip("When checked, prevents exporting or publishing items with version numbers <= existing AYON versions.")
+        
+        self.chk_check_duplicates = QCheckBox("Check Duplicates")
+        self.chk_check_duplicates.setChecked(True)
+        self.chk_check_duplicates.setToolTip("When checked, prevents exporting or publishing duplicate item identities.")
+        
+        export_checks_layout.addWidget(self.chk_check_versions)
+        export_checks_layout.addSpacing(15)
+        export_checks_layout.addWidget(self.chk_check_duplicates)
+        export_checks_layout.addStretch()
+        
+        self.main_layout.addLayout(export_checks_layout)
+
         ingest_row_layout = QHBoxLayout()
         ingest_row_layout.setSpacing(2)
         
@@ -2208,29 +2228,36 @@ class MainWindow(QMainWindow):
 
     def _validate_tagged_items(self, tagged_items):
         """Run duplicity and version collision checks and return (valid_items, skip_dup_count, skip_coll_count)."""
-        # 1. Run Duplicity Test
-        duplicate_items = self._check_duplicates_in_list(tagged_items)
-        duplicate_set = set(duplicate_items)
+        check_dups = getattr(self, "chk_check_duplicates", None) is None or self.chk_check_duplicates.isChecked()
+        check_vers = getattr(self, "chk_check_versions", None) is None or self.chk_check_versions.isChecked()
+
+        # 1. Run Duplicity Test (if enabled)
+        duplicate_set = set()
+        if check_dups:
+            duplicate_items = self._check_duplicates_in_list(tagged_items)
+            duplicate_set = set(duplicate_items)
         
-        # 2. Run Version Collision Test (Synchronous)
-        project = self.ayon_panel.combo_project.currentText()
-        v_map = {}
-        if project:
-            v_map = self._check_versions_sync(tagged_items)
-        
-        collision_items = []
-        for item in tagged_items:
-            folder_path = "/".join(item.ayon_path.split("/")[:-1])
-            path_map = self.ayon_panel.get_path_to_id_map()
-            f_id = path_map.get(folder_path)
-            if f_id:
-                prod_name = self.model._expand_string(self.model.product_name_template, item, use_global_camel=True)
-                key = f"{f_id}|{prod_name}|{item.product_type}"
-                last_v = v_map.get(key)
-                if last_v is not None and last_v >= item.version:
-                    collision_items.append(item)
-        
-        collision_set = set(collision_items)
+        # 2. Run Version Collision Test (Synchronous, if enabled)
+        collision_set = set()
+        if check_vers:
+            project = self.ayon_panel.combo_project.currentText()
+            v_map = {}
+            if project:
+                v_map = self._check_versions_sync(tagged_items)
+            
+            collision_items = []
+            for item in tagged_items:
+                folder_path = "/".join(item.ayon_path.split("/")[:-1])
+                path_map = self.ayon_panel.get_path_to_id_map()
+                f_id = path_map.get(folder_path)
+                if f_id:
+                    prod_name = self.model._expand_string(self.model.product_name_template, item, use_global_camel=True)
+                    key = f"{f_id}|{prod_name}|{item.product_type}"
+                    last_v = v_map.get(key)
+                    if last_v is not None and last_v >= item.version:
+                        collision_items.append(item)
+            
+            collision_set = set(collision_items)
         
         valid_items = []
         skipped_duplicates = 0
@@ -4734,6 +4761,75 @@ class MainWindow(QMainWindow):
         self._repre_thread = RepreThread(self.ayon, project, product_id)
         self._repre_thread.finished.connect(self.ayon_panel.set_representations)
         self._repre_thread.start()
+
+    def _on_ayon_task_status_change(self, project_name, task_id, task_name, current_status):
+        """Handle task status change request from AYON panel."""
+        if not project_name or not task_id:
+            return
+            
+        statuses = self.ayon.get_project_statuses(project_name)
+        if not statuses:
+            # Fallback default statuses if server query returns empty or unconnected
+            statuses = [
+                {"name": "Not Started", "color": "#707070"},
+                {"name": "In Progress", "color": "#2196F3"},
+                {"name": "Pending Review", "color": "#FF9800"},
+                {"name": "Approved", "color": "#4CAF50"},
+                {"name": "Blocked", "color": "#F44336"}
+            ]
+            
+        from gui.ayon_panel import TaskStatusDialog
+        from PySide6.QtWidgets import QDialog
+        
+        dialog = TaskStatusDialog(current_status, statuses, task_name=task_name, parent=self)
+        if dialog.exec() == QDialog.Accepted:
+            new_status = dialog.get_selected_status()
+            if new_status and new_status != current_status:
+                success = self.ayon.update_task_status(project_name, task_id, new_status)
+                if success:
+                    self.ayon_panel.update_task_status_in_tree(task_id, new_status)
+                    self.log_message(f"Updated status for task '{task_name}' to '{new_status}'.", "success")
+                else:
+                    self.log_message(f"Failed to update status for task '{task_name}' in AYON.", "error")
+
+    def _on_ayon_version_status_change(self, project_name, version_id, display_title, current_status, task_id, task_name, row):
+        """Handle version status change request from AYON panel product section."""
+        if not project_name or not version_id:
+            return
+            
+        statuses = self.ayon.get_project_statuses(project_name)
+        if not statuses:
+            statuses = [
+                {"name": "Not Started", "color": "#707070"},
+                {"name": "In Progress", "color": "#2196F3"},
+                {"name": "Pending Review", "color": "#FF9800"},
+                {"name": "Approved", "color": "#4CAF50"},
+                {"name": "Blocked", "color": "#F44336"}
+            ]
+            
+        from gui.ayon_panel import TaskStatusDialog
+        from PySide6.QtWidgets import QDialog
+        
+        dialog = TaskStatusDialog(current_status, statuses, task_name=display_title, show_task_checkbox=True, parent=self)
+        if dialog.exec() == QDialog.Accepted:
+            new_status = dialog.get_selected_status()
+            if new_status:
+                if new_status != current_status:
+                    success = self.ayon.update_version_status(project_name, version_id, new_status)
+                    if success:
+                        self.ayon_panel.update_version_status_in_product_list(row, new_status)
+                        self.log_message(f"Updated status for version '{display_title}' to '{new_status}'.", "success")
+                    else:
+                        self.log_message(f"Failed to update status for version '{display_title}' in AYON.", "error")
+                
+                # Check if "Set the same status to Task" is checked
+                if dialog.should_update_task() and task_id:
+                    task_success = self.ayon.update_task_status(project_name, task_id, new_status)
+                    if task_success:
+                        self.ayon_panel.update_task_status_in_tree(task_id, new_status)
+                        self.log_message(f"Updated status for task '{task_name or task_id}' to '{new_status}'.", "success")
+                    else:
+                        self.log_message(f"Failed to update status for task '{task_name or task_id}' in AYON.", "error")
 
     def _parse_item_tags(self, item):
         """Parse filename using regexes and store in item.metadata."""

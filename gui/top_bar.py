@@ -1,3 +1,4 @@
+import os
 from PySide6.QtWidgets import QWidget, QHBoxLayout, QPushButton, QComboBox, QLabel, QFileDialog, QLineEdit, QCheckBox
 from PySide6.QtCore import Signal
 
@@ -65,7 +66,12 @@ class TopBar(QWidget):
         self.path_display.setText(path)
 
     def _on_select_folder(self):
-        folder = QFileDialog.getExistingDirectory(self, "Select Source Folder")
+        current_path = self.path_display.text().strip()
+        dir_to_open = ""
+        if current_path and os.path.exists(current_path):
+            dir_to_open = current_path if os.path.isdir(current_path) else os.path.dirname(current_path)
+            
+        folder = QFileDialog.getExistingDirectory(self, "Select Source Folder", dir_to_open)
         if folder:
             self.folder_selected.emit(folder)
 
