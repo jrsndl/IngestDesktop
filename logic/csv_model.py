@@ -30,36 +30,14 @@ class CSVPreviewModel(QAbstractTableModel):
             elif line.strip():
                 self.column_defs.append((line.strip(), ""))
         
-        self.tagged_items = []
-        self.is_review_row = []
-        for item in self.source_model.items:
-            if item.is_tagged:
-                self.tagged_items.append(item)
-                self.is_review_row.append(False)
-                
-                # Check if item has review
-                review_path = self.source_model.expand_tokens("{prefs_review_path}", item)
-                has_review = (item.review_status == "done") or (review_path and os.path.exists(review_path))
-                if has_review:
-                    self.tagged_items.append(item)
-                    self.is_review_row.append(True)
+        self.tagged_items = [item for item in self.source_model.items if item.is_tagged]
+        self.is_review_row = [False] * len(self.tagged_items)
         self.endResetModel()
 
     def _refresh_data(self):
         self.beginResetModel()
-        self.tagged_items = []
-        self.is_review_row = []
-        for item in self.source_model.items:
-            if item.is_tagged:
-                self.tagged_items.append(item)
-                self.is_review_row.append(False)
-                
-                # Check if item has review
-                review_path = self.source_model.expand_tokens("{prefs_review_path}", item)
-                has_review = (item.review_status == "done") or (review_path and os.path.exists(review_path))
-                if has_review:
-                    self.tagged_items.append(item)
-                    self.is_review_row.append(True)
+        self.tagged_items = [item for item in self.source_model.items if item.is_tagged]
+        self.is_review_row = [False] * len(self.tagged_items)
         self.endResetModel()
 
     def rowCount(self, parent=QModelIndex()):
@@ -98,6 +76,22 @@ class CSVPreviewModel(QAbstractTableModel):
             if col == 0 and (is_colliding or is_duplicate) and not is_review:
                 from PySide6.QtGui import QColor
                 return QColor("#ff8c00")
+            if getattr(item, "group_error", False):
+                from PySide6.QtGui import QColor
+                return QColor("#3e1f1f")
+            if getattr(self.source_model, "show_grouped", False):
+                g_idx = getattr(item, "group_index", 0)
+                if not hasattr(self, "GROUP_DIM_COLORS"):
+                    from PySide6.QtGui import QColor
+                    self.GROUP_DIM_COLORS = [
+                        QColor("#1b2430"),  # Dim Steel Blue
+                        QColor("#251c30"),  # Dim Soft Purple
+                        QColor("#18292e"),  # Dim Dark Cyan / Teal
+                        QColor("#1c213d"),  # Dim Indigo
+                        QColor("#241e3d"),  # Dim Blue-Violet
+                        QColor("#2b1e2c"),  # Dim Dark Violet
+                    ]
+                return self.GROUP_DIM_COLORS[g_idx % len(self.GROUP_DIM_COLORS)]
             return None
 
         if role == Qt.DecorationRole:

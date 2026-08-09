@@ -23,6 +23,11 @@ from logic.scanner import ImageScanner, ThumbnailConversionWorker, ReviewConvers
 from gui.conversion_queue_dialog import ConversionQueueDialog
 from ayon_client import AyonClient
 from utils import evaluate_preset
+from logic.grouping_engine import (
+    compute_group_key, find_matching_group_def, 
+    validate_group_representations, apply_group_inheritance,
+    pair_group_reviews, apply_thumbnail_source_inheritance
+)
 
 
 class RenameDialog(QDialog):
@@ -154,7 +159,8 @@ class HelpContentWidget(QWidget):
         y = draw_shortcut(painter, full_rect, "{task_name}", "Task name from assigned AYON path", y)
         y = draw_shortcut(painter, full_rect, "{ayon_folder_path}", "AYON path excluding the task", y)
         y = draw_shortcut(painter, full_rect, "{label}", "Current label (including edits)", y)
-        y = draw_shortcut(painter, full_rect, "{variant}", "Expanded variant string", y)
+        y = draw_shortcut(painter, full_rect, "{variant_parsed}", "Variant string parsed via AutoAssign regex", y)
+        y = draw_shortcut(painter, full_rect, "{variant}", "Effective variant (preset template evaluated)", y)
         y = draw_shortcut(painter, full_rect, "{filename}", "Full path (hashes for sequences)", y)
         y = draw_shortcut(painter, full_rect, "{file_name}", "Base name without extension", y)
         y = draw_shortcut(painter, full_rect, "{extension}", "File extension without dot", y)
@@ -386,6 +392,7 @@ class MainWindow(QMainWindow):
         self.top_bar.prefs_requested.connect(self.show_preferences)
         self.top_bar.rescan_requested.connect(self.rescan_current)
         self.top_bar.reveal_requested.connect(self.reveal_source_folder)
+        self.top_bar.show_reviews_toggled.connect(self._on_show_reviews_toggled)
         self.top_bar.load_preset_requested.connect(self._on_preset_changed)
         self.main_layout.addWidget(self.top_bar, 0)
         self.main_layout.addSpacing(5)
@@ -434,6 +441,7 @@ class MainWindow(QMainWindow):
         self.spreadsheet.label_action_requested.connect(self._on_label_action)
         self.spreadsheet.add_comment_requested.connect(self._on_add_comment)
         self.spreadsheet.check_duplicates_clicked.connect(self.perform_duplicate_check)
+        self.spreadsheet.show_grouped_toggled.connect(self._on_show_grouped_toggled)
         self.v_splitter.addWidget(self.spreadsheet)
         
         # Connect selection after model is set
@@ -475,10 +483,12 @@ class MainWindow(QMainWindow):
         self.chk_check_versions = QCheckBox("Check Versions")
         self.chk_check_versions.setChecked(True)
         self.chk_check_versions.setToolTip("When checked, prevents exporting or publishing items with version numbers <= existing AYON versions.")
+        self.chk_check_versions.toggled.connect(self.save_config)
         
         self.chk_check_duplicates = QCheckBox("Check Duplicates")
         self.chk_check_duplicates.setChecked(True)
         self.chk_check_duplicates.setToolTip("When checked, prevents exporting or publishing duplicate item identities.")
+        self.chk_check_duplicates.toggled.connect(self.save_config)
         
         export_checks_layout.addWidget(self.chk_check_versions)
         export_checks_layout.addSpacing(15)
@@ -1349,6 +1359,7 @@ class MainWindow(QMainWindow):
         for item in new_items:
             self._parse_item_tags(item)
         self.model.add_items(new_items)
+        self._update_grouping_and_inheritance()
         self.thumb_area.frame_all()
         
         # Start background conversions
@@ -1424,6 +1435,22 @@ class MainWindow(QMainWindow):
         self._refresh_tables()
         self.trigger_ayon_thumbnail_downloads()
 
+    def get_selected_items(self):
+        selected_items = []
+        if hasattr(self, 'thumb_area') and self.thumb_area.scene:
+            selected_thumbs = [item for item in self.thumb_area.scene.selectedItems() if hasattr(item, 'data') and item.data]
+            if selected_thumbs:
+                selected_items = [thumb.data for thumb in selected_thumbs]
+        if not selected_items and hasattr(self, 'spreadsheet') and self.spreadsheet.table:
+            selection_model = self.spreadsheet.table.selectionModel()
+            if selection_model:
+                selected_rows = selection_model.selectedRows()
+                for idx in selected_rows:
+                    row = idx.row()
+                    if row < len(self.model.items):
+                        selected_items.append(self.model.items[row])
+        return selected_items
+
     def show_queue_dialog(self):
         if not self._queue_dialog:
             self._queue_dialog = ConversionQueueDialog(self.model, self)
@@ -1435,6 +1462,8 @@ class MainWindow(QMainWindow):
             self._queue_dialog.convertThumbsRequested.connect(lambda: self.start_conversions(self.model.items, force=False))
             self._queue_dialog.forceConvertThumbsRequested.connect(lambda: self.start_conversions(self.model.items, force=True))
             
+        selected_items = self.get_selected_items()
+        self._queue_dialog.set_selected_items(selected_items)
         self._queue_dialog.show()
         self._queue_dialog.raise_()
 
@@ -2021,11 +2050,11 @@ class MainWindow(QMainWindow):
             source_time = item.modification_time if source == "Modification Date" else item.creation_time
             item.age_minutes = int((current_time - source_time) / 60)
         
-        # Notify the model that the age column (index 11) has changed
+        # Notify the model that the age column (index 12) has changed
         if self.model.items:
             self.model.dataChanged.emit(
-                self.model.index(0, 11), 
-                self.model.index(len(self.model.items)-1, 11)
+                self.model.index(0, 12), 
+                self.model.index(len(self.model.items)-1, 12)
             )
 
     def _gather_gui_state(self):
@@ -2087,6 +2116,12 @@ class MainWindow(QMainWindow):
             self.config["filter_v_stack"] = self.filter_panel.btn_v_stack.isChecked()
             self.config["filter_sequences"] = self.filter_panel.btn_sequences.isChecked()
 
+        # 5. Validation Checkboxes
+        if hasattr(self, "chk_check_versions"):
+            self.config["check_versions"] = self.chk_check_versions.isChecked()
+        if hasattr(self, "chk_check_duplicates"):
+            self.config["check_duplicates"] = self.chk_check_duplicates.isChecked()
+
     def _restore_gui_state(self):
         # 1. AYON Panel
         if hasattr(self, "ayon_panel") and self.ayon_panel:
@@ -2134,6 +2169,12 @@ class MainWindow(QMainWindow):
                 "sequences": self.config.get("filter_sequences", self.config.get("filter_toggles", {}).get("sequences", True)),
             }
             self.filter_panel.set_toggle_states(toggles)
+
+        # 4. Validation Checkboxes
+        if hasattr(self, "chk_check_versions") and self.chk_check_versions:
+            self.chk_check_versions.setChecked(self.config.get("check_versions", True))
+        if hasattr(self, "chk_check_duplicates") and self.chk_check_duplicates:
+            self.chk_check_duplicates.setChecked(self.config.get("check_duplicates", True))
 
     def _restore_ayon_selection(self):
         folder = self.config.get("ayon_selected_folder")
@@ -2210,12 +2251,27 @@ class MainWindow(QMainWindow):
 
         # 1. Validate items
         self.log_message("Export CSV: Running validation checks...")
-        valid_items, skipped_duplicates, skipped_collisions = self._validate_tagged_items(tagged_items)
+        valid_items, dup_groups, collision_details = self._validate_tagged_items(tagged_items)
             
+        total_dups = sum(len(g) for g in dup_groups.values())
+        total_colls = len(collision_details)
+
         if not valid_items:
-            msg = "All selected items were skipped due to errors:\n"
-            if skipped_duplicates: msg += f"- {skipped_duplicates} duplicates\n"
-            if skipped_collisions: msg += f"- {skipped_collisions} version collisions\n"
+            msg = "All selected items were skipped due to errors / duplicate checks:\n\n"
+            if dup_groups:
+                msg += f"Duplicate items ({total_dups}):\n"
+                for ident, items in dup_groups.items():
+                    labels = ", ".join([f"'{it.label}' ({it.filename})" for it in items])
+                    msg += f"  - [{ident}]: {labels}\n"
+                msg += "\n"
+            if total_colls:
+                msg += f"Version collisions ({total_colls}):\n"
+                for item, prod_name, eff_v, last_v in collision_details:
+                    msg += f"  - {item.label}: v{eff_v} <= AYON v{last_v}\n"
+            
+            invalid_items = list(set([it for g in dup_groups.values() for it in g] + [item for item, _, _, _ in collision_details]))
+            self.select_items(invalid_items)
+            msg += "\nThe skipped items have been selected in the interface."
             QMessageBox.warning(self, "Export CSV", msg)
             return
 
@@ -2231,10 +2287,21 @@ class MainWindow(QMainWindow):
             # Summary message
             summary = f"CSV exported successfully to:\n{csv_path}\n\n"
             summary += f"Total exported: {len(valid_items)}\n"
-            if skipped_duplicates or skipped_collisions:
-                summary += f"Total skipped: {skipped_duplicates + skipped_collisions}\n"
-                if skipped_duplicates: summary += f"  - Duplicates: {skipped_duplicates}\n"
-                if skipped_collisions: summary += f"  - Version collisions: {skipped_collisions}\n"
+            if total_dups or total_colls:
+                summary += f"Total skipped: {total_dups + total_colls}\n"
+                if total_dups:
+                    summary += f"  - Duplicates ({total_dups}):\n"
+                    for ident, items in dup_groups.items():
+                        labels = ", ".join([f"'{it.label}' ({it.filename})" for it in items])
+                        summary += f"    * [{ident}]: {labels}\n"
+                if total_colls:
+                    summary += f"  - Version collisions ({total_colls}):\n"
+                    for item, prod_name, eff_v, last_v in collision_details:
+                        summary += f"    * {item.label} (v{eff_v} <= v{last_v})\n"
+                
+                invalid_items = list(set([it for g in dup_groups.values() for it in g] + [item for item, _, _, _ in collision_details]))
+                self.select_items(invalid_items)
+                summary += "\nThe skipped items have been selected in the interface."
             
             QMessageBox.information(self, "Export CSV", summary)
             
@@ -2242,77 +2309,167 @@ class MainWindow(QMainWindow):
             self.log_message(f"Failed to export CSV: {e}", "error")
             QMessageBox.critical(self, "Export CSV", f"Failed to export CSV: {e}")
 
+    def _on_show_grouped_toggled(self, checked):
+        """Handle Show Grouped toggle from spreadsheet panel toolbar."""
+        if hasattr(self, "model") and self.model:
+            self.model.show_grouped = checked
+        self._update_grouping_and_inheritance()
+
+    def _update_grouping_and_inheritance(self):
+        """Compute grouping key, validate representations, apply column inheritance, and set group background indices."""
+        if not hasattr(self, "model") or not self.model or not self.model.items:
+            return
+
+        group_by_template = self.config.get("group_by", "{folder_name}{task_name}{variant}{version}")
+        group_defs = self.config.get("group_definitions", [])
+
+        groups = {}
+        for item in self.model.items:
+            key = compute_group_key(item, group_by_template)
+            item.group_key = key
+            groups.setdefault(key, []).append(item)
+
+        group_keys = sorted(groups.keys())
+        for idx, key in enumerate(group_keys):
+            g_items = groups[key]
+            g_def = find_matching_group_def(g_items, group_defs)
+            is_err, missing = validate_group_representations(g_items, g_def, self.config)
+
+            rev_repres = set()
+            if g_def:
+                r_str = g_def.get("review_repre", "").strip()
+                if r_str:
+                    rev_repres = {r.lower().lstrip(".") for r in r_str.split()}
+
+            for item in g_items:
+                item.group_index = idx
+                item.group_error = is_err
+                item.group_missing_repres = missing
+                item_repre = (getattr(item, "representation", "") or "").lower().lstrip(".")
+                if rev_repres and item_repre in rev_repres:
+                    item.is_review_repre = True
+                elif item.metadata.get("is_paired_review", False):
+                    item.is_review_repre = True
+                else:
+                    item.is_review_repre = False
+
+            if g_def:
+                apply_group_inheritance(g_items, g_def)
+                apply_thumbnail_source_inheritance(g_items, g_def)
+
+            pair_group_reviews(g_items, self.config)
+
+            if rev_repres:
+                for item in g_items:
+                    item_repre = (getattr(item, "representation", "") or "").lower().lstrip(".")
+                    if item_repre in rev_repres:
+                        item.is_review_repre = True
+
+        if getattr(self.model, "show_grouped", False):
+            self.model.items.sort(key=lambda it: (getattr(it, "group_index", 0), getattr(it, "representation", "") or ""))
+
+        self.model.layoutChanged.emit()
+        if hasattr(self, "spreadsheet"):
+            self.spreadsheet.update_filtering()
+        if hasattr(self, "thumb_area"):
+            self.thumb_area.rearrange_items()
+
     def _validate_tagged_items(self, tagged_items):
-        """Run duplicity and version collision checks and return (valid_items, skip_dup_count, skip_coll_count)."""
+        """Run duplicity, version collision, and grouping representation checks and return (valid_items, dup_groups, collision_details)."""
+        self._update_grouping_and_inheritance()
+        
         check_dups = getattr(self, "chk_check_duplicates", None) is None or self.chk_check_duplicates.isChecked()
         check_vers = getattr(self, "chk_check_versions", None) is None or self.chk_check_versions.isChecked()
+        check_group_repres = self.config.get("group_do_not_export_missing_repres", True)
+
+        # Reset item validation states
+        for item in tagged_items:
+            item.is_duplicate = False
+            item.version_collision = None
+
+        # 0. Check missing representations in group
+        group_blocked_set = set()
+        if check_group_repres:
+            for item in tagged_items:
+                if getattr(item, "group_error", False):
+                    group_blocked_set.add(item)
+
+        if group_blocked_set:
+            self.log_message(f"Validation Warning: {len(group_blocked_set)} item(s) belong to groups with missing required representations.", "warning")
+            for item in group_blocked_set:
+                missing_str = ", ".join(getattr(item, "group_missing_repres", []))
+                self.log_message(f"  - Item '{item.label}' (Group '{item.group_key}') missing representations: {missing_str}", "warning")
 
         # 1. Run Duplicity Test (if enabled)
         duplicate_set = set()
+        dup_groups = {}
         if check_dups:
-            duplicate_items = self._check_duplicates_in_list(tagged_items)
-            duplicate_set = set(duplicate_items)
+            duplicate_set, dup_groups = self._check_duplicates_in_list(tagged_items)
+            for item in duplicate_set:
+                item.is_duplicate = True
         
         # 2. Run Version Collision Test (Synchronous, if enabled)
         collision_set = set()
+        collision_details = []
         if check_vers:
             project = self.ayon_panel.combo_project.currentText()
             v_map = {}
             if project:
                 v_map = self._check_versions_sync(tagged_items)
             
-            collision_items = []
+            path_map = self.ayon_panel.get_path_to_id_map()
             for item in tagged_items:
+                if not item.ayon_path:
+                    continue
                 folder_path = "/".join(item.ayon_path.split("/")[:-1])
-                path_map = self.ayon_panel.get_path_to_id_map()
                 f_id = path_map.get(folder_path)
                 if f_id:
                     prod_name = self.model._expand_string(self.model.product_name_template, item, use_global_camel=True)
                     key = f"{f_id}|{prod_name}|{item.product_type}"
                     last_v = v_map.get(key)
-                    if last_v is not None and last_v >= item.effective_version:
-                        collision_items.append(item)
-            
-            collision_set = set(collision_items)
+                    if last_v is not None:
+                        item.last_ayon_version = last_v
+                        eff_v = item.effective_version
+                        try:
+                            eff_v_int = int(eff_v)
+                            is_colliding = (last_v >= eff_v_int)
+                        except (ValueError, TypeError):
+                            is_colliding = True
+                            
+                        if is_colliding:
+                            item.version_collision = True
+                            collision_set.add(item)
+                            collision_details.append((item, prod_name, eff_v, last_v))
+                        else:
+                            item.version_collision = False
         
         valid_items = []
-        skipped_duplicates = 0
-        skipped_collisions = 0
-        
         for item in tagged_items:
-            if item in duplicate_set:
-                skipped_duplicates += 1
-                continue
-            if item in collision_set:
-                skipped_collisions += 1
+            if item in duplicate_set or item in collision_set or item in group_blocked_set:
                 continue
             valid_items.append(item)
             
-        return valid_items, skipped_duplicates, skipped_collisions
+        return valid_items, dup_groups, collision_details
 
     def _check_duplicates_in_list(self, items):
-        """Returns a list of items that are considered duplicates within the provided list."""
+        """Returns tuple of (duplicate_set, dup_groups)."""
         dup_template = self.config.get("duplicate_identity", "{ayon_path_val}{prod_name}{variant}{item.version}")
         identity_map = {}
         for item in items:
-            prod_name = self.model._expand_string(self.model.product_name_template, item, use_global_camel=True)
-            ayon_path_val = item.ayon_path or ""
-            variant = self.model._expand_string(item.variant, item)
-            
             identity = self.model._expand_string(dup_template, item, use_global_camel=True)
-            identity = identity.replace("{ayon_path_val}", ayon_path_val)
-            identity = identity.replace("{prod_name}", prod_name)
-            identity = identity.replace("{item.version}", str(item.effective_version))
-            
             if identity not in identity_map:
                 identity_map[identity] = []
             identity_map[identity].append(item)
             
-        duplicates = []
-        for group in identity_map.values():
+        dup_groups = {}
+        duplicate_set = set()
+        for identity, group in identity_map.items():
             if len(group) > 1:
-                duplicates.extend(group)
-        return duplicates
+                dup_groups[identity] = group
+                for item in group:
+                    duplicate_set.add(item)
+                    
+        return duplicate_set, dup_groups
 
     def _check_versions_sync(self, items):
         """Synchronously fetch versions from AYON for the provided items."""
@@ -2347,23 +2504,74 @@ class MainWindow(QMainWindow):
         
         # 1. Validate items
         self.log_message("Publish Local: Running validation checks...")
-        valid_items, skipped_duplicates, skipped_collisions = self._validate_tagged_items(tagged_items)
+        valid_items, dup_groups, collision_details = self._validate_tagged_items(tagged_items)
         
-        if not valid_items:
-            msg = "All selected items were skipped due to errors:\n"
-            if skipped_duplicates: msg += f"- {skipped_duplicates} duplicates\n"
-            if skipped_collisions: msg += f"- {skipped_collisions} version collisions\n"
-            QMessageBox.warning(self, "Publish Ayon Local", msg)
-            return
+        total_dups = sum(len(g) for g in dup_groups.values())
+        total_colls = len(collision_details)
+        
+        # Log duplicates in detail to log console
+        if dup_groups:
+            self.log_message(f"Validation Warning: Found {total_dups} duplicate items across {len(dup_groups)} duplicate identities:", "warning")
+            for identity, group in dup_groups.items():
+                self.log_message(f"  - Duplicate identity '{identity}':", "warning")
+                for item in group:
+                    prod_name = self.model._expand_string(self.model.product_name_template, item, use_global_camel=True)
+                    self.log_message(f"      * '{item.label}' (File: {item.filename}, AYON Path: {item.ayon_path}, Product: {prod_name}, Version: v{item.effective_version})", "warning")
+
+        # Log version collisions in detail to log console
+        if collision_details:
+            self.log_message(f"Validation Warning: Found {total_colls} version collisions:", "warning")
+            for item, prod_name, eff_v, last_v in collision_details:
+                self.log_message(f"  - '{item.label}' (Product: {prod_name}, Version: v{eff_v} <= existing AYON v{last_v})", "warning")
+
+        if dup_groups or collision_details:
+            popup_lines = []
             
-        if skipped_duplicates or skipped_collisions:
-            msg = f"Found {skipped_duplicates + skipped_collisions} invalid items which will be skipped.\n"
-            if skipped_duplicates: msg += f"- {skipped_duplicates} duplicates\n"
-            if skipped_collisions: msg += f"- {skipped_collisions} version collisions\n"
-            msg += "\nDo you want to proceed with the remaining items?"
-            res = QMessageBox.question(self, "Publish Ayon Local", msg, QMessageBox.Yes | QMessageBox.No)
-            if res == QMessageBox.No:
+            if dup_groups:
+                popup_lines.append(f"<b>DUPLICATE ITEMS ({total_dups} items in {len(dup_groups)} groups):</b>")
+                g_idx = 1
+                displayed_items = 0
+                max_display = 20
+                for identity, group in dup_groups.items():
+                    if displayed_items >= max_display:
+                        remaining_dups = total_dups - displayed_items
+                        popup_lines.append(f"  <i>... and {remaining_dups} more duplicate items (see log console for full list)</i>")
+                        break
+                    popup_lines.append(f"<b>Group {g_idx}</b> (Identity: <i>{identity}</i>):")
+                    for item in group:
+                        popup_lines.append(f"  • <b>{item.label}</b> (File: {item.filename}, Version: v{item.effective_version}, AYON Path: {item.ayon_path})")
+                        displayed_items += 1
+                        if displayed_items >= max_display:
+                            break
+                    g_idx += 1
+                popup_lines.append("")
+                
+            if collision_details:
+                popup_lines.append(f"<b>VERSION COLLISIONS ({total_colls} items):</b>")
+                displayed_colls = 0
+                max_coll_display = 15
+                for item, prod_name, eff_v, last_v in collision_details:
+                    popup_lines.append(f"  • <b>{item.label}</b>: Version v{eff_v} ≤ existing AYON version v{last_v} (Product: {prod_name})")
+                    displayed_colls += 1
+                    if displayed_colls >= max_coll_display:
+                        remaining_colls = total_colls - displayed_colls
+                        if remaining_colls > 0:
+                            popup_lines.append(f"  <i>... and {remaining_colls} more version collisions (see log console)</i>")
+                        break
+                popup_lines.append("")
+
+            if not valid_items:
+                dialog_text = "<b>All selected items were skipped due to validation errors:</b><br/><br/>"
+                dialog_text += "<br/>".join(popup_lines)
+                QMessageBox.warning(self, "Publish Ayon Local", dialog_text)
                 return
+            else:
+                dialog_text = f"<b>Found {total_dups + total_colls} invalid items which will be skipped:</b><br/><br/>"
+                dialog_text += "<br/>".join(popup_lines)
+                dialog_text += f"<br/><b>Do you want to proceed with publishing the remaining {len(valid_items)} valid item(s)?</b>"
+                res = QMessageBox.question(self, "Publish Ayon Local", dialog_text, QMessageBox.Yes | QMessageBox.No)
+                if res == QMessageBox.No:
+                    return
 
         # 2. Proceed with publish
         project = self.ayon_panel.combo_project.currentText()
@@ -2859,14 +3067,10 @@ class MainWindow(QMainWindow):
                     matched_item = item_map.get(norm_f)
                 
                 variant_val = ""
-                if matched_item and matched_item.variant:
-                    variant_val = matched_item.variant
+                if matched_item:
+                    variant_val = matched_item.effective_variant
                 elif variant_col >= 0 and variant_col < len(row):
                     variant_val = row[variant_col]
-                
-                # Substitute {label} template with matched_item's actual label if present
-                if matched_item and matched_item.label:
-                    variant_val = variant_val.replace("{label}", matched_item.label)
 
                 length = "1"
                 frame_start = "-"
@@ -3311,19 +3515,6 @@ class MainWindow(QMainWindow):
         if not tagged_items:
             QMessageBox.warning(self, "Ingest", "No images tagged for ingest.")
             return None
-
-        # 1. Check for duplicates (same label and AYON path)
-        seen = set()
-        duplicates = []
-        for item in tagged_items:
-            key = (item.label, item.ayon_path)
-            if key in seen:
-                duplicates.append(item)
-            seen.add(key)
-        
-        if duplicates:
-            QMessageBox.critical(self, "Ingest", f"Found {len(duplicates)} duplicate entries. Ingest stopped.")
-            return None
         return tagged_items
 
     def _write_csv_from_preview(self, items, csv_path):
@@ -3336,35 +3527,11 @@ class MainWindow(QMainWindow):
             writer = csv.writer(f, delimiter=delimiter, quotechar=quotechar, quoting=csv.QUOTE_MINIMAL)
             writer.writerow([h for h, t in column_defs])
             for item in items:
-                # 1. Write the main item row
                 row_data = []
                 for h, template in column_defs:
                     val = self.model._expand_string(template, item, use_global_camel=True)
                     row_data.append(val)
                 writer.writerow(row_data)
-                
-                # 2. Write the review row if the item has review
-                review_path = self.model.expand_tokens("{prefs_review_path}", item)
-                has_review = (item.review_status == "done") or (review_path and os.path.exists(review_path))
-                if has_review:
-                    row_data = []
-                    for h, template in column_defs:
-                        h_lower = h.lower()
-                        if h_lower == "file path":
-                            val = os.path.abspath(review_path).replace("\\", "/")
-                        elif h_lower == "representation":
-                            p_data = item.preset_data or {}
-                            val = p_data.get("Review Representation", "h264")
-                        elif h_lower == "representation colorspace":
-                            p_data = item.preset_data or {}
-                            val = p_data.get("Review Colorspace", "Output - sRGB")
-                        elif h_lower == "representation tags":
-                            p_data = item.preset_data or {}
-                            val = p_data.get("Review Tags", "passing;ftracreview;webreview")
-                        else:
-                            val = self.model._expand_string(template, item, use_global_camel=True)
-                        row_data.append(val)
-                    writer.writerow(row_data)
 
     def _on_selection_changed(self, selected, deselected):
         pass # Handle via sync methods now
@@ -3402,6 +3569,49 @@ class MainWindow(QMainWindow):
             self._update_video_preview()
         finally:
             self._selection_lock = False
+
+    def select_items(self, target_items):
+        """Select a list of ImageItems across thumbnail view, spreadsheet table, and filter panel."""
+        if not target_items:
+            return
+
+        target_set = set(target_items)
+        
+        # 1. Select in Thumbnail Area (graphics scene)
+        if hasattr(self, "thumb_area") and self.thumb_area.scene:
+            self.thumb_area.scene.blockSignals(True)
+            try:
+                self.thumb_area.scene.clearSelection()
+                for item_data in target_items:
+                    thumb = self.thumb_area.item_to_thumb.get(item_data)
+                    if thumb:
+                        thumb.setSelected(True)
+            finally:
+                self.thumb_area.scene.blockSignals(False)
+
+        # 2. Select in Spreadsheet Table
+        if hasattr(self, "spreadsheet") and self.spreadsheet.table:
+            selection_model = self.spreadsheet.table.selectionModel()
+            if selection_model:
+                from PySide6.QtCore import QItemSelection, QItemSelectionRange, QItemSelectionModel
+                selection = QItemSelection()
+                
+                is_csv = getattr(self.spreadsheet, "_is_csv_mode", False)
+                items_list = self.csv_preview_model.tagged_items if (is_csv and hasattr(self, "csv_preview_model")) else self.model.items
+
+                col_count = self.spreadsheet.table.model().columnCount() if self.spreadsheet.table.model() else 1
+                for row, item in enumerate(items_list):
+                    if item in target_set:
+                        top_left = self.spreadsheet.table.model().index(row, 0)
+                        bottom_right = self.spreadsheet.table.model().index(row, col_count - 1)
+                        selection.append(QItemSelectionRange(top_left, bottom_right))
+
+                selection_model.select(selection, QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows)
+
+        # 3. Sync to FilterPanel
+        if hasattr(self, "filter_panel"):
+            selected_paths = [os.path.normpath(os.path.abspath(it.file_path)) for it in target_items if hasattr(it, "file_path") and it.file_path]
+            self.filter_panel.select_paths(selected_paths)
 
     def _save_filter_toggles(self):
         old_v_stack = getattr(self.model, "v_stack_enabled", False)
@@ -4284,9 +4494,9 @@ class MainWindow(QMainWindow):
             item.ayon_task_type = task_type
             item.ayon_task_assignee = assignee
             
-        # Notify the model that the AYON Path column (12) has changed for these rows
-        start_idx = self.model.index(min(selected_rows), 12)
-        end_idx = self.model.index(max(selected_rows), 12)
+        # Notify the model that the AYON Path column (14) has changed for these rows
+        start_idx = self.model.index(min(selected_rows), 14)
+        end_idx = self.model.index(max(selected_rows), 14)
         self.model.dataChanged.emit(start_idx, end_idx)
         
         # Feedback
@@ -4351,7 +4561,7 @@ class MainWindow(QMainWindow):
                 affected += 1
         
         if affected:
-            self.model.dataChanged.emit(self.model.index(0, 8), self.model.index(len(self.model.items)-1, 8))
+            self.model.dataChanged.emit(self.model.index(0, 9), self.model.index(len(self.model.items)-1, 9))
             self.log_message(f"Unassigned '{ayon_path}' from {affected} items.")
             # Bold status will update via dataChanged signal -> _update_ayon_visuals
 
@@ -4401,8 +4611,8 @@ class MainWindow(QMainWindow):
                 affected += 1
         
         if affected:
-            # Column 13 is AYON Path
-            self.model.dataChanged.emit(self.model.index(0, 13), self.model.index(len(self.model.items)-1, 13))
+            # Column 14 is AYON Path
+            self.model.dataChanged.emit(self.model.index(0, 14), self.model.index(len(self.model.items)-1, 14))
             self.log_message(f"Cleared all AYON assignments from {affected} items.", "warning")
 
     def _on_ayon_info_requested(self, folder_id):
@@ -4840,55 +5050,179 @@ class MainWindow(QMainWindow):
                     else:
                         self.log_message(f"Failed to update status for task '{task_name or task_id}' in AYON.", "error")
 
+    def _get_parse_target(self, item, parse_mode):
+        """Helper to compute target string for regex matching according to parse_mode."""
+        file_path = getattr(item, "file_path", "") or ""
+        file_path_norm = file_path.replace("\\", "/")
+        dir_norm = os.path.dirname(file_path_norm)
+        filename = os.path.basename(file_path_norm)
+
+        if parse_mode == "Path Only":
+            return dir_norm
+        elif parse_mode == "Full Path":
+            return file_path_norm
+        elif parse_mode and parse_mode.startswith("Folder +"):
+            try:
+                n = int(parse_mode.replace("Folder +", "").strip())
+            except ValueError:
+                n = 1
+            scan_folder = ""
+            if hasattr(self, "model") and getattr(self.model, "source_folder", None):
+                scan_folder = self.model.source_folder
+            elif hasattr(self, "top_bar") and hasattr(self.top_bar, "get_path"):
+                scan_folder = self.top_bar.get_path()
+            if scan_folder:
+                scan_norm = scan_folder.replace("\\", "/").rstrip("/")
+                if dir_norm.lower().startswith(scan_norm.lower()):
+                    rel = dir_norm[len(scan_norm):].strip("/")
+                    parts = [p for p in rel.split("/") if p and p != "."]
+                    if 0 <= (n - 1) < len(parts):
+                        return parts[n - 1]
+            return ""
+        elif parse_mode and parse_mode.startswith("Folder -"):
+            try:
+                n = int(parse_mode.replace("Folder -", "").strip())
+            except ValueError:
+                n = 1
+            parts = [p for p in dir_norm.split("/") if p]
+            if 0 <= (n - 1) < len(parts):
+                return parts[-n]
+            return ""
+        else:
+            # Default: "File Name Only"
+            return filename
+
     def _parse_item_tags(self, item):
-        """Parse filename using regexes and store in item.metadata."""
+        """Parse filename or path using regexes and repl expressions according to parse settings and store in item.metadata."""
         from utils import apply_capitalization
-        filename = os.path.splitext(os.path.basename(item.file_path))[0]
-        
-        # Version
-        v_regex = self.config.get("version_regex", r"([._]v|v)(\d+)")
-        if v_regex:
-            v_match = re.search(v_regex, filename)
-            if v_match:
+
+        def _apply_repl(match, repl_str, default_val):
+            """Helper to process third step: Repl (regex expand or lambda evaluation with support for arbitrary text & \\1, \\2... \\n groups)."""
+            if not repl_str or not repl_str.strip():
+                return default_val
+            repl_clean = repl_str.strip()
+            if repl_clean.startswith("lambda"):
                 try:
-                    groups = v_match.groups()
-                    if len(groups) >= 2:
-                        item.version = int(groups[1])
-                    elif len(groups) == 1:
-                        item.version = int(groups[0])
-                except (ValueError, IndexError):
+                    fn = eval(repl_clean, {"re": re, "os": os, "str": str, "int": int, "float": float, "len": len, "abs": abs, "min": min, "max": max})
+                    return str(fn(match))
+                except Exception as e:
+                    logging.error(f"Error evaluating lambda repl '{repl_clean}': {e}")
+                    return default_val
+            else:
+                try:
+                    return match.expand(repl_clean)
+                except Exception:
                     pass
+
+                try:
+                    res = repl_clean
+
+                    def replace_g(m):
+                        k = m.group(1)
+                        if k.isdigit():
+                            idx = int(k)
+                            return str(match.group(idx)) if 0 <= idx <= len(match.groups()) else m.group(0)
+                        return str(match.group(k))
+                    res = re.sub(r"\\g<([^>]+)>", replace_g, res)
+
+                    num_groups = len(match.groups())
+                    for g_idx in range(num_groups, 0, -1):
+                        target = f"\\{g_idx}"
+                        if target in res:
+                            g_val = match.group(g_idx)
+                            if g_val is not None:
+                                res = res.replace(target, str(g_val))
+
+                    if "\\0" in res:
+                        res = res.replace("\\0", str(match.group(0) or ""))
+
+                    return res
+                except Exception as e:
+                    logging.error(f"Error expanding regex repl '{repl_clean}': {e}")
+                    return default_val
+
+        # Version
+        # 1. First: Parse dropdown target
+        v_parse = self.config.get("version_parse", "File Name Only")
+        v_target = self._get_parse_target(item, v_parse)
+        v_regex = self.config.get("version_regex", r"([._]v|v)(\d+)")
+        v_repl = self.config.get("version_repl", "")
         
-        # New Tags
+        if v_target:
+            v_pattern = v_regex if v_regex else r"(\d+)"
+            try:
+                # 2. Second: Regex
+                v_match = re.search(v_pattern, v_target)
+                if v_match:
+                    # 3. Third: Repl
+                    if v_repl and v_repl.strip():
+                        ver_str = _apply_repl(v_match, v_repl, "")
+                    else:
+                        groups = v_match.groups()
+                        if len(groups) >= 2:
+                            ver_str = groups[1]
+                        elif len(groups) == 1:
+                            ver_str = groups[0]
+                        else:
+                            ver_str = v_match.group(0)
+                    
+                    digits_match = re.search(r"\d+", ver_str)
+                    if digits_match:
+                        item.version = int(digits_match.group(0))
+                    elif ver_str.isdigit():
+                        item.version = int(ver_str)
+            except (ValueError, IndexError, re.error, Exception) as e:
+                logging.error(f"Error parsing version for {item.filename}: {e}")
+
+        # Tags (folder_name, task_name, variant_parsed, sequence, episode)
         tag_config = {
-            "folder_name": (self.config.get("folder_regex"), self.config.get("folder_capitalization", "Keep Original")),
-            "task_name": (self.config.get("task_regex"), self.config.get("task_capitalization", "Keep Original")),
-            "variant_parsed": (self.config.get("variant_regex", r"^[^_]*_[^_]*_[^_]*_([^_]*).*$"), self.config.get("variant_capitalization", "Keep Original")),
-            "sequence": (self.config.get("sequence_regex"), self.config.get("sequence_capitalization", "Keep Original")),
-            "episode": (self.config.get("episode_regex"), self.config.get("episode_capitalization", "Keep Original"))
+            "folder_name": (self.config.get("folder_parse", "File Name Only"), self.config.get("folder_regex"), self.config.get("folder_repl", ""), self.config.get("folder_capitalization", "Keep Original")),
+            "task_name": (self.config.get("task_parse", "File Name Only"), self.config.get("task_regex"), self.config.get("task_repl", ""), self.config.get("task_capitalization", "Keep Original")),
+            "variant_parsed": (self.config.get("variant_parse", "File Name Only"), self.config.get("variant_regex", r"^[^_]*_[^_]*_[^_]*_([^_]*).*$"), self.config.get("variant_repl", ""), self.config.get("variant_capitalization", "Keep Original")),
+            "sequence": (self.config.get("sequence_parse", "File Name Only"), self.config.get("sequence_regex"), self.config.get("sequence_repl", ""), self.config.get("sequence_capitalization", "Keep Original")),
+            "episode": (self.config.get("episode_parse", "File Name Only"), self.config.get("episode_regex"), self.config.get("episode_repl", ""), self.config.get("episode_capitalization", "Keep Original"))
         }
-        
-        for tag, (pattern, cap_style) in tag_config.items():
+
+        for tag, (parse_mode, pattern, repl, cap_style) in tag_config.items():
             if tag == "task_name" and self.config.get("fixed_task_name_enabled", False):
                 val = self.config.get("fixed_task_name", "")
                 val = apply_capitalization(val, cap_style)
                 item.metadata["task_name"] = val
-                logging.info(f"Using fixed task_name={val} for {filename}")
+                logging.info(f"Using fixed task_name={val} for {item.filename}")
                 continue
-                
-            if not pattern: continue
+
+            # 1. First: Parse dropdown target
+            target_str = self._get_parse_target(item, parse_mode)
+            if not target_str:
+                continue
+
+            # 2. Second: Regex
+            pattern_to_use = pattern if pattern else (r"(.*)" if parse_mode != "File Name Only" or repl else None)
+            if not pattern_to_use:
+                continue
+
             try:
-                match = re.search(pattern, filename)
-                if match and match.groups():
-                    val = match.group(1)
-                    val = apply_capitalization(val, cap_style)
-                    item.metadata[tag] = val
-                    logging.info(f"Parsed tag {tag}={val} from {filename}")
-                else:
-                    logging.debug(f"Regex {tag} did not match {filename} with pattern {pattern}")
+                match = re.search(pattern_to_use, target_str)
             except re.error as e:
                 logging.error(f"Regex error for {tag}: {e}")
-                continue
+                match = None
+
+            if match:
+                default_val = match.group(1) if match.groups() else match.group(0)
+                # 3. Third: Repl
+                val = _apply_repl(match, repl, default_val)
+            elif parse_mode and (parse_mode.startswith("Folder +") or parse_mode.startswith("Folder -")):
+                val = target_str
+            else:
+                val = None
+
+            if val is not None:
+                # 4. Fourth: Capitalization
+                val = apply_capitalization(val, cap_style)
+                item.metadata[tag] = val
+                logging.info(f"Parsed tag {tag}={val} from {target_str} (mode: {parse_mode})")
+            else:
+                logging.debug(f"Regex {tag} did not match {target_str} with pattern {pattern}")
 
     def perform_auto_assign(self):
         """Automatically match scanned items to AYON paths based on leaf folder names."""
@@ -4957,8 +5291,8 @@ class MainWindow(QMainWindow):
                     count += 1
         
         if count:
-            # Column 13 is AYON Path
-            self.model.dataChanged.emit(self.model.index(0, 13), self.model.index(len(self.model.items)-1, 13))
+            # Column 14 is AYON Path
+            self.model.dataChanged.emit(self.model.index(0, 14), self.model.index(len(self.model.items)-1, 14))
             self.log_message(f"Auto-assigned {count} items based on folder name matches.", "success")
             self._update_ayon_visuals()
         else:
@@ -5003,41 +5337,33 @@ class MainWindow(QMainWindow):
                 self.csv_preview_model._refresh_data()
             return
 
-        # 2. Group by identity string using configurable template
-        dup_template = self.config.get("duplicate_identity", "{ayon_path_val}{prod_name}{variant}{item.version}")
-        identity_map = {}
-        for item in candidates:
-            # Product name expanded from template
-            prod_name = self.model._expand_string(self.model.product_name_template, item, use_global_camel=True)
-            ayon_path_val = item.ayon_path or ""
-            variant = self.model._expand_string(item.variant, item)
-            
-            identity = self.model._expand_string(dup_template, item, use_global_camel=True)
-            identity = identity.replace("{ayon_path_val}", ayon_path_val)
-            identity = identity.replace("{prod_name}", prod_name)
-            identity = identity.replace("{item.version}", str(item.effective_version))
-            
-            if identity not in identity_map:
-                identity_map[identity] = []
-            identity_map[identity].append(item)
+        # 2. Group by identity string using configurable template via _check_duplicates_in_list
+        duplicate_set, dup_groups = self._check_duplicates_in_list(candidates)
+        for item in duplicate_set:
+            item.is_duplicate = True
 
-        # 3. Mark items in groups with more than one item as duplicates
-        duplicate_items_count = 0
-        for identity, items in identity_map.items():
-            if len(items) > 1:
-                for item in items:
-                    item.is_duplicate = True
-                duplicate_items_count += len(items)
-
-        # 4. Refresh view to show updated {is_duplicate} in Key Value Pairs column
+        # 3. Refresh view to show updated {is_duplicate} in Key Value Pairs column
         self.model.layoutChanged.emit()
         if is_csv:
             self.csv_preview_model._refresh_data()
         
-        if duplicate_items_count > 0:
-            self.log_message(f"Duplicate check complete: Found {duplicate_items_count} items sharing {len([k for k,v in identity_map.items() if len(v)>1])} unique identities.", "warning")
+        if dup_groups:
+            total_dup_items = sum(len(g) for g in dup_groups.values())
+            self.log_message(f"Duplicate check complete: Found {total_dup_items} items sharing {len(dup_groups)} unique identities.", "warning")
+            msg = f"Found {total_dup_items} duplicate items sharing {len(dup_groups)} unique identities:\n\n"
+            for identity, group in dup_groups.items():
+                items_str = ", ".join([f"'{it.label}' ({it.filename})" for it in group])
+                self.log_message(f"  - Duplicate identity [{identity}]: {items_str}", "warning")
+                msg += f"• Identity [{identity}]:\n"
+                for it in group:
+                    msg += f"   - {it.label} ({it.filename})\n"
+            
+            self.select_items(list(duplicate_set))
+            msg += "\nThe duplicate items have been selected in the interface."
+            QMessageBox.warning(self, "Duplicate Check", msg)
         else:
             self.log_message("Duplicate check complete: No duplicates found among candidate items.", "success")
+            QMessageBox.information(self, "Duplicate Check", "No duplicate items found.")
 
     def perform_version_collision_check(self, fix=False):
         """Batch check current versions in AYON for tagged and filtered items."""
@@ -5157,10 +5483,10 @@ class MainWindow(QMainWindow):
                 item.last_ayon_version = 0 
                 item.version_collision = None 
         
-        # Refresh Version (8), Version User (9), Last Version (10), and Key Value Pairs (14) columns
+        # Refresh Version (9), Version User (10), Last Version (11), and Key Value Pairs (15) columns
         self.model.dataChanged.emit(
-            self.model.index(0, 8), 
-            self.model.index(len(self.model.items)-1, 14)
+            self.model.index(0, 9), 
+            self.model.index(len(self.model.items)-1, 15)
         )
         if self.spreadsheet._is_csv_mode:
             self.csv_preview_model._refresh_data()
@@ -5214,6 +5540,15 @@ class MainWindow(QMainWindow):
             self.top_bar.path_display.setText(path)
             self.start_scan(path)
             event.acceptProposedAction()
+
+    def _on_show_reviews_toggled(self, checked):
+        self.config["show_reviews"] = checked
+        self.show_reviews = checked
+        if hasattr(self, "thumb_area"):
+            self.thumb_area.set_show_reviews(checked)
+            self.thumb_area.rearrange_items()
+        if hasattr(self, "spreadsheet"):
+            self.spreadsheet.update_filtering()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

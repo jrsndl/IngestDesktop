@@ -7,6 +7,7 @@ class TopBar(QWidget):
     prefs_requested = Signal()
     rescan_requested = Signal()
     reveal_requested = Signal()
+    show_reviews_toggled = Signal(bool)
     load_preset_requested = Signal(str)
 
     def __init__(self, parent=None):
@@ -40,6 +41,12 @@ class TopBar(QWidget):
         self.btn_reveal = QPushButton("Reveal in Filesystem")
         self.btn_reveal.clicked.connect(self.reveal_requested.emit)
         self.layout.addWidget(self.btn_reveal)
+
+        self.btn_show_reviews = QPushButton("Show Reviews")
+        self.btn_show_reviews.setCheckable(True)
+        self.btn_show_reviews.setChecked(True)
+        self.btn_show_reviews.toggled.connect(self.show_reviews_toggled.emit)
+        self.layout.addWidget(self.btn_show_reviews)
         
         self.layout.addStretch()
         

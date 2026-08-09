@@ -44,6 +44,7 @@ class SpreadsheetPanel(QWidget):
     label_action_requested = Signal(str, object)
     csv_mode_changed = Signal(bool)
     selectionChanged = Signal()
+    show_grouped_toggled = Signal(bool)
     add_comment_requested = Signal(str)
 
     def __init__(self, parent=None):
@@ -67,6 +68,10 @@ class SpreadsheetPanel(QWidget):
         self.btn_assigned_only = QPushButton("Assigned Only")
         self.btn_assigned_only.setCheckable(True)
         self.btn_assigned_only.toggled.connect(lambda: self.update_filtering())
+
+        self.btn_show_grouped = QPushButton("Show Grouped")
+        self.btn_show_grouped.setCheckable(True)
+        self.btn_show_grouped.toggled.connect(self.show_grouped_toggled.emit)
         
         self.btn_check_ver_only = QPushButton("Version Check")
         self.btn_check_ver = QPushButton("Version Check Fix")
@@ -97,6 +102,7 @@ class SpreadsheetPanel(QWidget):
         controls_layout.addWidget(self.btn_selected_only)
         controls_layout.addWidget(self.btn_tagged_only)
         controls_layout.addWidget(self.btn_assigned_only)
+        controls_layout.addWidget(self.btn_show_grouped)
         controls_layout.addWidget(self.btn_check_ver_only)
         controls_layout.addWidget(self.btn_check_ver)
         controls_layout.addWidget(self.btn_check_dup)
@@ -178,10 +184,11 @@ class SpreadsheetPanel(QWidget):
         header.setSectionResizeMode(3, QHeaderView.Interactive) # Variant
         header.setSectionResizeMode(4, QHeaderView.Interactive) # Variant User
         header.setSectionResizeMode(5, QHeaderView.Interactive) # Product Name
-        header.setSectionResizeMode(6, QHeaderView.Interactive) # Category
-        header.setSectionResizeMode(7, QHeaderView.Interactive) # Preset
-        header.setSectionResizeMode(8, QHeaderView.Interactive) # Version
-        header.setSectionResizeMode(9, QHeaderView.Interactive) # Version User
+        header.setSectionResizeMode(6, QHeaderView.Interactive) # Group By
+        header.setSectionResizeMode(7, QHeaderView.Interactive) # Category
+        header.setSectionResizeMode(8, QHeaderView.Interactive) # Preset
+        header.setSectionResizeMode(9, QHeaderView.Interactive) # Version
+        header.setSectionResizeMode(10, QHeaderView.Interactive) # Version User
         
         # Initial fit
         self.table.setColumnWidth(0, 40)
@@ -190,10 +197,11 @@ class SpreadsheetPanel(QWidget):
         self.table.resizeColumnToContents(3) # Variant
         self.table.resizeColumnToContents(4) # Variant User
         self.table.resizeColumnToContents(5) # Product Name
-        self.table.resizeColumnToContents(6) # Category
-        self.table.resizeColumnToContents(7) # Preset
-        self.table.resizeColumnToContents(8) # Version
-        self.table.resizeColumnToContents(9) # Version User
+        self.table.resizeColumnToContents(6) # Group By
+        self.table.resizeColumnToContents(7) # Category
+        self.table.resizeColumnToContents(8) # Preset
+        self.table.resizeColumnToContents(9) # Version
+        self.table.resizeColumnToContents(10) # Version User
         
         # Connect model data change to auto-resize columns
         self.table.model().dataChanged.connect(self._on_model_data_changed)
@@ -245,13 +253,14 @@ class SpreadsheetPanel(QWidget):
             return
             
         # If Label, Variant/User Variant or Version/User Version column was changed, auto-resize them
-        if top_left.column() <= 9 <= bottom_right.column() or top_left.column() <= 4 <= bottom_right.column():
+        if top_left.column() <= 10 <= bottom_right.column() or top_left.column() <= 4 <= bottom_right.column():
             self.table.resizeColumnToContents(2)
             self.table.resizeColumnToContents(3) # Variant
             self.table.resizeColumnToContents(4) # Variant User
             self.table.resizeColumnToContents(5) # Product Name
-            self.table.resizeColumnToContents(8) # Version
-            self.table.resizeColumnToContents(9) # Version User
+            self.table.resizeColumnToContents(6) # Group By
+            self.table.resizeColumnToContents(9) # Version
+            self.table.resizeColumnToContents(10) # Version User
 
     def _on_row_height_change(self, value):
         # Non-linear mapping (quadratic)
@@ -269,10 +278,21 @@ class SpreadsheetPanel(QWidget):
         if search_text is not None:
             self._last_search_text = search_text
             
+        show_reviews = True
+        win = self.window() if hasattr(self, "window") else None
+        if win and hasattr(win, "show_reviews"):
+            show_reviews = win.show_reviews
+        elif win and hasattr(win, "config"):
+            show_reviews = win.config.get("show_reviews", True)
+
         if self._is_csv_mode: 
             for row in range(self.table.model().rowCount()):
-                self.table.setRowHidden(row, False)
+                item = self.csv_model.tagged_items[row] if (hasattr(self, "csv_model") and self.csv_model and hasattr(self.csv_model, "tagged_items") and row < len(self.csv_model.tagged_items)) else None
+                is_rev = getattr(item, "is_review_repre", False) if item else False
+                hidden = not show_reviews and is_rev
+                self.table.setRowHidden(row, hidden)
             return
+
         selected_only = self.btn_selected_only.isChecked()
         tagged_only = self.btn_tagged_only.isChecked()
         assigned_only = self.btn_assigned_only.isChecked()
@@ -281,8 +301,8 @@ class SpreadsheetPanel(QWidget):
         search_term = self._last_search_text
         
         v_stack_enabled = getattr(self.table.model(), "v_stack_enabled", False)
-        
-        if not selected_only and not tagged_only and not assigned_only and not age_enabled and not search_term and not v_stack_enabled:
+
+        if not selected_only and not tagged_only and not assigned_only and not age_enabled and not search_term and not v_stack_enabled and show_reviews:
             for row in range(self.table.model().rowCount()):
                 self.table.setRowHidden(row, False)
             return
@@ -297,6 +317,7 @@ class SpreadsheetPanel(QWidget):
             matches_search = (not search_term or 
                               search_term in item.label.lower() or 
                               search_term in item.filename.lower())
+            is_rev = getattr(item, "is_review_repre", False)
             
             hidden = False
             if selected_only and not is_selected:
@@ -308,6 +329,8 @@ class SpreadsheetPanel(QWidget):
             if age_enabled and not is_young_enough:
                 hidden = True
             if search_term and not matches_search:
+                hidden = True
+            if not show_reviews and is_rev:
                 hidden = True
             
             if v_stack_enabled and not self.table.model().is_item_visible_by_v_stack(item, True):

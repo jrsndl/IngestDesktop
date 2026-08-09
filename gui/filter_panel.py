@@ -727,7 +727,62 @@ class FilterPanel(QWidget):
         self.age_changed.emit(val, units, enabled)
         self._update_proxy_filters()
 
+    def get_tree_expansion_state(self):
+        expanded_paths = set()
+        model = self.proxy.sourceModel()
+        if not model:
+            return expanded_paths
+
+        def _recurse(parent_proxy_idx):
+            row_count = self.proxy.rowCount(parent_proxy_idx)
+            for r in range(row_count):
+                proxy_idx = self.proxy.index(r, 0, parent_proxy_idx)
+                if not proxy_idx.isValid():
+                    continue
+                if self.tree.isExpanded(proxy_idx):
+                    source_idx = self.proxy.mapToSource(proxy_idx)
+                    path = None
+                    if hasattr(model, "filePath"):
+                        path = model.filePath(source_idx)
+                    else:
+                        path = source_idx.data(Qt.UserRole)
+                    if path and isinstance(path, str):
+                        expanded_paths.add(os.path.normpath(path).lower())
+                    _recurse(proxy_idx)
+
+        _recurse(QModelIndex())
+        return expanded_paths
+
+    def restore_tree_expansion_state(self, expanded_paths):
+        if not expanded_paths:
+            return
+        model = self.proxy.sourceModel()
+        if not model:
+            return
+
+        def _recurse(parent_proxy_idx):
+            row_count = self.proxy.rowCount(parent_proxy_idx)
+            for r in range(row_count):
+                proxy_idx = self.proxy.index(r, 0, parent_proxy_idx)
+                if not proxy_idx.isValid():
+                    continue
+                source_idx = self.proxy.mapToSource(proxy_idx)
+                path = None
+                if hasattr(model, "filePath"):
+                    path = model.filePath(source_idx)
+                else:
+                    path = source_idx.data(Qt.UserRole)
+                if path and isinstance(path, str):
+                    norm_path = os.path.normpath(path).lower()
+                    if norm_path in expanded_paths:
+                        self.tree.setExpanded(proxy_idx, True)
+                _recurse(proxy_idx)
+
+        _recurse(QModelIndex())
+
     def _update_proxy_filters(self):
+        expanded_paths = self.get_tree_expansion_state()
+
         search_text = self.search_bar.text() if self.chk_search.isChecked() else ""
         
         # Calculate age limit in minutes
@@ -741,6 +796,8 @@ class FilterPanel(QWidget):
         
         self.proxy.set_ignore_filter(self.ignore_bar.text(), self.chk_ignore.isChecked())
         self.proxy.set_filters(search_text, minutes, enabled)
+
+        self.restore_tree_expansion_state(expanded_paths)
 
     def _on_context_menu(self, pos):
         from PySide6.QtWidgets import QMenu

@@ -45,9 +45,9 @@ class TestVersionUser(unittest.TestCase):
         version_user_idx = headers.index("Version User")
         last_version_idx = headers.index("Last Version")
         
-        self.assertEqual(version_idx, 8)
-        self.assertEqual(version_user_idx, 9)
-        self.assertEqual(last_version_idx, 10)
+        self.assertEqual(version_idx, 9)
+        self.assertEqual(version_user_idx, 10)
+        self.assertEqual(last_version_idx, 11)
 
         # Test data access
         idx_v_user = self.model.index(0, version_user_idx)
@@ -68,9 +68,9 @@ class TestVersionUser(unittest.TestCase):
         self.item1.last_ayon_version = 5
         self.item1.version_collision = True
 
-        idx_ver = self.model.index(0, 8) # Version column
-        idx_ver_user = self.model.index(0, 9) # Version User column
-        idx_last = self.model.index(0, 10) # Last Version column
+        idx_ver = self.model.index(0, 9) # Version column
+        idx_ver_user = self.model.index(0, 10) # Version User column
+        idx_last = self.model.index(0, 11) # Last Version column
 
         # Foreground role should be red (#f44336) for Version cell
         fg_ver = self.model.data(idx_ver, Qt.ForegroundRole)

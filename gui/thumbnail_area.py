@@ -2160,6 +2160,7 @@ class ThumbnailArea(QWidget):
         self._deferred_scene_items_change = False
         
         self.player_mode = "selected" # "stop", "selected", "all"
+        self.show_reviews = True
         self.active_players = {} # mapping: ThumbnailItem -> VideoPlayerOverlay
         
         self.layout = QVBoxLayout(self)
@@ -2392,6 +2393,10 @@ class ThumbnailArea(QWidget):
             if tip:
                 QToolTip.showText(self._last_tooltip_pos, tip, self.view)
 
+    def set_show_reviews(self, show):
+        self.show_reviews = bool(show)
+        self.update_video_overlay_geometry()
+
     def find_media_path(self, item_data):
         """Finds any playable review video or media file for the given item."""
         if not item_data:
@@ -2399,6 +2404,25 @@ class ThumbnailArea(QWidget):
             
         MEDIA_EXTENSIONS = (".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".mpg", ".mpeg", ".wmv", ".ogg", ".ogv", ".mxf")
         
+        # 0. Check attached review_file_path if available
+        rev_fp = getattr(item_data, "review_file_path", None)
+        if rev_fp and os.path.exists(rev_fp) and rev_fp.lower().endswith(MEDIA_EXTENSIONS):
+            return rev_fp
+
+        # 0b. Check grouped items sharing the same group_key
+        g_key = getattr(item_data, "group_key", None)
+        if g_key and hasattr(self, "model") and self.model and hasattr(self.model, "items"):
+            for other in self.model.items:
+                if getattr(other, "group_key", None) == g_key:
+                    o_fp = getattr(other, "file_path", "")
+                    if o_fp and os.path.exists(o_fp) and o_fp.lower().endswith(MEDIA_EXTENSIONS):
+                        item_data.review_file_path = o_fp
+                        return o_fp
+                    o_rev = getattr(other, "review_file_path", None)
+                    if o_rev and os.path.exists(o_rev) and o_rev.lower().endswith(MEDIA_EXTENSIONS):
+                        item_data.review_file_path = o_rev
+                        return o_rev
+
         # 1. Direct path check
         if item_data.file_path.lower().endswith(MEDIA_EXTENSIONS):
             return item_data.file_path
@@ -2423,6 +2447,15 @@ class ThumbnailArea(QWidget):
                 os.path.join(base_dir, "_reviews"),
                 os.path.join(base_dir, "reviews"),
             ]
+            if hasattr(self.model, "source_folder") and self.model.source_folder:
+                src_f = self.model.source_folder
+                possible_dirs.append(src_f)
+                if os.path.exists(src_f):
+                    for sub in os.listdir(src_f):
+                        subp = os.path.join(src_f, sub)
+                        if os.path.isdir(subp):
+                            possible_dirs.append(subp)
+
             possible_basenames = [
                 base_seq_name,
                 f"{base_seq_name}_review",
@@ -2435,6 +2468,7 @@ class ThumbnailArea(QWidget):
                         for ext in MEDIA_EXTENSIONS:
                             test_path = os.path.join(p_dir, f"{p_base}{ext}").replace("\\", "/")
                             if os.path.exists(test_path):
+                                item_data.review_file_path = test_path
                                 return test_path
         except Exception:
             pass
@@ -2733,6 +2767,14 @@ class ThumbnailArea(QWidget):
 
         v_stack_enabled = getattr(self.model, "v_stack_enabled", False)
 
+        show_reviews = getattr(self, "show_reviews", True)
+        if hasattr(self, "window") and callable(self.window):
+            win = self.window()
+            if win and hasattr(win, "show_reviews"):
+                show_reviews = win.show_reviews
+            elif win and hasattr(win, "config"):
+                show_reviews = win.config.get("show_reviews", True)
+
         visible_items = []
         for item_data in self.model.items:
             item = self.item_to_thumb.get(item_data)
@@ -2754,8 +2796,9 @@ class ThumbnailArea(QWidget):
                               search_term in item_data.filename.lower())
             
             is_visible_ver = not v_stack_enabled or self.model.is_item_visible_by_v_stack(item_data, True)
+            is_rev = getattr(item_data, "is_review_repre", False)
             
-            if show_by_tag and in_path and is_young_enough and matches_search and is_visible_ver:
+            if show_by_tag and in_path and is_young_enough and matches_search and is_visible_ver and (show_reviews or not is_rev):
                 item.show()
                 visible_items.append(item)
             else:

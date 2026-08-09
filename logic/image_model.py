@@ -66,6 +66,7 @@ class ImageItem:
         self.version_collision = None
         self.comment = comment
         self.ingest_status = "unknown"
+        self.is_review_repre = False
         self.model = None
 
     @property
@@ -78,11 +79,31 @@ class ImageItem:
                 return v_user
         return self.version
 
+    @property
+    def effective_variant(self):
+        v_user = getattr(self, "variant_user", "") or ""
+        if v_user.strip():
+            return v_user.strip()
+
+        parsed_v = (self.metadata.get("variant_parsed", "") if self.metadata else "") or ""
+        var_template = getattr(self, "variant", "") or ""
+
+        if parsed_v and (not var_template or var_template in ("{variant_parsed}", "{variant}")):
+            return parsed_v
+
+        if parsed_v and "{variant_parsed}" in var_template:
+            return var_template.replace("{variant_parsed}", parsed_v)
+
+        if var_template:
+            return var_template
+
+        return parsed_v
+
 class ImageTableModel(QAbstractTableModel):
     data_changed = Signal()
 
     COLUMNS = [
-        "Enable", "Thumbnail", "Label", "Variant", "Variant User", "Product Name", "Category", "Preset", "Version", 
+        "Enable", "Thumbnail", "Label", "Variant", "Variant User", "Product Name", "Group By", "Category", "Preset", "Version", 
         "Version User", "Last Version", "Age", "Review", "AYON Path", "Key Value Pairs", "Ingest Status"
     ]
 
@@ -118,6 +139,7 @@ class ImageTableModel(QAbstractTableModel):
         self.vfxtranscode = ""
         self.ocio_config = ""
         self.show_thumbs = False
+        self.show_grouped = False
         self.default_fps = 25.0
         self.use_fps_from_metadata = True
 
@@ -173,23 +195,23 @@ class ImageTableModel(QAbstractTableModel):
                 except (ValueError, TypeError):
                     eff_colliding = True
 
-                # Column 8 (Version): marked red if base version collided with last_v
-                if col == 8 and base_colliding:
+                # Column 9 (Version): marked red if base version collided with last_v
+                if col == 9 and base_colliding:
                     return QColor("#f44336")
                     
-                # Column 9 (Version User): marked red if user version override still collides with last_v
-                if col == 9 and eff_colliding and str(getattr(item, "version_user", "")).strip():
+                # Column 10 (Version User): marked red if user version override still collides with last_v
+                if col == 10 and eff_colliding and str(getattr(item, "version_user", "")).strip():
                     return QColor("#f44336")
                     
-                # Column 10 (Last Version): marked orange if there is a version collision
-                if col == 10 and (base_colliding or eff_colliding):
+                # Column 11 (Last Version): marked orange if there is a version collision
+                if col == 11 and (base_colliding or eff_colliding):
                     return QColor("#ff8c00")
                     
             # Dim non-editable text columns
-            if col in [3, 5, 6, 7, 10, 11, 12, 13, 14, 15]:
+            if col in [3, 5, 6, 7, 8, 11, 12, 13, 14, 15, 16]:
                 return QColor("#888888")
             
-            if col == 15:
+            if col == 16:
                 if item.ingest_status == "OK":
                     return QColor("#4caf50")
                 elif item.ingest_status == "Failed":
@@ -199,21 +221,25 @@ class ImageTableModel(QAbstractTableModel):
         if role in [Qt.DisplayRole, Qt.EditRole]:
             if col == 2: return item.label
             if col == 3: # Variant (Effective Variant)
-                if getattr(item, "variant_user", "") and item.variant_user.strip():
-                    return item.variant_user.strip()
-                return self._expand_string(item.variant, item)
+                return item.effective_variant
             if col == 4: # Variant User
                 return getattr(item, "variant_user", "")
             if col == 5: # Product Name
                 return self._expand_string(self.product_name_template, item, use_global_camel=True)
-            if col == 6: return item.category
-            if col == 7: # Preset
+            if col == 6: # Group By
+                key = getattr(item, "group_key", "") or "-"
+                if getattr(item, "group_error", False):
+                    missing_str = ", ".join(getattr(item, "group_missing_repres", []))
+                    return f"{key} [Missing: {missing_str}]"
+                return key
+            if col == 7: return item.category
+            if col == 8: # Preset
                 return item.preset_name if item.preset_name else "-"
-            if col == 8: return str(item.version)
-            if col == 9: return str(getattr(item, "version_user", ""))
+            if col == 9: return str(item.version)
+            if col == 10: return str(getattr(item, "version_user", ""))
             if role == Qt.DisplayRole:
-                if col == 10: return str(item.last_ayon_version) if item.last_ayon_version is not None else "-"
-                if col == 11: 
+                if col == 11: return str(item.last_ayon_version) if item.last_ayon_version is not None else "-"
+                if col == 12: 
                     m = item.age_minutes
                     if self.age_unit == "minutes": return f"{m}m"
                     if self.age_unit == "hours": return f"{m//60}h"
@@ -223,11 +249,11 @@ class ImageTableModel(QAbstractTableModel):
                     if m < 60: return f"{m}m"
                     if m < 1440: return f"{m//60}h"
                     return f"{m//1440}d"
-                if col == 12: return item.review_status
-                if col == 13: return item.ayon_path
-                if col == 14: # Key Value Pairs
+                if col == 13: return item.review_status
+                if col == 14: return item.ayon_path
+                if col == 15: # Key Value Pairs
                     return self._get_all_tokens_string(item)
-                if col == 15: return item.ingest_status
+                if col == 16: return item.ingest_status
             else:
                 # For EditRole in non-editable columns
                 return None
@@ -249,6 +275,22 @@ class ImageTableModel(QAbstractTableModel):
             if col == 0 and (getattr(item, "version_collision", False) or getattr(item, "is_duplicate", False)):
                 return QColor("#ff8c00")
                 
+            if getattr(item, "group_error", False):
+                return QColor("#3e1f1f")
+
+            if getattr(self, "show_grouped", False):
+                g_idx = getattr(item, "group_index", 0)
+                if not hasattr(self, "GROUP_DIM_COLORS"):
+                    self.GROUP_DIM_COLORS = [
+                        QColor("#1b2430"),  # Dim Steel Blue
+                        QColor("#251c30"),  # Dim Soft Purple
+                        QColor("#18292e"),  # Dim Dark Cyan / Teal
+                        QColor("#1c213d"),  # Dim Indigo
+                        QColor("#241e3d"),  # Dim Blue-Violet
+                        QColor("#2b1e2c"),  # Dim Dark Violet
+                    ]
+                return self.GROUP_DIM_COLORS[g_idx % len(self.GROUP_DIM_COLORS)]
+
             if not item.is_tagged:
                 return None # Or a dim color?
 
@@ -275,12 +317,12 @@ class ImageTableModel(QAbstractTableModel):
                 # Emit for the entire row to update Variant, Product Name, and tokens
                 self.dataChanged.emit(self.index(index.row(), 0), self.index(index.row(), self.columnCount()-1))
                 return True
-            elif col == 8: # Version
+            elif col == 9: # Version
                 try:
                     item.version = int(value)
                 except ValueError:
                     return False
-            elif col == 9: # Version User
+            elif col == 10: # Version User
                 item.version_user = str(value).strip()
                 self.dataChanged.emit(self.index(index.row(), 0), self.index(index.row(), self.columnCount()-1))
                 return True
@@ -304,7 +346,7 @@ class ImageTableModel(QAbstractTableModel):
         flags = Qt.ItemIsEnabled | Qt.ItemIsSelectable
         if index.column() == 0:
             flags |= Qt.ItemIsUserCheckable
-        if index.column() in [2, 4, 8, 9]: # Label, Variant User, Version, Version User
+        if index.column() in [2, 4, 9, 10]: # Label, Variant User, Version, Version User
             flags |= Qt.ItemIsEditable
             
         return flags
@@ -470,14 +512,15 @@ class ImageTableModel(QAbstractTableModel):
                 return self._expand_string(item.variant, item)
             if column == 4: return getattr(item, "variant_user", "") or ""
             if column == 5: return self._expand_string(self.product_name_template, item, use_global_camel=True)
-            if column == 6: return item.category
-            if column == 7: return item.preset_name or ""
-            if column == 8: return item.version
-            if column == 9: return getattr(item, "version_user", "") or ""
-            if column == 10: return item.last_ayon_version or 0
-            if column == 11: return item.age_minutes
-            if column == 12: return item.review_status
-            if column == 13: return item.ayon_path
+            if column == 6: return getattr(item, "group_key", "") or ""
+            if column == 7: return item.category
+            if column == 8: return item.preset_name or ""
+            if column == 9: return item.version
+            if column == 10: return getattr(item, "version_user", "") or ""
+            if column == 11: return item.last_ayon_version or 0
+            if column == 12: return item.age_minutes
+            if column == 13: return item.review_status
+            if column == 14: return item.ayon_path
             return ""
 
         reverse = (order == Qt.DescendingOrder)
@@ -548,10 +591,11 @@ class ImageTableModel(QAbstractTableModel):
         fps_int_str = str(int(round(fps_val))) if fps_val is not None else ""
 
         variant_user_val = getattr(item, "variant_user", "")
-        if variant_user_val and variant_user_val.strip():
-            variant_val = variant_user_val.strip()
-        else:
-            variant_val = self._expand_string(item.variant, item) if (text and "{variant}" in text.lower() and text != item.variant) else (item.variant or "")
+        variant_val = item.effective_variant
+
+        prod_name_val = self._expand_string(self.product_name_template, item, use_global_camel=True) if (text and ("{product_name}" in text.lower() or "{prod_name}" in text.lower()) and text != self.product_name_template) else ""
+        if not prod_name_val and (not text or "{product_name}" in text.lower() or "{prod_name}" in text.lower()):
+            prod_name_val = self._expand_string(self.product_name_template, item, use_global_camel=True)
 
         # Replacement mapping
         replacements = {
@@ -562,7 +606,15 @@ class ImageTableModel(QAbstractTableModel):
             "{sequence}": item.metadata.get("sequence", ""),
             "{episode}": item.metadata.get("episode", ""),
             "{parent_folder}": parent_folder,
+            "{ayon_path}": item.ayon_path or "",
+            "{AYON_PATH}": item.ayon_path or "",
+            "{ayon_path_val}": item.ayon_path or "",
             "{ayon_folder_path}": ayon_folder_path,
+            "{product_name}": prod_name_val,
+            "{PRODUCT_NAME}": prod_name_val,
+            "{prod_name}": prod_name_val,
+            "{PROD_NAME}": prod_name_val,
+            "{item.version}": str(item.effective_version),
             "{ayon_task_name}": item.ayon_task_name or "",
             "{ayon_task_type}": item.ayon_task_type or "",
             "{ayon_task_assignee}": item.ayon_task_assignee or "",
@@ -710,6 +762,10 @@ class ImageTableModel(QAbstractTableModel):
 
     def _get_prefs_review_path(self, item):
         """Calculate the review path based on preset preferences."""
+        rev_fp = getattr(item, "review_file_path", None)
+        if rev_fp and os.path.exists(rev_fp):
+            return rev_fp
+
         source_file = item.file_path.replace("\\", "/")
         base_dir = os.path.dirname(source_file)
         filename = os.path.basename(source_file)

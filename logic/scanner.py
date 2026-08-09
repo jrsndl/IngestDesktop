@@ -116,6 +116,8 @@ class ImageScanner(QThread):
         if self.ignore_enabled and self.ignore_text:
             ignore_patterns = [p.strip().lower() for p in self.ignore_text.split() if p.strip()]
 
+        self._file_lookup = {os.path.basename(f).lower(): f for f in all_files}
+
         for f in all_files:
             if self._is_canceled:
                 self.canceled.emit()
@@ -146,31 +148,6 @@ class ImageScanner(QThread):
                (self.thumb_suffix and self.thumb_format and \
                 self.thumb_suffix.lower() in filename_lower and \
                 filename_lower.endswith(self.thumb_format.lower())):
-                continue
-
-            # Completely ignore generated reviews
-            # 1. Check common/preset folder names
-            f_norm = f.replace("\\", "/")
-            parts = f_norm.lower().split("/")
-            ignore_folders = {"_reviews"}
-            # Collect custom review folders from presets
-            for p_type, p_list in self.presets.items():
-                for p in p_list:
-                    r_path = p.get("Review Path")
-                    if r_path: ignore_folders.add(r_path.lower())
-            
-            if any(p in ignore_folders for p in parts):
-                continue
-                
-            # 2. Check common/preset suffixes
-            ignore_suffixes = {"_review"}
-            for p_type, p_list in self.presets.items():
-                for p in p_list:
-                    r_suf = p.get("Review Suffix")
-                    if r_suf: ignore_suffixes.add(r_suf.lower())
-            
-            base_name_lower = os.path.splitext(os.path.basename(f_norm))[0]
-            if any(base_name_lower.endswith(s) for s in ignore_suffixes):
                 continue
 
             ext = os.path.splitext(f)[1].lower()
@@ -282,7 +259,12 @@ class ImageScanner(QThread):
             
             # Initial Review Status
             if matched_p and matched_p.get("Convert Review", True):
-                item.review_status = "waiting"
+                rev_p = self._get_expected_review_path(item, matched_p)
+                if rev_p and os.path.exists(rev_p) and os.path.getsize(rev_p) > 0:
+                    item.review_file_path = rev_p
+                    item.review_status = "done"
+                else:
+                    item.review_status = "waiting"
             else:
                 item.review_status = "do not convert"
             
@@ -326,7 +308,12 @@ class ImageScanner(QThread):
             
             # Initial Review Status
             if matched_p and matched_p.get("Convert Review", True):
-                item.review_status = "waiting"
+                rev_p = self._get_expected_review_path(item, matched_p)
+                if rev_p and os.path.exists(rev_p) and os.path.getsize(rev_p) > 0:
+                    item.review_file_path = rev_p
+                    item.review_status = "done"
+                else:
+                    item.review_status = "waiting"
             else:
                 item.review_status = "do not convert"
             self._fill_metadata(item, f)
@@ -366,13 +353,33 @@ class ImageScanner(QThread):
             
             # Initial Review Status
             if matched_p and matched_p.get("Convert Review", True):
-                item.review_status = "waiting"
+                rev_p = self._get_expected_review_path(item, matched_p)
+                if rev_p and os.path.exists(rev_p) and os.path.getsize(rev_p) > 0:
+                    item.review_file_path = rev_p
+                    item.review_status = "done"
+                else:
+                    item.review_status = "waiting"
             else:
                 item.review_status = "do not convert"
             self._fill_metadata(item, f)
             final_items.append(item)
             current += 1
             self.progress.emit(current, total_units)
+
+        # Perform grouping-based review pairing for all scanned items
+        try:
+            from logic.grouping_engine import compute_group_key, pair_group_reviews
+            group_by_template = getattr(self, "group_by", None) or "{folder_name}{task_name}{variant}{version}"
+            groups = {}
+            for item in final_items:
+                key = compute_group_key(item, group_by_template)
+                item.group_key = key
+                groups.setdefault(key, []).append(item)
+
+            for key, g_items in groups.items():
+                pair_group_reviews(g_items)
+        except Exception as e:
+            print(f"[Warning] Group review pairing during scan failed: {e}")
 
         elapsed = time.perf_counter() - start_time
         print(f"[Timer] Scan files took {elapsed:.4f} seconds.")
@@ -505,6 +512,50 @@ class ImageScanner(QThread):
         target_filename = f"{name_no_ext}{self.thumb_suffix}{self.thumb_format}"
         
         return os.path.join(target_dir, target_filename).replace("\\", "/")
+
+    def _get_expected_review_path(self, item, preset_data=None):
+        """Calculate the expected generated review video path based on preset."""
+        p_data = preset_data or item.preset_data or {}
+        r_loc = p_data.get("Review Location", "Relative to Source Folder")
+        r_path = p_data.get("Review Path", "_reviews")
+        r_suf = p_data.get("Review Suffix", "_review")
+        r_fmt = p_data.get("Review Format", ".mp4")
+
+        source_file = item.file_path.replace("\\", "/")
+        base_dir = os.path.dirname(source_file)
+        filename = os.path.basename(source_file)
+        name_no_ext, _ = os.path.splitext(filename)
+        if item.is_sequence:
+            name_no_ext = strip_sequence_counter(name_no_ext)
+
+        target_dir = base_dir
+        if r_loc == "Relative to Source Folder":
+            if self.directory:
+                target_dir = os.path.join(self.directory, r_path).replace("\\", "/")
+        elif r_loc == "Custom":
+            target_dir = r_path.replace("\\", "/")
+
+        target_filename = f"{name_no_ext}{r_suf}{r_fmt}"
+        expected = os.path.join(target_dir, target_filename).replace("\\", "/")
+        if os.path.exists(expected) and os.path.getsize(expected) > 0:
+            return expected
+
+        # Fallback search using scanned tree files
+        if hasattr(self, "_file_lookup") and self._file_lookup:
+            candidates = [
+                f"{name_no_ext}{r_suf}{r_fmt}".lower(),
+                f"{name_no_ext}_review.mp4".lower(),
+                f"{name_no_ext}_review.mov".lower(),
+                f"{name_no_ext}.mp4".lower(),
+                f"{name_no_ext}.mov".lower(),
+            ]
+            for cand in candidates:
+                if cand in self._file_lookup:
+                    cand_path = self._file_lookup[cand]
+                    if os.path.exists(cand_path) and os.path.getsize(cand_path) > 0:
+                        return cand_path.replace("\\", "/")
+
+        return expected
 
     def _fill_metadata(self, item, file_path):
         """Helper to fill common metadata for an item."""

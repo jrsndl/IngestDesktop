@@ -1,18 +1,31 @@
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, 
-                             QTableView, QHeaderView, QLabel, QFrame)
-from PySide6.QtCore import Qt, QSortFilterProxyModel, QModelIndex, Signal
+                             QTableView, QHeaderView, QLabel, QFrame, QCheckBox)
+from PySide6.QtCore import Qt, QSortFilterProxyModel, QModelIndex, Signal, QItemSelection, QItemSelectionRange, QItemSelectionModel
 from PySide6.QtGui import QColor
 
 class QueueProxyModel(QSortFilterProxyModel):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.column_map = [1, 11, 2, 12] # Thumbnail, Review (Status), Label, AYON Path (File)
-        
+        self.selected_only = False
+        self.selected_items = set()
+
+    def set_selected_only(self, selected_only, selected_items=None):
+        self.selected_only = selected_only
+        if selected_items is not None:
+            self.selected_items = set(selected_items)
+        self.invalidateFilter()
+
     def filterAcceptsRow(self, source_row, source_parent):
         source_model = self.sourceModel()
         index = source_model.index(source_row, 11, source_parent) # Review column (index 11)
         status = source_model.data(index, Qt.DisplayRole)
-        return status != "do not convert"
+        if status == "do not convert":
+            return False
+        if self.selected_only:
+            item = source_model.items[source_row]
+            return item in self.selected_items
+        return True
 
     def columnCount(self, parent=QModelIndex()):
         return 4
@@ -58,6 +71,7 @@ class ConversionQueueDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Review Conversion Queue")
         self.resize(1000, 500)
+        self._selected_items = set()
         
         self.layout = QVBoxLayout(self)
         
@@ -103,6 +117,10 @@ class ConversionQueueDialog(QDialog):
         self.btn_check_existing.setMinimumHeight(40)
         self.btn_check_existing.clicked.connect(self.check_existing_reviews)
         
+        self.chk_selected_only = QCheckBox("Selected Only")
+        self.chk_selected_only.setChecked(False)
+        self.chk_selected_only.toggled.connect(self._on_selected_only_toggled)
+
         self.controls.addWidget(self.btn_convert_reviews)
         self.controls.addWidget(self.btn_force_convert_reviews)
         self.controls.addSpacing(10)
@@ -111,6 +129,8 @@ class ConversionQueueDialog(QDialog):
         self.controls.addSpacing(10)
         self.controls.addWidget(self.btn_check_existing)
         self.controls.addStretch()
+        self.controls.addWidget(self.chk_selected_only)
+        self.controls.addSpacing(10)
         self.controls.addWidget(self.btn_pause)
         self.controls.addWidget(self.btn_restart)
         self.controls.addWidget(self.btn_cancel)
@@ -122,6 +142,39 @@ class ConversionQueueDialog(QDialog):
         self.lbl_status = QLabel("Status: Waiting")
         self.layout.addWidget(self.lbl_status)
  
+    def set_selected_items(self, selected_items):
+        self._selected_items = set(selected_items) if selected_items else set()
+        self.proxy.set_selected_only(self.chk_selected_only.isChecked(), self._selected_items)
+        self.update_table_selection()
+
+    def _on_selected_only_toggled(self, checked):
+        self.proxy.set_selected_only(checked, self._selected_items)
+        self.update_table_selection()
+
+    def update_table_selection(self):
+        if not self._selected_items:
+            return
+        sel_model = self.table.selectionModel()
+        if not sel_model:
+            return
+        sel_model.clearSelection()
+        source_model = self.proxy.sourceModel()
+        if not source_model:
+            return
+        
+        selection = QItemSelection()
+        for proxy_row in range(self.proxy.rowCount()):
+            proxy_idx = self.proxy.index(proxy_row, 0)
+            source_idx = self.proxy.mapToSource(proxy_idx)
+            source_row = source_idx.row()
+            if 0 <= source_row < len(source_model.items):
+                item = source_model.items[source_row]
+                if item in self._selected_items:
+                    r_start = self.proxy.index(proxy_row, 0)
+                    r_end = self.proxy.index(proxy_row, self.proxy.columnCount() - 1)
+                    selection.append(QItemSelectionRange(r_start, r_end))
+        sel_model.select(selection, QItemSelectionModel.Select)
+
     def set_queue_status(self, text):
         self.lbl_status.setText(f"Status: {text}")
         

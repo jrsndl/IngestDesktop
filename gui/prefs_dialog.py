@@ -2,9 +2,10 @@ import os
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, 
                              QPushButton, QFormLayout, QSpinBox, QComboBox, QFileDialog, 
                              QTabWidget, QScrollArea, QWidget, QCheckBox, QPlainTextEdit,
-                             QRadioButton, QButtonGroup, QDoubleSpinBox)
+                             QRadioButton, QButtonGroup, QDoubleSpinBox, QFrame)
 from PySide6.QtCore import Qt, Signal
 from gui.preset_widget import PresetWidget
+from gui.group_widget import GroupWidget
 
 class PreferencesDialog(QDialog):
     applied = Signal(object)
@@ -28,7 +29,8 @@ class PreferencesDialog(QDialog):
         
         # AYON Settings
         self.server_url = QLineEdit(self.secrets.get("ayon_server_url", ""))
-        
+        self.ayon_project_name = QLineEdit(self.config.get("ayon_project_name", "IngestTest"))
+        self.group_by = QLineEdit(self.config.get("group_by", "{folder_name}{task_name}{variant}{version}"))
         # Scanner Settings
         self.product_name = QLineEdit(self.config.get("product_name", "{label}"))
         self.product_name_camel = QCheckBox("camelCase")
@@ -206,14 +208,45 @@ class PreferencesDialog(QDialog):
         self.auto_assign_fallback_task = QCheckBox("Assign first task if folder match is found, but task match is not")
         self.auto_assign_fallback_task.setChecked(self.config.get("auto_assign_fallback_task", False))
 
+        # Parse mode options
+        parse_options = ["File Name Only", "Path Only", "Full Path", "Folder +1", "Folder +2", "Folder +3", "Folder -1", "Folder -2", "Folder -3"]
+
+        self.version_parse = QComboBox()
+        self.version_parse.addItems(parse_options)
+        self.version_parse.setCurrentText(self.config.get("version_parse", "File Name Only"))
+
+        self.folder_parse = QComboBox()
+        self.folder_parse.addItems(parse_options)
+        self.folder_parse.setCurrentText(self.config.get("folder_parse", "File Name Only"))
+
+        self.task_parse = QComboBox()
+        self.task_parse.addItems(parse_options)
+        self.task_parse.setCurrentText(self.config.get("task_parse", "File Name Only"))
+
+        self.variant_parse = QComboBox()
+        self.variant_parse.addItems(parse_options)
+        self.variant_parse.setCurrentText(self.config.get("variant_parse", "File Name Only"))
+
+        self.sequence_parse = QComboBox()
+        self.sequence_parse.addItems(parse_options)
+        self.sequence_parse.setCurrentText(self.config.get("sequence_parse", "File Name Only"))
+
+        self.episode_parse = QComboBox()
+        self.episode_parse.addItems(parse_options)
+        self.episode_parse.setCurrentText(self.config.get("episode_parse", "File Name Only"))
+
         # Regex fields
         self.version_regex = QLineEdit(self.config.get("version_regex", r"([._]v|v)(\d+)"))
+        self.version_repl = QLineEdit(self.config.get("version_repl", ""))
+
         self.folder_regex = QLineEdit(self.config.get("folder_regex", r"^([^_]*_[^_]*)_.*$"))
+        self.folder_repl = QLineEdit(self.config.get("folder_repl", ""))
         self.folder_capitalization = QComboBox()
         self.folder_capitalization.addItems(["Keep Original", "All Lowercase", "All Uppercase", "Pascal Case", "Snake Case"])
         self.folder_capitalization.setCurrentText(self.config.get("folder_capitalization", "Keep Original"))
 
         self.task_regex = QLineEdit(self.config.get("task_regex", r"^[^_]*_[^_]*_([^_]*).*$"))
+        self.task_repl = QLineEdit(self.config.get("task_repl", ""))
         self.task_capitalization = QComboBox()
         self.task_capitalization.addItems(["Keep Original", "All Lowercase", "All Uppercase", "Pascal Case", "Snake Case"])
         self.task_capitalization.setCurrentText(self.config.get("task_capitalization", "Keep Original"))
@@ -225,33 +258,59 @@ class PreferencesDialog(QDialog):
         self.fixed_task_name_enabled.toggled.connect(self.fixed_task_name.setEnabled)
         
         self.variant_regex = QLineEdit(self.config.get("variant_regex", r"^[^_]*_[^_]*_[^_]*_([^_]*).*$"))
+        self.variant_repl = QLineEdit(self.config.get("variant_repl", ""))
         self.variant_capitalization = QComboBox()
         self.variant_capitalization.addItems(["Keep Original", "All Lowercase", "All Uppercase", "Pascal Case", "Snake Case"])
         self.variant_capitalization.setCurrentText(self.config.get("variant_capitalization", "Keep Original"))
 
         self.sequence_regex = QLineEdit(self.config.get("sequence_regex", r"^[^_]*_([^_]*)_[^_]*.*$"))
+        self.sequence_repl = QLineEdit(self.config.get("sequence_repl", ""))
         self.sequence_capitalization = QComboBox()
         self.sequence_capitalization.addItems(["Keep Original", "All Lowercase", "All Uppercase", "Pascal Case", "Snake Case"])
         self.sequence_capitalization.setCurrentText(self.config.get("sequence_capitalization", "Keep Original"))
 
         self.episode_regex = QLineEdit(self.config.get("episode_regex", r"^[^_]*_([^_]*)_[^_]*.*$"))
+        self.episode_repl = QLineEdit(self.config.get("episode_repl", ""))
         self.episode_capitalization = QComboBox()
         self.episode_capitalization.addItems(["Keep Original", "All Lowercase", "All Uppercase", "Pascal Case", "Snake Case"])
         self.episode_capitalization.setCurrentText(self.config.get("episode_capitalization", "Keep Original"))
 
+        def _create_line():
+            line = QFrame()
+            line.setFrameShape(QFrame.HLine)
+            line.setFrameShadow(QFrame.Sunken)
+            return line
+
+        self.auto_assign_form.addRow("Version Parse:", self.version_parse)
         self.auto_assign_form.addRow("Version Regex:", self.version_regex)
+        self.auto_assign_form.addRow("Version Repl:", self.version_repl)
+        self.auto_assign_form.addRow(_create_line())
+        self.auto_assign_form.addRow("Folder Parse:", self.folder_parse)
         self.auto_assign_form.addRow("Folder Regex {folder_name}:", self.folder_regex)
+        self.auto_assign_form.addRow("Folder Repl:", self.folder_repl)
         self.auto_assign_form.addRow("Folder Capitalization:", self.folder_capitalization)
+        self.auto_assign_form.addRow(_create_line())
+        self.auto_assign_form.addRow("Task Parse:", self.task_parse)
         self.auto_assign_form.addRow("Task Regex {task_name}:", self.task_regex)
+        self.auto_assign_form.addRow("Task Repl:", self.task_repl)
         self.auto_assign_form.addRow("Task Capitalization:", self.task_capitalization)
         self.auto_assign_form.addRow(self.fixed_task_name_enabled, self.fixed_task_name)
+        self.auto_assign_form.addRow(_create_line())
+        self.auto_assign_form.addRow("Variant Parse:", self.variant_parse)
         self.auto_assign_form.addRow("Variant Regex {variant_parsed}:", self.variant_regex)
+        self.auto_assign_form.addRow("Variant Repl:", self.variant_repl)
         self.auto_assign_form.addRow("Variant Capitalization:", self.variant_capitalization)
+        self.auto_assign_form.addRow(_create_line())
+        self.auto_assign_form.addRow("Sequence Parse:", self.sequence_parse)
         self.auto_assign_form.addRow("Sequence Regex {sequence}:", self.sequence_regex)
+        self.auto_assign_form.addRow("Sequence Repl:", self.sequence_repl)
         self.auto_assign_form.addRow("Sequence Capitalization:", self.sequence_capitalization)
+        self.auto_assign_form.addRow(_create_line())
+        self.auto_assign_form.addRow("Episode Parse:", self.episode_parse)
         self.auto_assign_form.addRow("Episode Regex {episode}:", self.episode_regex)
+        self.auto_assign_form.addRow("Episode Repl:", self.episode_repl)
         self.auto_assign_form.addRow("Episode Capitalization:", self.episode_capitalization)
-        
+        self.auto_assign_form.addRow(_create_line())
         self.auto_assign_form.addRow(self.auto_assign_multi_match)
         self.auto_assign_form.addRow(self.auto_assign_fallback_task)
 
@@ -618,6 +677,53 @@ class PreferencesDialog(QDialog):
                 for data in existing:
                     self.add_preset(p_type, data)
 
+        # Grouping Tab
+        self.grouping_tab = QWidget()
+        self.grouping_layout = QVBoxLayout(self.grouping_tab)
+        self.grouping_layout.setSpacing(5)
+        self.grouping_layout.setContentsMargins(10, 10, 10, 10)
+
+        self.grouping_top_form = QFormLayout()
+        self.grouping_top_form.addRow("Group by:", self.group_by)
+        self.grouping_layout.addLayout(self.grouping_top_form)
+
+        self.group_do_not_export_missing_repres = QCheckBox("Do not export items in group with missing Representations")
+        self.group_do_not_export_missing_repres.setChecked(self.config.get("group_do_not_export_missing_repres", True))
+        self.grouping_layout.addWidget(self.group_do_not_export_missing_repres)
+
+        self.group_scroll = QScrollArea()
+        self.group_scroll.setWidgetResizable(True)
+        self.group_scroll_content = QWidget()
+        self.group_scroll_layout = QVBoxLayout(self.group_scroll_content)
+        self.group_scroll_layout.setAlignment(Qt.AlignTop)
+        self.group_scroll.setWidget(self.group_scroll_content)
+
+        btn_group_add = QPushButton("Add Group")
+        btn_group_add.clicked.connect(lambda: self.add_group_definition())
+
+        btn_group_delete = QPushButton("Delete Selected Group")
+        btn_group_delete.clicked.connect(self.delete_selected_group)
+
+        btn_group_row = QHBoxLayout()
+        btn_group_row.addWidget(btn_group_add)
+        btn_group_row.addWidget(btn_group_delete)
+
+        self.grouping_layout.addWidget(self.group_scroll, 1)
+        self.grouping_layout.addLayout(btn_group_row)
+
+        self.tabs.addTab(self.grouping_tab, "Grouping")
+
+        self.group_widgets = []
+        self.selected_group_widget = None
+
+        # Load existing group definitions
+        existing_groups = self.config.get("group_definitions", [])
+        if not existing_groups:
+            self.add_group_definition()
+        else:
+            for g_data in existing_groups:
+                self.add_group_definition(g_data)
+
         # Secrets Tab
         self.secrets_tab = QWidget()
         self.secrets_layout = QVBoxLayout(self.secrets_tab)
@@ -778,6 +884,54 @@ class PreferencesDialog(QDialog):
         # but kept for compatibility if needed.
         pass
 
+    def add_group_definition(self, data=None):
+        gw = GroupWidget(data)
+        gw.clicked.connect(self.select_group_definition)
+        gw.move_up.connect(self.move_group_up)
+        gw.move_down.connect(self.move_group_down)
+        self.group_scroll_layout.addWidget(gw)
+        self.group_widgets.append(gw)
+        self.select_group_definition(gw)
+
+    def select_group_definition(self, gw):
+        if self.selected_group_widget:
+            self.selected_group_widget.set_selected(False)
+        gw.set_selected(True)
+        self.selected_group_widget = gw
+
+    def move_group_up(self, gw):
+        idx = self.group_widgets.index(gw)
+        if idx > 0:
+            self.group_widgets.pop(idx)
+            self.group_widgets.insert(idx - 1, gw)
+            self._rebuild_group_layout()
+
+    def move_group_down(self, gw):
+        idx = self.group_widgets.index(gw)
+        if idx < len(self.group_widgets) - 1:
+            self.group_widgets.pop(idx)
+            self.group_widgets.insert(idx + 1, gw)
+            self._rebuild_group_layout()
+
+    def _rebuild_group_layout(self):
+        for i in reversed(range(self.group_scroll_layout.count())):
+            item = self.group_scroll_layout.itemAt(i)
+            if item.widget():
+                self.group_scroll_layout.removeWidget(item.widget())
+        for w in self.group_widgets:
+            self.group_scroll_layout.addWidget(w)
+
+    def delete_selected_group(self):
+        if not self.selected_group_widget:
+            return
+        if self.selected_group_widget in self.group_widgets:
+            self.group_widgets.remove(self.selected_group_widget)
+            self.selected_group_widget.setParent(None)
+            self.selected_group_widget.deleteLater()
+            self.selected_group_widget = None
+            if self.group_widgets:
+                self.select_group_definition(self.group_widgets[0])
+
     def _on_browse_console(self):
         self._on_browse_file(self.traypublisher_path, "Select AYON Console Executable", "Executable Files (*.exe);;All Files (*)")
 
@@ -861,7 +1015,9 @@ class PreferencesDialog(QDialog):
                 stills_thumb_same = stills_thumb_cb.isChecked()
 
         new_config = {
+            "version_parse": self.version_parse.currentText(),
             "version_regex": self.version_regex.text(),
+            "version_repl": self.version_repl.text(),
             "disable_inline_video": self.disable_inline_video.isChecked(),
             "default_columns": self.default_cols.value(),
             "default_text_size": self.default_text_size.value(),
@@ -911,15 +1067,25 @@ class PreferencesDialog(QDialog):
             "auto_assign_fallback_task": self.auto_assign_fallback_task.isChecked(),
             "fixed_task_name_enabled": self.fixed_task_name_enabled.isChecked(),
             "fixed_task_name": self.fixed_task_name.text(),
+            "folder_parse": self.folder_parse.currentText(),
             "folder_regex": self.folder_regex.text(),
+            "folder_repl": self.folder_repl.text(),
             "folder_capitalization": self.folder_capitalization.currentText(),
+            "task_parse": self.task_parse.currentText(),
             "task_regex": self.task_regex.text(),
+            "task_repl": self.task_repl.text(),
             "task_capitalization": self.task_capitalization.currentText(),
+            "variant_parse": self.variant_parse.currentText(),
             "variant_regex": self.variant_regex.text(),
+            "variant_repl": self.variant_repl.text(),
             "variant_capitalization": self.variant_capitalization.currentText(),
+            "sequence_parse": self.sequence_parse.currentText(),
             "sequence_regex": self.sequence_regex.text(),
+            "sequence_repl": self.sequence_repl.text(),
             "sequence_capitalization": self.sequence_capitalization.currentText(),
+            "episode_parse": self.episode_parse.currentText(),
             "episode_regex": self.episode_regex.text(),
+            "episode_repl": self.episode_repl.text(),
             "episode_capitalization": self.episode_capitalization.currentText(),
             "ayon_project_name": self.ayon_project_name.text(),
             "duplicate_identity": self.duplicate_identity.text(),
@@ -937,6 +1103,9 @@ class PreferencesDialog(QDialog):
             "set_neighbour_status_after_check": self.set_neighbour_status_after_check.isChecked(),
             "neighbour_task_name": self.neighbour_task_name.text(),
             "neighbour_task_status": self.neighbour_task_status.text(),
+            "group_by": self.group_by.text(),
+            "group_do_not_export_missing_repres": self.group_do_not_export_missing_repres.isChecked(),
+            "group_definitions": [w.get_data() for w in self.group_widgets],
             "clip_temp_root": self.clip_temp_root.text(),
             "clip_folder_template": self.clip_folder_template.text(),
             "clip_file_prefix": self.clip_file_prefix.text(),

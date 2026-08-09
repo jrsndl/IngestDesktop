@@ -38,16 +38,10 @@ tttseq.json
 
 tttseq.yaml
 
-_ayon_thumbs_cache_test/BCV_009_JA_Hiphi/0858f70e561411f1aea8a6544cd29016.jpg
+.idea/
+_ayon_thumbs_cache/
+_ayon_thumbs_cache_test/
+_drawcache/
 
-_ayon_thumbs_cache_test/BCV_009_JA_Hiphi/19c91036370811f0b672f2de25e2de4c.jpg
-
-_ayon_thumbs_cache_test/BCV_009_JA_Hiphi/1aab22a0370811f0b672f2de25e2de4c.jpg
-
-_ayon_thumbs_cache_test/BCV_009_JA_Hiphi/1b0d3468370811f0b672f2de25e2de4c.jpg
-
-_ayon_thumbs_cache_test/BCV_009_JA_Hiphi/2007e544370811f0b672f2de25e2de4c.jpg
-
-_ayon_thumbs_cache_test/BCV_009_JA_Hiphi/20a9af32370811f0b672f2de25e2de4c.jpg
-
-_ayon_thumbs_cache_test/BCV_009_JA_Hiphi/6e968c4e561811f1aea8a6544cd29016.jpg
+tttest*.json
+tttest*.yaml
