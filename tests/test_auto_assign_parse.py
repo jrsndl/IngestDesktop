@@ -106,6 +106,52 @@ class TestAutoAssignParseModes(unittest.TestCase):
         self.window.model.items = [item]
         self.assertEqual(self.window.model.data(self.window.model.index(0, 3)), "BAF")
 
+    def test_apply_preferences_updates_variant_parsed_and_model_data(self):
+        item = ImageItem(file_path="c:/my/root/eqs_sh002_v001.exr", label="eqs_sh002_v001", category="Sequence")
+        self.window.model.items = [item]
+        
+        # Setup config with a preset for sequences
+        self.window.config["presets"] = {
+            "sequences": [{
+                "Name": "EXRs",
+                "Filter By": "Extension",
+                "Filter": "exr",
+                "Product Type": "render",
+                "Variant": "{variant_parsed}",
+                "Active": True
+            }]
+        }
+        self.window.config["variant_parse"] = "File Name Only"
+        self.window.config["variant_regex"] = r"([^_]+)"
+        self.window.config["variant_repl"] = "OLD_VARIANT"
+        self.window.config["product_name"] = "{variant}"
+        
+        import json
+        old_detect = self.window.config.get("detect_sequences", True)
+        old_thumb = self.window.config.get("seq_thumb_frame", "Middle")
+        old_regex = self.window.config.get("version_regex", r"([._]v|v)(\d+)")
+        old_exts = json.dumps(self.window.config.get("extensions", {}), sort_keys=True)
+
+        # Apply initial settings
+        self.window._apply_preferences(dict(self.window.config), {}, old_detect, old_thumb, old_regex, old_exts, show_message=False, save=False)
+        self.assertEqual(item.metadata.get("variant_parsed"), "OLD_VARIANT")
+        self.assertEqual(item.effective_variant, "OLD_VARIANT")
+        self.assertEqual(self.window.model.data(self.window.model.index(0, 3)), "OLD_VARIANT")
+        self.assertEqual(self.window.model.data(self.window.model.index(0, 5)), "OLD_VARIANT")
+
+        # Now change preferences (new variant regex / repl / product_name template) and apply
+        new_config = dict(self.window.config)
+        new_config["variant_repl"] = "NEW_VARIANT"
+        new_config["product_name"] = "PROD_{variant}"
+
+        self.window._apply_preferences(new_config, {}, old_detect, old_thumb, old_regex, old_exts, show_message=False, save=False)
+
+        # Verify that variant_parsed, variant (Col 3), and Product Name (Col 5) updated immediately
+        self.assertEqual(item.metadata.get("variant_parsed"), "NEW_VARIANT")
+        self.assertEqual(item.effective_variant, "NEW_VARIANT")
+        self.assertEqual(self.window.model.data(self.window.model.index(0, 3)), "NEW_VARIANT")
+        self.assertEqual(self.window.model.data(self.window.model.index(0, 5)), "PROD_NEW_VARIANT")
+
 
 if __name__ == "__main__":
     unittest.main()

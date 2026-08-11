@@ -394,6 +394,7 @@ class MainWindow(QMainWindow):
         self.top_bar.reveal_requested.connect(self.reveal_source_folder)
         self.top_bar.show_reviews_toggled.connect(self._on_show_reviews_toggled)
         self.top_bar.load_preset_requested.connect(self._on_preset_changed)
+        self.top_bar.save_preset_requested.connect(self.perform_save_preset)
         self.main_layout.addWidget(self.top_bar, 0)
         self.main_layout.addSpacing(5)
 
@@ -440,6 +441,7 @@ class MainWindow(QMainWindow):
         self.spreadsheet.version_collision_check_clicked.connect(lambda: self.perform_version_collision_check(fix=True))
         self.spreadsheet.label_action_requested.connect(self._on_label_action)
         self.spreadsheet.add_comment_requested.connect(self._on_add_comment)
+        self.spreadsheet.replace_value_requested.connect(self._on_replace_value)
         self.spreadsheet.check_duplicates_clicked.connect(self.perform_duplicate_check)
         self.spreadsheet.show_grouped_toggled.connect(self._on_show_grouped_toggled)
         self.v_splitter.addWidget(self.spreadsheet)
@@ -594,6 +596,10 @@ class MainWindow(QMainWindow):
         act_load_preset.triggered.connect(self.perform_load_preset)
         file_menu.addAction(act_load_preset)
         
+        act_save_preset_direct = QAction("Save Preset", self)
+        act_save_preset_direct.triggered.connect(self.perform_save_preset)
+        file_menu.addAction(act_save_preset_direct)
+
         act_save_preset = QAction("Save Preset As...", self)
         act_save_preset.triggered.connect(self.save_preset_as)
         file_menu.addAction(act_save_preset)
@@ -1699,6 +1705,7 @@ class MainWindow(QMainWindow):
 
         # Re-evaluate every item in the model
         for item in self.model.items:
+            self._parse_item_tags(item)
             cat = item.category
             p_type = "other"
             if "sequence" in cat.lower(): p_type = "sequences"
@@ -1950,13 +1957,7 @@ class MainWindow(QMainWindow):
             version_regex
         )
         
-        if save:
-            self.save_config()
-            self.save_secrets()
-        self._update_model_presets()
-        self.update_preset_dropdown()
-        
-        # Update model properties that affect string expansion
+        # Update model properties that affect string expansion before updating model presets
         self.model.product_name_template = self.config.get("product_name", "{label}")
         self.model.product_name_camel = self.config.get("product_name_camel", True)
         self.model.stills_thumb_same = self.config.get("stills_thumb_same", True)
@@ -1978,7 +1979,21 @@ class MainWindow(QMainWindow):
         ocio_config_path = expand_env_vars(self.secrets.get("ocio_config", ""))
         self.model.ocio_config = os.path.abspath(ocio_config_path).replace("\\", "/") if ocio_config_path else ""
         
+        if save:
+            self.save_config()
+            self.save_secrets()
+            
+        self._update_model_presets()
+        self.model.rebuild_version_stacks()
+        self.update_preset_dropdown()
+        
         self.csv_preview_model.refresh_config(self.config)
+
+        if hasattr(self, "spreadsheet") and self.spreadsheet:
+            self.spreadsheet.update_filtering()
+            if hasattr(self.spreadsheet, "table") and self.spreadsheet.table and self.spreadsheet.table.viewport():
+                self.spreadsheet.table.viewport().update()
+                self.spreadsheet.table.update()
         
         # Check if scan-related settings changed
         new_exts = json.dumps(self.config.get("extensions", {}), sort_keys=True)
@@ -2340,15 +2355,20 @@ class MainWindow(QMainWindow):
                 r_str = g_def.get("review_repre", "").strip()
                 if r_str:
                     rev_repres = {r.lower().lstrip(".") for r in r_str.split()}
+            if not rev_repres:
+                global_revs = self.config.get("review_representations", ["mp4", "mov", "webm", "mxf"])
+                rev_repres = {r.strip().lower().lstrip(".") for r in global_revs if r.strip()}
 
+            MEDIA_EXTS = (".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".mpg", ".mpeg", ".wmv", ".ogg", ".ogv", ".mxf")
             for item in g_items:
                 item.group_index = idx
                 item.group_error = is_err
                 item.group_missing_repres = missing
                 item_repre = (getattr(item, "representation", "") or "").lower().lstrip(".")
-                if rev_repres and item_repre in rev_repres:
-                    item.is_review_repre = True
-                elif item.metadata.get("is_paired_review", False):
+                item_cat = getattr(item, "category", "") or ""
+                item_fp = (getattr(item, "file_path", "") or "").lower()
+
+                if item_repre in rev_repres or item_cat == "Video" or item_fp.endswith(MEDIA_EXTS) or item.metadata.get("is_paired_review", False):
                     item.is_review_repre = True
                 else:
                     item.is_review_repre = False
@@ -3573,40 +3593,42 @@ class MainWindow(QMainWindow):
     def select_items(self, target_items):
         """Select a list of ImageItems across thumbnail view, spreadsheet table, and filter panel."""
         if not target_items:
+            if hasattr(self, "thumb_area") and self.thumb_area.scene:
+                self.thumb_area.scene.clearSelection()
+            if hasattr(self, "spreadsheet") and self.spreadsheet.table and self.spreadsheet.table.selectionModel():
+                self.spreadsheet.table.selectionModel().clearSelection()
+            if hasattr(self, "filter_panel") and self.filter_panel.tree and self.filter_panel.tree.selectionModel():
+                self.filter_panel.tree.selectionModel().clearSelection()
             return
 
         target_set = set(target_items)
         
-        # 1. Select in Thumbnail Area (graphics scene)
-        if hasattr(self, "thumb_area") and self.thumb_area.scene:
-            self.thumb_area.scene.blockSignals(True)
-            try:
-                self.thumb_area.scene.clearSelection()
-                for item_data in target_items:
-                    thumb = self.thumb_area.item_to_thumb.get(item_data)
-                    if thumb:
-                        thumb.setSelected(True)
-            finally:
-                self.thumb_area.scene.blockSignals(False)
-
-        # 2. Select in Spreadsheet Table
+        # 1. Select in Spreadsheet Table
         if hasattr(self, "spreadsheet") and self.spreadsheet.table:
             selection_model = self.spreadsheet.table.selectionModel()
             if selection_model:
-                from PySide6.QtCore import QItemSelection, QItemSelectionRange, QItemSelectionModel
+                from PySide6.QtCore import QItemSelection, QItemSelectionModel
                 selection = QItemSelection()
                 
                 is_csv = getattr(self.spreadsheet, "_is_csv_mode", False)
                 items_list = self.csv_preview_model.tagged_items if (is_csv and hasattr(self, "csv_preview_model")) else self.model.items
 
-                col_count = self.spreadsheet.table.model().columnCount() if self.spreadsheet.table.model() else 1
                 for row, item in enumerate(items_list):
                     if item in target_set:
-                        top_left = self.spreadsheet.table.model().index(row, 0)
-                        bottom_right = self.spreadsheet.table.model().index(row, col_count - 1)
-                        selection.append(QItemSelectionRange(top_left, bottom_right))
+                        idx = self.spreadsheet.table.model().index(row, 0)
+                        selection.select(idx, idx)
 
                 selection_model.select(selection, QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows)
+
+        # 2. Select in Thumbnail Area (graphics scene)
+        if hasattr(self, "thumb_area") and self.thumb_area.scene:
+            self.thumb_area.scene.clearSelection()
+            for item_data in target_items:
+                thumb = self.thumb_area.item_to_thumb.get(item_data)
+                if thumb and thumb.isVisible():
+                    thumb.setSelected(True)
+            if hasattr(self.thumb_area, "update_video_overlay_geometry"):
+                self.thumb_area.update_video_overlay_geometry()
 
         # 3. Sync to FilterPanel
         if hasattr(self, "filter_panel"):
@@ -3813,10 +3835,15 @@ class MainWindow(QMainWindow):
 
     def _connect_filter_selection_signal(self):
         try:
-            self.filter_panel.tree.selectionModel().selectionChanged.disconnect(self._sync_selection_from_filter)
-        except (RuntimeError, TypeError):
+            self.filter_panel.selection_changed.disconnect(self._sync_selection_from_filter)
+        except Exception:
             pass
-        self.filter_panel.tree.selectionModel().selectionChanged.connect(self._sync_selection_from_filter)
+        try:
+            self.filter_panel.selection_changed.connect(self._sync_selection_from_filter)
+        except Exception:
+            pass
+        if hasattr(self.filter_panel, "_reconnect_selection_signal"):
+            self.filter_panel._reconnect_selection_signal()
 
     def _on_filter_sequences_toggled(self, enabled):
         if self.config.get("detect_sequences") == enabled:
@@ -3929,7 +3956,16 @@ class MainWindow(QMainWindow):
                         # Fallback for old model data if any
                         paths.add(path["id"])
         
-        if not paths: return
+        if not paths:
+            self._selection_lock = True
+            try:
+                if hasattr(self, "spreadsheet") and self.spreadsheet.table and self.spreadsheet.table.selectionModel():
+                    self.spreadsheet.table.selectionModel().clearSelection()
+                if hasattr(self, "thumb_area") and self.thumb_area.scene:
+                    self.thumb_area.scene.clearSelection()
+            finally:
+                self._selection_lock = False
+            return
         
         self._selection_lock = True
         try:
@@ -3947,19 +3983,42 @@ class MainWindow(QMainWindow):
             target_model = self.csv_preview_model if is_csv else self.model
             items_list = self.csv_preview_model.tagged_items if is_csv else self.model.items
             
+            target_items = set()
+            proxy = getattr(self.filter_panel, "proxy", None)
+
+            for p in paths:
+                if not isinstance(p, str):
+                    continue
+                p_norm = os.path.normpath(os.path.abspath(p)).lower()
+
+                # 1. Check direct proxy cache map
+                if proxy and hasattr(proxy, "_path_to_item"):
+                    for item_path, item in proxy._path_to_item.items():
+                        item_norm = os.path.normpath(os.path.abspath(item_path)).lower()
+                        if item_norm == p_norm or item_norm.startswith(p_norm + os.sep):
+                            target_items.add(item)
+
+                # 2. Check items_list with normalized slash comparison & sequence matching
+                for item in items_list:
+                    item_norm = os.path.normpath(os.path.abspath(item.file_path)).lower()
+                    if item_norm == p_norm or item_norm.startswith(p_norm + os.sep) or p_norm.startswith(item_norm):
+                        target_items.add(item)
+                    else:
+                        item_dir = os.path.dirname(item_norm)
+                        p_dir = os.path.dirname(p_norm)
+                        if item_dir == p_dir:
+                            p_ext = os.path.splitext(p_norm)[1].lower()
+                            it_ext = os.path.splitext(item_norm)[1].lower()
+                            if p_ext == it_ext:
+                                from utils import strip_sequence_counter
+                                import re
+                                p_base = strip_sequence_counter(re.sub(r"([._]v|v)(\d+)", "", os.path.basename(p_norm), flags=re.IGNORECASE))
+                                it_base = strip_sequence_counter(re.sub(r"([._]v|v)(\d+)", "", os.path.basename(item_norm), flags=re.IGNORECASE))
+                                if p_base and it_base and p_base == it_base:
+                                    target_items.add(item)
+
             for i, item in enumerate(items_list):
-                item_abs = os.path.normpath(os.path.abspath(item.file_path))
-                item_abs_lower = item_abs.lower()
-                is_selected = False
-                for p in paths:
-                    # Only compare strings as paths
-                    if isinstance(p, str):
-                        p_lower = p.lower()
-                        if item_abs_lower == p_lower or item_abs_lower.startswith(p_lower + os.sep):
-                            is_selected = True
-                            break
-                
-                if is_selected:
+                if item in target_items:
                     # Select in table
                     idx = target_model.index(i, 0)
                     tl = target_model.index(i, 0)
@@ -4073,34 +4132,63 @@ class MainWindow(QMainWindow):
             # Trigger the rename action with the specific row index
             self._on_label_action("rename", (row, item_data))
 
-    def _on_add_comment(self, comment):
-        if not comment: return
-        
+    def _on_replace_value(self, field, value):
         selection_model = self.spreadsheet.table.selectionModel()
+        if not selection_model or not selection_model.hasSelection():
+            self.log_message(f"No items selected to replace {field}.", "warning")
+            return
+            
         selected_indexes = selection_model.selectedRows()
-        
         if not selected_indexes:
-            self.log_message("No items selected to add comment to.", "warning")
             return
             
         is_csv = self.spreadsheet._is_csv_mode
-        count = 0
+        selected_items = []
         for idx in selected_indexes:
             row = idx.row()
             if is_csv:
                 if row < len(self.csv_preview_model.tagged_items):
-                    item = self.csv_preview_model.tagged_items[row]
-                    item.comment = comment
-                    count += 1
+                    selected_items.append(self.csv_preview_model.tagged_items[row])
             else:
                 if row < len(self.model.items):
-                    item = self.model.items[row]
-                    item.comment = comment
-                    count += 1
+                    selected_items.append(self.model.items[row])
+
+        if not selected_items:
+            return
+
+        target_items = set(selected_items)
+        
+        # if Show Reviews button is off and replace is run on a group item that has a review,
+        # the replaced values will be edited for the review too
+        show_reviews = getattr(self, "show_reviews", True)
+        if not show_reviews:
+            all_items = self.model.items if not is_csv else self.csv_preview_model.tagged_items
+            for item in selected_items:
+                group_key = getattr(item, "group_key", None)
+                if group_key:
+                    for other in all_items:
+                        if getattr(other, "group_key", None) == group_key and getattr(other, "is_review_repre", False):
+                            target_items.add(other)
+
+        count = 0
+        for item in target_items:
+            if field == "Comment":
+                item.comment = value
+            elif field == "Variant User":
+                item.variant_user = value
+            elif field == "Version User":
+                item.version_user = str(value).strip()
+            count += 1
             
-        # Refresh views
-        self.csv_preview_model.layoutChanged.emit()
-        self.log_message(f"Added comment to {count} items.", "success")
+        self.model.dataChanged.emit(self.model.index(0, 0), self.model.index(self.model.rowCount() - 1, self.model.columnCount() - 1))
+        self.model.layoutChanged.emit()
+        if hasattr(self, "csv_preview_model") and self.csv_preview_model:
+            self.csv_preview_model.layoutChanged.emit()
+
+        self.log_message(f"Replaced {field} with '{value}' for {count} items.", "success")
+
+    def _on_add_comment(self, comment):
+        self._on_replace_value("Comment", comment)
 
     def _on_filter_search_changed(self, text):
         if self._selection_lock: return
@@ -5542,13 +5630,34 @@ class MainWindow(QMainWindow):
             event.acceptProposedAction()
 
     def _on_show_reviews_toggled(self, checked):
+        was_off = not getattr(self, "show_reviews", True)
         self.config["show_reviews"] = checked
         self.show_reviews = checked
+
+        rev_repres = [r.strip().lower().lstrip(".") for r in self.config.get("review_representations", ["mp4", "mov"]) if r.strip()]
+        is_csv = getattr(self.spreadsheet, "_is_csv_mode", False) if hasattr(self, "spreadsheet") else False
+        items_source = self.csv_preview_model.tagged_items if (is_csv and hasattr(self, "csv_preview_model")) else (self.model.items if hasattr(self, "model") else [])
+
+        review_items = []
+        for item in items_source:
+            is_rev = getattr(item, "is_review_repre", False)
+            if not is_rev:
+                repre = (getattr(item, "representation", "") or "").lower().lstrip(".")
+                if repre in rev_repres or getattr(item, "category", "") == "Review" or (item.metadata and item.metadata.get("is_paired_review", False)):
+                    is_rev = True
+                    item.is_review_repre = True
+            if is_rev:
+                review_items.append(item)
+
         if hasattr(self, "thumb_area"):
             self.thumb_area.set_show_reviews(checked)
             self.thumb_area.rearrange_items()
         if hasattr(self, "spreadsheet"):
             self.spreadsheet.update_filtering()
+
+        if checked and was_off:
+            # Deselect all first, then select all review items across desktop, spreadsheet, and filter panel
+            self.select_items(review_items)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -5740,35 +5849,35 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 self.log_message(f"Error loading preset '{preset_name}': {e}", "error")
 
-    def save_preset_as(self):
+    def perform_save_preset(self):
+        current_preset = self.top_bar.combo_preset.currentText()
+        if not current_preset or current_preset == "(None / Active)":
+            current_preset = self.config.get("active_preset", "")
+
+        if current_preset and current_preset != "(None / Active)":
+            reply = QMessageBox.warning(
+                self,
+                "Save Preset Warning",
+                f"Preset '{current_preset}' is currently loaded.\nDo you want to overwrite it?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if reply == QMessageBox.Yes:
+                self._save_preset_to_file(current_preset)
+        else:
+            self.save_preset_as()
+
+    def _save_preset_to_file(self, safe_name):
         presets_folder = self.secrets.get("presets_folder")
         if not presets_folder:
             QMessageBox.warning(self, "Save Preset", "Presets Folder is not configured in Preferences -> General Tab.")
-            return
-            
-        name, ok = QInputDialog.getText(self, "Save Preset As", "Enter preset name:")
-        if not ok or not name.strip():
-            return
-            
-        preset_name = name.strip()
-        # Sanitize preset name to be safe for filenames
-        safe_name = re.sub(r'[^a-zA-Z0-9_\-]', '_', preset_name)
-        if not safe_name:
-            QMessageBox.warning(self, "Save Preset", "Invalid preset name.")
-            return
+            return False
             
         preset_path = os.path.join(presets_folder, f"{safe_name}.json")
-        if os.path.exists(preset_path):
-            reply = QMessageBox.question(self, "Save Preset", f"Preset '{safe_name}' already exists. Overwrite?", 
-                                         QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-            if reply == QMessageBox.No:
-                return
-                
         try:
             self._gather_gui_state()
             os.makedirs(presets_folder, exist_ok=True)
             
-            # Keep identical structure to config.json
             clean_config = self.config.copy()
             
             shifted_keys = [
@@ -5791,7 +5900,6 @@ class MainWindow(QMainWindow):
             if "thumbnails_per_row" in clean_config:
                 del clean_config["thumbnails_per_row"]
                 
-            # Filter out local-only parameters from the saved preset template so they don't lock
             local_keys = ["geometry", "h_splitter", "v_splitter", "recent_folders"]
             for key in local_keys:
                 if key in clean_config:
@@ -5800,15 +5908,41 @@ class MainWindow(QMainWindow):
             with open(preset_path, "w") as f:
                 json.dump(clean_config, f, indent=4)
                 
-            # Make the newly saved preset the active one
             self.config["active_preset"] = safe_name
             self.save_config()
             self.update_preset_dropdown()
             
             self.log_message(f"Successfully saved preset '{safe_name}' to {preset_path}.", "success")
             QMessageBox.information(self, "Save Preset", f"Preset '{safe_name}' successfully saved and set as active.")
+            return True
         except Exception as e:
             QMessageBox.critical(self, "Save Preset Error", f"Error saving preset: {e}")
+            return False
+
+    def save_preset_as(self):
+        presets_folder = self.secrets.get("presets_folder")
+        if not presets_folder:
+            QMessageBox.warning(self, "Save Preset", "Presets Folder is not configured in Preferences -> General Tab.")
+            return
+            
+        name, ok = QInputDialog.getText(self, "Save Preset As", "Enter preset name:")
+        if not ok or not name.strip():
+            return
+            
+        preset_name = name.strip()
+        safe_name = re.sub(r'[^a-zA-Z0-9_\-]', '_', preset_name)
+        if not safe_name:
+            QMessageBox.warning(self, "Save Preset", "Invalid preset name.")
+            return
+            
+        preset_path = os.path.join(presets_folder, f"{safe_name}.json")
+        if os.path.exists(preset_path):
+            reply = QMessageBox.warning(self, "Save Preset", f"Preset '{safe_name}' already exists. Overwrite?", 
+                                        QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if reply == QMessageBox.No:
+                return
+                
+        self._save_preset_to_file(safe_name)
 
 
 class AyonFolderThumbnailThread(QThread):

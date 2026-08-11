@@ -9,6 +9,7 @@ class TopBar(QWidget):
     reveal_requested = Signal()
     show_reviews_toggled = Signal(bool)
     load_preset_requested = Signal(str)
+    save_preset_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -58,10 +59,14 @@ class TopBar(QWidget):
         
         self.btn_load_preset = QPushButton("Load Preset")
         self.btn_load_preset.clicked.connect(self._on_load_preset_clicked)
+
+        self.btn_save_preset = QPushButton("Save Preset")
+        self.btn_save_preset.clicked.connect(self.save_preset_requested.emit)
         
         self.layout.addWidget(self.lbl_preset)
         self.layout.addWidget(self.combo_preset)
         self.layout.addWidget(self.btn_load_preset)
+        self.layout.addWidget(self.btn_save_preset)
         self.layout.addSpacing(10)
         
         # Preferences Button

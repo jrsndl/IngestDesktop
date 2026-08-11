@@ -233,7 +233,8 @@ def pair_group_reviews(group_items, config=None):
         for v in video_items:
             v.review_file_path = video_path
             v.review_status = "done"
-            if (target_review_repres and repre in target_review_repres) or v == primary_video or getattr(v, "is_review_repre", False):
+            v_repre = (getattr(v, "representation", "") or "").lower().lstrip(".")
+            if (target_review_repres and v_repre in target_review_repres) or v == primary_video or getattr(v, "is_review_repre", False) or v_repre in ("mp4", "mov", "webm", "mxf", "h264"):
                 v.is_review_repre = True
     else:
         for nv in non_video_items:

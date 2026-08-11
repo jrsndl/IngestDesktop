@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QPushButton, QLineEdit,
                              QHBoxLayout, QLabel, QSpinBox, QTreeView, QFileSystemModel, 
                              QButtonGroup, QComboBox, QAbstractItemView, QCheckBox,
                              QStyledItemDelegate, QStyleOptionViewItem, QStyle, QApplication)
-from PySide6.QtCore import Signal, Qt, QDir, QSortFilterProxyModel, QItemSelectionModel, QModelIndex, QRect
+from PySide6.QtCore import Signal, Qt, QDir, QSortFilterProxyModel, QItemSelectionModel, QModelIndex, QRect, QTimer
 from PySide6.QtGui import QColor, QStandardItemModel, QStandardItem, QPalette, QFont, QPen, QIcon, QPixmap, QPainter, QShortcut, QKeySequence
 from utils import strip_sequence_counter, get_version_from_name, get_sequence_counter
 from logic.image_model import parse_version_folder
@@ -333,6 +333,7 @@ class FilterPanel(QWidget):
     rename_to_label_requested = Signal(list) # list of paths
     sequences_toggled = Signal(bool)
     toggles_changed = Signal()
+    selection_changed = Signal(object, object)
     delete_scene_items_requested = Signal(list) # list of UUIDs
     edit_scene_item_requested = Signal(str) # UUID
     move_front_back_requested = Signal(str, list) # direction ("front"/"back"), list of paths
@@ -389,8 +390,10 @@ class FilterPanel(QWidget):
         self.layout.addLayout(age_layout)
 
         # Folder Tree
+        self._is_unfolding = False
         self.fs_model = QFileSystemModel()
         self.fs_model.setFilter(QDir.Dirs | QDir.Files | QDir.NoDotAndDotDot)
+        self.fs_model.directoryLoaded.connect(self._on_directory_loaded)
         
         # Proxy for coloring
         self.proxy = TagColorProxyModel(self.main_model)
@@ -431,6 +434,9 @@ class FilterPanel(QWidget):
         self.btn_flat.setChecked(False)
         self.btn_flat.toggled.connect(self._on_toggles_changed)
         
+        self.btn_unfold = QPushButton("Unfold")
+        self.btn_unfold.clicked.connect(self._on_unfold_clicked)
+        
         self.btn_v_stack = QPushButton("Version Stack")
         self.btn_v_stack.setCheckable(True)
         self.btn_v_stack.setChecked(False)
@@ -443,9 +449,61 @@ class FilterPanel(QWidget):
         
         toggles_layout.addWidget(self.btn_files_only)
         toggles_layout.addWidget(self.btn_flat)
+        toggles_layout.addWidget(self.btn_unfold)
         toggles_layout.addWidget(self.btn_v_stack)
         toggles_layout.addWidget(self.btn_sequences)
         self.layout.addLayout(toggles_layout)
+
+        self._update_unfold_state()
+
+    def _on_unfold_clicked(self):
+        """Unwrap every folder shown in the file panel tree."""
+        self._is_unfolding = True
+        self.tree.expandAll()
+        
+        # Force fetch and expansion for all items in main_model
+        model = self.proxy.sourceModel()
+        if hasattr(self, "main_model") and self.main_model and self.main_model.items:
+            for item in self.main_model.items:
+                dir_path = os.path.dirname(os.path.abspath(item.file_path))
+                if hasattr(model, "index"):
+                    source_idx = model.index(dir_path)
+                    if source_idx.isValid():
+                        proxy_idx = self.proxy.mapFromSource(source_idx)
+                        p_idx = proxy_idx
+                        while p_idx.isValid():
+                            self.tree.expand(p_idx)
+                            p_idx = p_idx.parent()
+
+        # Scheduled passes to catch delayed filesystem loading
+        QTimer.singleShot(100, self._unfold_pass)
+        QTimer.singleShot(300, self._unfold_pass)
+        QTimer.singleShot(600, self._finish_unfold)
+
+    def _on_directory_loaded(self, path):
+        if getattr(self, "_is_unfolding", False):
+            self.tree.expandAll()
+            if hasattr(self, "fs_model"):
+                source_idx = self.fs_model.index(path)
+                if source_idx.isValid():
+                    proxy_idx = self.proxy.mapFromSource(source_idx)
+                    p_idx = proxy_idx
+                    while p_idx.isValid():
+                        self.tree.expand(p_idx)
+                        p_idx = p_idx.parent()
+
+    def _unfold_pass(self):
+        if getattr(self, "_is_unfolding", False):
+            self.tree.expandAll()
+
+    def _finish_unfold(self):
+        self.tree.expandAll()
+        self._is_unfolding = False
+
+    def _update_unfold_state(self):
+        """Unfold is only active if 'Files' toggle is on and 'Flat' toggle is off."""
+        enabled = self.btn_files_only.isChecked() and not self.btn_flat.isChecked()
+        self.btn_unfold.setEnabled(enabled)
 
     def refresh_views_if_active(self):
         """Rebuild/refresh the active flat or hierarchical scene view models."""
@@ -472,6 +530,7 @@ class FilterPanel(QWidget):
         else:
             self._disable_flat_view()
             
+        self._update_unfold_state()
         self.toggles_changed.emit()
 
     def get_toggle_states(self):
@@ -530,10 +589,26 @@ class FilterPanel(QWidget):
         self.proxy.setSourceModel(self.flat_model)
         self._update_column_visibility()
 
+    def _reconnect_selection_signal(self):
+        sel_model = self.tree.selectionModel()
+        if sel_model:
+            try:
+                sel_model.selectionChanged.disconnect(self._on_tree_selection_changed)
+            except Exception:
+                pass
+            try:
+                sel_model.selectionChanged.connect(self._on_tree_selection_changed)
+            except Exception:
+                pass
+
+    def _on_tree_selection_changed(self, selected, deselected):
+        self.selection_changed.emit(selected, deselected)
+
     def _update_column_visibility(self):
-        """Ensure only the first column is visible."""
+        """Ensure only the first column is visible and reconnect selection signal."""
         for i in range(1, self.proxy.columnCount()):
             self.tree.hideColumn(i)
+        self._reconnect_selection_signal()
 
     def _disable_flat_view(self):
         """Switch back to hierarchical folder tree."""

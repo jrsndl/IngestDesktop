@@ -71,6 +71,26 @@ class TestShowReviews(unittest.TestCase):
         self.assertFalse(win.spreadsheet.table.isRowHidden(0))
         self.assertTrue(win.spreadsheet.table.isRowHidden(1))
 
+        # Select non-review item (item_exr) first
+        win.spreadsheet.table.selectRow(0)
+
+        # Toggle Show Reviews ON from OFF
+        win._on_show_reviews_toggled(True)
+        self.assertFalse(win.spreadsheet.table.isRowHidden(0))
+        self.assertFalse(win.spreadsheet.table.isRowHidden(1))
+
+        # Row 0 (non-review item) should be deselected, Row 1 (review item) should be selected
+        selected_rows = [idx.row() for idx in win.spreadsheet.table.selectionModel().selectedRows()]
+        self.assertNotIn(0, selected_rows)
+        self.assertIn(1, selected_rows)
+
+        # Check Desktop (thumbnail area) selection
+        thumb_exr = win.thumb_area.item_to_thumb.get(item_exr)
+        thumb_mp4 = win.thumb_area.item_to_thumb.get(item_mp4)
+        if thumb_exr and thumb_mp4:
+            self.assertFalse(thumb_exr.isSelected())
+            self.assertTrue(thumb_mp4.isSelected())
+
         win.close()
 
     def test_show_grouped_in_csv_view(self):

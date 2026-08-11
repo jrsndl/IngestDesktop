@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QTableView, QCheckBox, 
                              QPushButton, QHeaderView, QStyledItemDelegate, QMenu, QLabel, 
-                             QSpinBox, QSlider, QAbstractItemView, QLineEdit)
+                             QSpinBox, QSlider, QAbstractItemView, QLineEdit, QComboBox)
 from PySide6.QtGui import QAction
 from PySide6.QtCore import Signal, Qt, QSize, QEvent, QModelIndex, QItemSelection, QItemSelectionModel
 
@@ -46,6 +46,7 @@ class SpreadsheetPanel(QWidget):
     selectionChanged = Signal()
     show_grouped_toggled = Signal(bool)
     add_comment_requested = Signal(str)
+    replace_value_requested = Signal(str, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -71,6 +72,7 @@ class SpreadsheetPanel(QWidget):
 
         self.btn_show_grouped = QPushButton("Show Grouped")
         self.btn_show_grouped.setCheckable(True)
+        self.btn_show_grouped.setChecked(True)
         self.btn_show_grouped.toggled.connect(self.show_grouped_toggled.emit)
         
         self.btn_check_ver_only = QPushButton("Version Check")
@@ -90,14 +92,21 @@ class SpreadsheetPanel(QWidget):
         self.slider_row_height = QSlider(Qt.Horizontal)
         self.slider_row_height.setRange(0, 100)
         self.slider_row_height.setValue(20) # Corresponds to ~40px with quadratic mapping
-        self.slider_row_height.setFixedWidth(150)
+        self.slider_row_height.setFixedWidth(75)
         self.slider_row_height.valueChanged.connect(self._on_row_height_change)
         
+        self.btn_replace = QPushButton("Replace:")
+        self.btn_replace.setEnabled(False)
+        self.btn_replace.clicked.connect(self._on_replace_clicked)
+
         self.comment_field = QLineEdit()
-        self.comment_field.setPlaceholderText("Comment...")
         self.comment_field.setFixedWidth(150)
-        self.btn_add_comment = QPushButton("Add Comment")
-        self.btn_add_comment.clicked.connect(lambda: self.add_comment_requested.emit(self.comment_field.text()))
+
+        self.combo_replace_field = QComboBox()
+        self.combo_replace_field.addItems(["Comment", "Variant User", "Version User"])
+        self.combo_replace_field.setCurrentText("Comment")
+        self.comment_field.setPlaceholderText(self.combo_replace_field.currentText())
+        self.combo_replace_field.currentTextChanged.connect(lambda text: self.comment_field.setPlaceholderText(text))
 
         controls_layout.addWidget(self.btn_selected_only)
         controls_layout.addWidget(self.btn_tagged_only)
@@ -110,8 +119,9 @@ class SpreadsheetPanel(QWidget):
         controls_layout.addWidget(self.btn_csv)
         controls_layout.addWidget(self.lbl_row_height)
         controls_layout.addWidget(self.slider_row_height)
+        controls_layout.addWidget(self.btn_replace)
         controls_layout.addWidget(self.comment_field)
-        controls_layout.addWidget(self.btn_add_comment)
+        controls_layout.addWidget(self.combo_replace_field)
         controls_layout.addStretch()
 
         self.layout.addWidget(self.controls)
@@ -162,12 +172,25 @@ class SpreadsheetPanel(QWidget):
         if self._is_csv_mode:
             self._setup_csv_view()
 
+    def _on_replace_clicked(self):
+        field = self.combo_replace_field.currentText()
+        val = self.comment_field.text()
+        self.replace_value_requested.emit(field, val)
+
+    def _update_replace_btn_state(self):
+        has_sel = False
+        if self.table and self.table.selectionModel():
+            has_sel = self.table.selectionModel().hasSelection()
+        self.btn_replace.setEnabled(has_sel)
+
     def _setup_standard_view(self):
         if not self.standard_model: return
         self.table.setModel(self.standard_model)
         # Selection model might have changed
         self.table.selectionModel().selectionChanged.connect(lambda s, d: self.update_filtering())
         self.table.selectionModel().selectionChanged.connect(lambda s, d: self.selectionChanged.emit())
+        self.table.selectionModel().selectionChanged.connect(lambda s, d: self._update_replace_btn_state())
+        self._update_replace_btn_state()
         # Set row height for thumbnails
         self.table.verticalHeader().setDefaultSectionSize(40)
         
@@ -216,6 +239,8 @@ class SpreadsheetPanel(QWidget):
         self.table.setItemDelegateForColumn(0, QStyledItemDelegate(self.table))
         
         self.table.selectionModel().selectionChanged.connect(lambda s, d: self.selectionChanged.emit())
+        self.table.selectionModel().selectionChanged.connect(lambda s, d: self._update_replace_btn_state())
+        self._update_replace_btn_state()
         
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.Interactive)

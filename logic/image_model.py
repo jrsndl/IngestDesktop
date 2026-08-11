@@ -139,7 +139,7 @@ class ImageTableModel(QAbstractTableModel):
         self.vfxtranscode = ""
         self.ocio_config = ""
         self.show_thumbs = False
-        self.show_grouped = False
+        self.show_grouped = True
         self.default_fps = 25.0
         self.use_fps_from_metadata = True
 

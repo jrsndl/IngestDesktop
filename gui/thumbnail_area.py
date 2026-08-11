@@ -2028,6 +2028,7 @@ class ArrangeDialog(QDialog):
         init_cols = initial_values.get("cols", 10) if initial_values else 10
         init_gap_h = initial_values.get("gap_h", 50) if initial_values else 50
         init_gap_v = initial_values.get("gap_v", 50) if initial_values else 50
+        init_thumb_size = initial_values.get("thumb_size", 150) if initial_values else 150
         init_sort = initial_values.get("sort_by", "File Name") if initial_values else "File Name"
         init_reverse = initial_values.get("reverse", False) if initial_values else False
 
@@ -2048,6 +2049,19 @@ class ArrangeDialog(QDialog):
         layout.addLayout(sort_layout)
         
         layout.addSpacing(5)
+
+        # Thumb Size
+        size_layout = QHBoxLayout()
+        size_layout.addWidget(QLabel("Thumb Size:"))
+        self.slider_thumb_size = QSlider(Qt.Horizontal)
+        self.slider_thumb_size.setRange(20, 2048)
+        self.slider_thumb_size.setValue(init_thumb_size)
+        self.lbl_thumb_size = QLabel(str(init_thumb_size))
+        self.slider_thumb_size.valueChanged.connect(lambda v: self.lbl_thumb_size.setText(str(v)))
+        self.slider_thumb_size.valueChanged.connect(self._emit_changed)
+        size_layout.addWidget(self.slider_thumb_size)
+        size_layout.addWidget(self.lbl_thumb_size)
+        layout.addLayout(size_layout)
 
         # Columns (only for grid)
         self.slider_cols = None
@@ -2071,7 +2085,7 @@ class ArrangeDialog(QDialog):
             gap_h_label = "Gap:" if mode != "grid" else "Horizontal Gap:"
             gap_h_layout.addWidget(QLabel(gap_h_label))
             self.slider_gap_h = QSlider(Qt.Horizontal)
-            self.slider_gap_h.setRange(0, 1000)
+            self.slider_gap_h.setRange(0, 10000)
             self.slider_gap_h.setValue(init_gap_h)
             self.lbl_gap_h = QLabel(str(init_gap_h))
             self.slider_gap_h.valueChanged.connect(lambda v: self.lbl_gap_h.setText(str(v)))
@@ -2111,6 +2125,7 @@ class ArrangeDialog(QDialog):
 
     def get_values(self):
         vals = {
+            "thumb_size": self.slider_thumb_size.value() if hasattr(self, "slider_thumb_size") and self.slider_thumb_size else 150,
             "gap_h": self.slider_gap_h.value() if self.slider_gap_h else 0,
             "gap_v": self.slider_gap_v.value() if self.slider_gap_v else 0,
             "cols": self.slider_cols.value() if self.slider_cols else 1,
@@ -3558,8 +3573,14 @@ class ThumbnailArea(QWidget):
                     
         if not target_items: return
         
-        # Store initial positions for revert
+        # Store initial positions and sizes for revert
         initial_pos = {item: item.pos() for item in target_items}
+        initial_sizes = {item: (getattr(item, "size", self.slider_thumb_size.value()), getattr(item, "is_custom_size", False)) for item in target_items}
+        
+        if "thumb_size" not in self._last_arrange_vals:
+            first_size = initial_sizes[target_items[0]][0] if target_items else self.slider_thumb_size.value()
+            self._last_arrange_vals["thumb_size"] = int(first_size)
+
         # Calculate top-left anchor point once
         anchor_x = min(p.x() for p in initial_pos.values())
         anchor_y = min(p.y() for p in initial_pos.values())
@@ -3581,6 +3602,14 @@ class ThumbnailArea(QWidget):
             for item, pos in initial_pos.items():
                 item.setPos(pos)
                 item.data.position = (pos.x(), pos.y())
+                if item in initial_sizes:
+                    old_size, old_custom = initial_sizes[item]
+                    item.prepareGeometryChange()
+                    item.size = old_size
+                    item.data.size = old_size
+                    item.is_custom_size = old_custom
+                    item.data.is_custom_size = old_custom
+                    item.update()
             self.scene.update()
             self._arrange_dialog = None
             
@@ -3601,6 +3630,17 @@ class ThumbnailArea(QWidget):
             items = [item for item in items if not item.is_manually_moved]
             if not items: return
         
+        arr_thumb_size = vals.get("thumb_size")
+        if arr_thumb_size is not None:
+            for item in items:
+                if getattr(item, "size", None) != arr_thumb_size:
+                    item.prepareGeometryChange()
+                    item.size = arr_thumb_size
+                    item.data.size = arr_thumb_size
+                    item.is_custom_size = True
+                    item.data.is_custom_size = True
+                    item.update()
+
         sort_by = vals.get("sort_by", "File Name")
         reverse = vals.get("reverse", False)
         
@@ -3637,14 +3677,14 @@ class ThumbnailArea(QWidget):
         gap_v = vals["gap_v"]
         cols = vals["cols"]
         
-        thumb_size = self.slider_thumb_size.value()
         show_text = self.btn_show_text.isChecked()
         font_size = self.slider_text_size.value()
         line_height = font_size * 1.5
         label_area = (line_height * 3.5) + 10 if show_text else 0
 
-        # Width is always thumb_size + 20 (from boundingRect)
-        item_w = thumb_size + 20
+        def get_item_w(thumb):
+            t_size = getattr(thumb, "size", self.slider_thumb_size.value())
+            return t_size + 20
 
         def get_item_h(thumb):
             w = thumb.data.metadata.get("width", 1)
@@ -3655,8 +3695,8 @@ class ThumbnailArea(QWidget):
                 aspect = fw / fh if fh > 0 else 1.0
             except (ValueError, TypeError):
                 aspect = 1.0
-            # Height matches boundingRect: thumb_h + 20 + label_area
-            return (thumb_size / aspect) + 20 + label_area
+            t_size = getattr(thumb, "size", self.slider_thumb_size.value())
+            return (t_size / aspect) + 20 + label_area
 
         # For grid, we need to track row heights to keep them aligned
         row_heights = []
@@ -3672,9 +3712,10 @@ class ThumbnailArea(QWidget):
         current_y_offset = 0
         for i, item in enumerate(items):
             h = get_item_h(item)
+            w = get_item_w(item)
             
             if mode == "horizontal":
-                new_x = start_x + i * (item_w + gap_h)
+                new_x = start_x + i * (w + gap_h)
                 new_y = start_y
             elif mode == "vertical":
                 new_x = start_x
@@ -3683,7 +3724,7 @@ class ThumbnailArea(QWidget):
             else: # grid
                 row = i // cols
                 col = i % cols
-                new_x = start_x + col * (item_w + gap_h)
+                new_x = start_x + col * (w + gap_h)
                 y_pos = sum(row_heights[:row]) + (row * gap_v)
                 new_y = start_y + y_pos
             
