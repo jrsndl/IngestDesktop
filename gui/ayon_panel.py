@@ -235,6 +235,10 @@ class AyonPanel(QWidget):
     show_thumbs_toggled = Signal(bool)
     task_status_change_requested = Signal(str, str, str, str) # (project_name, task_id, task_name, current_status)
     version_status_change_requested = Signal(str, str, str, str, str, str, int) # (project_name, version_id, display_title, current_status, task_id, task_name, row)
+    get_folder_repres_requested = Signal(list) # list of folder dicts
+    get_task_repre_requested = Signal(dict) # task dict
+    get_product_repre_requested = Signal(dict) # product dict
+    get_repre_repre_requested = Signal(dict) # repre dict
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -854,6 +858,10 @@ class AyonPanel(QWidget):
         
         if version_id and proj_name:
             menu = QMenu(self.window())
+            get_repre_action = QAction("Get Product Repre", self)
+            get_repre_action.triggered.connect(lambda checked=False, prd=p: self.get_product_repre_requested.emit(prd))
+            menu.addAction(get_repre_action)
+
             status_action = QAction("Set Status", self)
             display_title = f"{prod_name} v{ver_num:03d}"
             status_action.triggered.connect(lambda checked=False, pr=proj_name, vid=version_id, dt=display_title, vs=version_status, tid=task_id, tn=task_name, r=row:
@@ -958,6 +966,7 @@ class AyonPanel(QWidget):
 
         for rep in sorted_reps:
             name_item = QStandardItem(rep.get("name", ""))
+            name_item.setData(rep, Qt.UserRole)
 
             ver = get_ver(rep)
             ver_item = QStandardItem(f"v{ver:03d}" if ver else "")
@@ -1006,18 +1015,24 @@ class AyonPanel(QWidget):
             if path and isinstance(path, str):
                 paths.append(path)
                 
-        if not paths:
-            return
-            
         menu = QMenu(self.window())
-        
-        act_reveal = QAction("Reveal in Filesystem", self)
-        act_reveal.triggered.connect(lambda checked=False: self._on_repre_reveal(paths))
-        menu.addAction(act_reveal)
-        
-        act_open = QAction("OS Open", self)
-        act_open.triggered.connect(lambda checked=False: self._on_repre_open(paths))
-        menu.addAction(act_open)
+
+        name_idx = self.repre_model.index(clicked_row, 0)
+        rep_data = name_idx.data(Qt.UserRole)
+        if rep_data and isinstance(rep_data, dict):
+            act_get_repre = QAction("Get Representation Repre", self)
+            act_get_repre.triggered.connect(lambda checked=False, r_data=rep_data: self.get_repre_repre_requested.emit(r_data))
+            menu.addAction(act_get_repre)
+            menu.addSeparator()
+
+        if paths:
+            act_reveal = QAction("Reveal in Filesystem", self)
+            act_reveal.triggered.connect(lambda checked=False: self._on_repre_reveal(paths))
+            menu.addAction(act_reveal)
+            
+            act_open = QAction("OS Open", self)
+            act_open.triggered.connect(lambda checked=False: self._on_repre_open(paths))
+            menu.addAction(act_open)
         
         menu.exec(self.repre_view.viewport().mapToGlobal(pos))
 
@@ -1159,25 +1174,29 @@ class AyonPanel(QWidget):
         item = self.model.itemFromIndex(first_col_index)
         data = item.data(Qt.UserRole)
         
-        if not data or 'full_ayon_path' not in data:
+        if not data:
             return
 
         menu = QMenu(self.window())
-        ayon_path = data['full_ayon_path']
-        is_assigned = ayon_path in self.assigned_paths
-        
-        if not is_assigned:
-            assign_action = QAction(f"Assign path to selection", self)
-            assign_action.triggered.connect(lambda: self.task_selected.emit(
-                data.get('folder_path'), data.get('name'), data.get('type'), ", ".join(data.get('assignees', []))
-            ))
-            menu.addAction(assign_action)
-        else:
-            unassign_action = QAction(f"Unassign path", self)
-            unassign_action.triggered.connect(lambda: self.unassign_requested.emit(ayon_path))
-            menu.addAction(unassign_action)
+        ayon_path = data.get('full_ayon_path')
+        if ayon_path:
+            is_assigned = ayon_path in self.assigned_paths
+            if not is_assigned:
+                assign_action = QAction(f"Assign path to selection", self)
+                assign_action.triggered.connect(lambda: self.task_selected.emit(
+                    data.get('folder_path'), data.get('name'), data.get('type'), ", ".join(data.get('assignees', []))
+                ))
+                menu.addAction(assign_action)
+            else:
+                unassign_action = QAction(f"Unassign path", self)
+                unassign_action.triggered.connect(lambda: self.unassign_requested.emit(ayon_path))
+                menu.addAction(unassign_action)
             
         if 'folderId' in data: # Task item
+            get_task_repre_action = QAction("Get Task Repre", self)
+            get_task_repre_action.triggered.connect(lambda checked=False, t_data=data: self.get_task_repre_requested.emit(t_data))
+            menu.addAction(get_task_repre_action)
+
             status_action = QAction("Set Status", self)
             proj_name = self.combo_project.currentText()
             t_id = str(data.get('id')) if data.get('id') else ""
@@ -1187,6 +1206,22 @@ class AyonPanel(QWidget):
                 self.task_status_change_requested.emit(p, tid, tn, ts)
             )
             menu.addAction(status_action)
+        else: # Folder item
+            def _collect_folders(parent_item):
+                folders = []
+                p_data = parent_item.data(Qt.UserRole)
+                if p_data and 'folderId' not in p_data and 'id' in p_data:
+                    folders.append(p_data)
+                for r in range(parent_item.rowCount()):
+                    child = parent_item.child(r, 0)
+                    if child:
+                        folders.extend(_collect_folders(child))
+                return folders
+
+            folder_list = _collect_folders(item)
+            get_folder_repres_action = QAction("Get Folder Repre(s)", self)
+            get_folder_repres_action.triggered.connect(lambda checked=False, f_list=folder_list: self.get_folder_repres_requested.emit(f_list))
+            menu.addAction(get_folder_repres_action)
 
         menu.exec(self.tree.viewport().mapToGlobal(pos))
 

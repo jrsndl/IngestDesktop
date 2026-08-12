@@ -180,14 +180,24 @@ class AyonClient:
             self.log.error(f"Error updating task {task_id} status to '{status}': {e}")
             return False
 
-    def update_version_status(self, project_name, version_id, status):
-        """Update status of a version on AYON server."""
-        if not self.is_connected or not project_name or not version_id:
-            return False
+    def get_versions_for_product(self, project_name, product_id):
+        """Fetch all version dicts for a product."""
+        if not self.is_connected or not project_name or not product_id:
+            return []
         try:
-            ayon_api.update_version(project_name, version_id, status=status)
-            return True
+            return list(ayon_api.get_versions(project_name, product_ids=[product_id]))
         except Exception as e:
-            self.log.error(f"Error updating version {version_id} status to '{status}': {e}")
-            return False
+            self.log.error(f"Error fetching versions for product {product_id}: {e}")
+            return []
+
+    def get_representations_for_version(self, project_name, version_id):
+        """Fetch all representation dicts for a version."""
+        if not self.is_connected or not project_name or not version_id:
+            return []
+        try:
+            return list(ayon_api.get_representations(project_name, version_ids=[version_id]))
+        except Exception as e:
+            self.log.error(f"Error fetching representations for version {version_id}: {e}")
+            return []
+
 

@@ -22,7 +22,7 @@ class ImageItem:
     def __init__(self, file_path, label=None, version=1, category="Other", 
                  preset_name=None, variant=None, product_type=None, camel_case=True,
                  representation=None, colorspace=None, rep_tags=None, is_sequence=False,
-                 preset_data=None, frame_start=None, frame_end=None, metadata=None, comment="", variant_user="", version_user=""):
+                 preset_data=None, frame_start=None, frame_end=None, metadata=None, comment="", variant_user="", version_user="", is_ayon_item=False):
         self.file_path = file_path
         self.filename = os.path.basename(file_path)
         self.label = label or os.path.splitext(self.filename)[0]
@@ -67,6 +67,7 @@ class ImageItem:
         self.comment = comment
         self.ingest_status = "unknown"
         self.is_review_repre = False
+        self.is_ayon_item = is_ayon_item
         self.model = None
 
     @property
@@ -108,8 +109,12 @@ class ImageTableModel(QAbstractTableModel):
     ]
 
     @property
-    def items(self):
+    def all_items(self):
         return self._items
+
+    @property
+    def items(self):
+        return [item for item in self._items if not getattr(item, "is_ayon_item", False)]
 
     @items.setter
     def items(self, value):
@@ -375,6 +380,24 @@ class ImageTableModel(QAbstractTableModel):
         self._items.extend(new_items)
         self.rebuild_version_stacks()
         self.endInsertRows()
+
+    def remove_items(self, items_to_remove):
+        if not items_to_remove:
+            return
+        items_set = set(items_to_remove)
+        indices_to_remove = sorted(
+            [i for i, item in enumerate(self._items) if item in items_set],
+            reverse=True
+        )
+        if not indices_to_remove:
+            return
+
+        for idx in indices_to_remove:
+            self.beginRemoveRows(QModelIndex(), idx, idx)
+            self._items.pop(idx)
+            self.endRemoveRows()
+
+        self.rebuild_version_stacks()
 
     def get_version_stack_key(self, item):
         import os

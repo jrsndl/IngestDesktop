@@ -60,5 +60,34 @@ class TestFilterPanelSelectionSync(unittest.TestCase):
 
         self.assertIn(item, target_items)
 
+    def test_ayon_item_selection_sync_bidirectional(self):
+        ayon_item = ImageItem(
+            file_path="ayon://proj/shot05/comp.mp4",
+            label="shot05/comp/render v1",
+            is_ayon_item=True
+        )
+        setattr(ayon_item, "repre_id", "rep-999")
+        self.win._on_ayon_items_resolved([ayon_item])
+
+        # Verify item added to canvas
+        thumb = self.win.thumb_area.item_to_thumb.get(ayon_item)
+        self.assertIsNotNone(thumb, "ThumbnailItem not created for AYON item!")
+
+        # 1. Main Canvas selection -> Right Panel
+        thumb.setSelected(True)
+        self.win._sync_selection_to_table()
+        # FilterPanel select_paths should find and select the item in its tree
+        sel_indexes = self.win.filter_panel.tree.selectionModel().selectedIndexes()
+        self.assertTrue(len(sel_indexes) > 0, "Right panel tree did not select the AYON item!")
+
+        # Clear selections
+        self.win.thumb_area.scene.clearSelection()
+        self.win.filter_panel.tree.selectionModel().clearSelection()
+
+        # 2. Right Panel selection -> Main Canvas
+        self.win.filter_panel.select_paths(["ayon://proj/shot05/comp.mp4"])
+        self.win._sync_selection_from_filter()
+        self.assertTrue(thumb.isSelected(), "Main canvas thumbnail was not selected from Right panel selection!")
+
 if __name__ == "__main__":
     unittest.main()

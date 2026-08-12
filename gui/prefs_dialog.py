@@ -197,6 +197,44 @@ class PreferencesDialog(QDialog):
         self.ayon_layout.addStretch()
         self.tabs.addTab(self.ayon_tab, "AYON")
 
+        # 1.3 AYON Items Tab
+        self.ayon_items_tab = QWidget()
+        self.ayon_items_layout = QVBoxLayout(self.ayon_items_tab)
+        self.ayon_items_form = QFormLayout()
+
+        self.ayon_item_task_type_priority = QLineEdit(self.config.get("ayon_item_task_type_priority", "Compositing Editing"))
+        self.ayon_item_task_name_priority = QLineEdit(self.config.get("ayon_item_task_name_priority", "comp"))
+        self.ayon_item_product_type_priority = QLineEdit(self.config.get("ayon_item_product_type_priority", "review render plate"))
+        self.ayon_item_product_name_priority = QLineEdit(self.config.get("ayon_item_product_name_priority", "main"))
+
+        self.ayon_item_product_version = QComboBox()
+        self.ayon_item_product_version.addItems(["Max Version", "Min Version", "by Status or Max", "by Status Only"])
+        self.ayon_item_product_version.setCurrentText(self.config.get("ayon_item_product_version", "Max Version"))
+
+        self.ayon_item_product_version_status = QLineEdit(self.config.get("ayon_item_product_version_status", ""))
+        self.ayon_item_repre_priority_extension = QLineEdit(self.config.get("ayon_item_repre_priority_extension", "mp4 mov png"))
+        self.ayon_item_label = QLineEdit(self.config.get("ayon_item_label", "{folder_name}/{task_name}/{product_name} v{version}"))
+
+        def _create_line():
+            line = QFrame()
+            line.setFrameShape(QFrame.HLine)
+            line.setFrameShadow(QFrame.Sunken)
+            return line
+
+        self.ayon_items_form.addRow("Task Type Priority:", self.ayon_item_task_type_priority)
+        self.ayon_items_form.addRow("Task Name Priority:", self.ayon_item_task_name_priority)
+        self.ayon_items_form.addRow("Product Type Priority:", self.ayon_item_product_type_priority)
+        self.ayon_items_form.addRow("Product Name Priority:", self.ayon_item_product_name_priority)
+        self.ayon_items_form.addRow("Product Version:", self.ayon_item_product_version)
+        self.ayon_items_form.addRow("Product Version Status:", self.ayon_item_product_version_status)
+        self.ayon_items_form.addRow("Repre Priority by Extension:", self.ayon_item_repre_priority_extension)
+        self.ayon_items_form.addRow(_create_line())
+        self.ayon_items_form.addRow("AYON item label:", self.ayon_item_label)
+
+        self.ayon_items_layout.addLayout(self.ayon_items_form)
+        self.ayon_items_layout.addStretch()
+        self.tabs.addTab(self.ayon_items_tab, "AYON Items")
+
         # 1.5 Auto-Assign Tab (Moved next to General)
         self.auto_assign_tab = QWidget()
         self.auto_assign_layout = QVBoxLayout(self.auto_assign_tab)
@@ -1103,6 +1141,14 @@ class PreferencesDialog(QDialog):
             "set_neighbour_status_after_check": self.set_neighbour_status_after_check.isChecked(),
             "neighbour_task_name": self.neighbour_task_name.text(),
             "neighbour_task_status": self.neighbour_task_status.text(),
+            "ayon_item_task_type_priority": self.ayon_item_task_type_priority.text(),
+            "ayon_item_task_name_priority": self.ayon_item_task_name_priority.text(),
+            "ayon_item_product_type_priority": self.ayon_item_product_type_priority.text(),
+            "ayon_item_product_name_priority": self.ayon_item_product_name_priority.text(),
+            "ayon_item_product_version": self.ayon_item_product_version.currentText(),
+            "ayon_item_product_version_status": self.ayon_item_product_version_status.text(),
+            "ayon_item_repre_priority_extension": self.ayon_item_repre_priority_extension.text(),
+            "ayon_item_label": self.ayon_item_label.text(),
             "group_by": self.group_by.text(),
             "group_do_not_export_missing_repres": self.group_do_not_export_missing_repres.isChecked(),
             "group_definitions": [w.get_data() for w in self.group_widgets],

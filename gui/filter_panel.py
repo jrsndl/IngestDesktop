@@ -412,6 +412,11 @@ class FilterPanel(QWidget):
         self.shortcut_open = QShortcut(QKeySequence("Ctrl+O"), self.tree)
         self.shortcut_open.activated.connect(self._on_shortcut_open)
         
+        self.shortcut_delete = QShortcut(QKeySequence(Qt.Key_Delete), self.tree)
+        self.shortcut_delete.activated.connect(self._on_shortcut_delete)
+        self.shortcut_backspace = QShortcut(QKeySequence(Qt.Key_Backspace), self.tree)
+        self.shortcut_backspace.activated.connect(self._on_shortcut_delete)
+        
         # Connect main model signals to automatically refresh views when items change
         self.main_model.rowsInserted.connect(self.refresh_views_if_active)
         self.main_model.rowsRemoved.connect(self.refresh_views_if_active)
@@ -575,7 +580,7 @@ class FilterPanel(QWidget):
             std_item.setData(False, Qt.UserRole + 1)
             self.flat_model.appendRow(std_item)
             
-        # Add notes/backdrops if not files_only
+        # Add notes/backdrops and AYON items if not files_only
         if not self.btn_files_only.isChecked():
             for s_item in self._scene_items:
                 name = s_item.get("name", "")
@@ -585,6 +590,16 @@ class FilterPanel(QWidget):
                 std_item.setData(s_item.get("id"), Qt.UserRole)
                 std_item.setData(True, Qt.UserRole + 1) # Is scene item flag
                 self.flat_model.appendRow(std_item)
+
+            all_items = getattr(self.main_model, "all_items", getattr(self.main_model, "items", []))
+            for item in all_items:
+                if getattr(item, "is_ayon_item", False):
+                    lbl = item.label or item.filename
+                    std_item = QStandardItem(lbl)
+                    path_val = item.file_path if item.file_path else (getattr(item, "ayon_path", "") or lbl)
+                    std_item.setData(path_val, Qt.UserRole)
+                    std_item.setData(True, Qt.UserRole + 1)
+                    self.flat_model.appendRow(std_item)
 
         self.proxy.setSourceModel(self.flat_model)
         self._update_column_visibility()
@@ -625,13 +640,24 @@ class FilterPanel(QWidget):
         
         self.scene_hier_model.clear()
         
-        # 1. Add Scene Items at the very top
+        # 1. Add Scene Items & AYON items at the very top when files_only is False
         for s_item in self._scene_items:
             label = s_item.get("name") or s_item.get("label", "Note")
             std_item = QStandardItem(label)
             std_item.setData(s_item.get("id"), Qt.UserRole)
             std_item.setData(True, Qt.UserRole + 1)
             self.scene_hier_model.appendRow(std_item)
+
+        if not self.btn_files_only.isChecked():
+            all_items = getattr(self.main_model, "all_items", getattr(self.main_model, "items", []))
+            for item in all_items:
+                if getattr(item, "is_ayon_item", False):
+                    lbl = item.label or item.filename
+                    std_item = QStandardItem(lbl)
+                    path_val = item.file_path if item.file_path else (getattr(item, "ayon_path", "") or lbl)
+                    std_item.setData(path_val, Qt.UserRole)
+                    std_item.setData(True, Qt.UserRole + 1)
+                    self.scene_hier_model.appendRow(std_item)
             
         # 2. Add Project Structure
         # To avoid building the entire filesystem, we'll only add items from main_model.items
@@ -718,7 +744,8 @@ class FilterPanel(QWidget):
         model = self.proxy.sourceModel()
         
         for p in paths:
-            is_path = isinstance(p, str) and (os.sep in p or "/" in p or os.path.exists(p))
+            is_ayon = isinstance(p, str) and (p.startswith("ayon://") or "ayon" in p.lower())
+            is_path = isinstance(p, str) and not is_ayon and (os.sep in p or "/" in p or os.path.exists(p))
             norm_p = os.path.normpath(os.path.abspath(p)) if is_path else p
             source_idx = QModelIndex()
             
@@ -737,11 +764,13 @@ class FilterPanel(QWidget):
                         is_scene_item = idx.data(Qt.UserRole + 1)
                         
                         if is_scene_item:
-                            if isinstance(val, str) and val.lower() == norm_p_lower:
+                            if isinstance(val, str) and (val.lower() == norm_p_lower or str(val) == str(p)):
+                                return idx
+                            elif val == norm_p:
                                 return idx
                         else:
                             if isinstance(val, str):
-                                val_norm = os.path.normpath(os.path.abspath(val)).lower()
+                                val_norm = os.path.normpath(os.path.abspath(val)).lower() if (os.sep in val or "/" in val or os.path.exists(val)) and not val.startswith("ayon://") else val.lower()
                                 if val_norm == norm_p_lower:
                                     return idx
                             elif val == norm_p:
@@ -981,6 +1010,30 @@ class FilterPanel(QWidget):
         act_back.triggered.connect(lambda: self.move_front_back_requested.emit("back", paths))
         menu.addAction(act_back)
         
+        # Check for AYON items in selection
+        ayon_items_in_sel = []
+        all_items = getattr(self.main_model, "all_items", self.main_model.items)
+        for idx in indexes:
+            if idx.column() == 0:
+                source_idx = self.proxy.mapToSource(idx)
+                val = source_idx.data(Qt.UserRole)
+                if val:
+                    for it in all_items:
+                        if getattr(it, "is_ayon_item", False):
+                            path_val = it.file_path if it.file_path else (getattr(it, "ayon_path", "") or it.label or it.filename)
+                            lbl = it.label or it.filename
+                            r_id = getattr(it, "repre_id", "")
+                            if val in (path_val, lbl, r_id) or (isinstance(val, str) and (val == path_val or val == lbl or val.lower() == str(path_val).lower())):
+                                if it not in ayon_items_in_sel:
+                                    ayon_items_in_sel.append(it)
+
+        if ayon_items_in_sel:
+            menu.addSeparator()
+            act_del_ayon = QAction("Delete AYON Item" if len(ayon_items_in_sel) == 1 else "Delete AYON Items", self)
+            act_del_ayon.setShortcut("Delete")
+            act_del_ayon.triggered.connect(lambda checked=False, items_to_del=ayon_items_in_sel: self.main_model.remove_items(items_to_del))
+            menu.addAction(act_del_ayon)
+            
         menu.exec(self.tree.viewport().mapToGlobal(pos))
 
     def _on_shortcut_open(self):
@@ -999,6 +1052,43 @@ class FilterPanel(QWidget):
                     paths.append(path)
         if paths:
             self._on_action_open(paths)
+
+    def _on_shortcut_delete(self):
+        sel_model = self.tree.selectionModel()
+        if not sel_model:
+            return
+        selected_indexes = sel_model.selectedRows()
+        if not selected_indexes:
+            return
+            
+        ayon_items_to_delete = []
+        scene_ids_to_delete = []
+        all_items = getattr(self.main_model, "all_items", self.main_model.items)
+        
+        for idx in selected_indexes:
+            if idx.column() == 0:
+                source_idx = self.proxy.mapToSource(idx)
+                val = source_idx.data(Qt.UserRole)
+                if not val:
+                    continue
+                is_scene = source_idx.data(Qt.UserRole + 1)
+                if is_scene and (not isinstance(val, str) or not val.startswith("ayon://")):
+                    scene_ids_to_delete.append(str(val))
+                    
+                for item in all_items:
+                    if getattr(item, "is_ayon_item", False):
+                        path_val = item.file_path if item.file_path else (getattr(item, "ayon_path", "") or item.label or item.filename)
+                        lbl = item.label or item.filename
+                        r_id = getattr(item, "repre_id", "")
+                        if val in (path_val, lbl, r_id) or (isinstance(val, str) and (val == path_val or val == lbl or val.lower() == str(path_val).lower())):
+                            if item not in ayon_items_to_delete:
+                                ayon_items_to_delete.append(item)
+                                
+        if ayon_items_to_delete:
+            self.main_model.remove_items(ayon_items_to_delete)
+
+        if scene_ids_to_delete:
+            self.delete_scene_items_requested.emit(scene_ids_to_delete)
 
     def _on_action_reveal(self, paths):
         import subprocess

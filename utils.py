@@ -262,3 +262,168 @@ def apply_capitalization(text, style):
 
     return text
 
+def resolve_middle_frame_source_file(file_path):
+    """
+    Given a file path or sequence pattern, returns the middle frame file path on disk.
+    """
+    if not file_path or not isinstance(file_path, str):
+        return None
+    norm_path = os.path.normpath(file_path)
+    if os.path.isfile(norm_path):
+        dir_name = os.path.dirname(norm_path)
+        base_name = os.path.basename(norm_path)
+        counter = get_sequence_counter(base_name)
+        if counter and os.path.isdir(dir_name):
+            stem = strip_sequence_counter(base_name).lower()
+            ext = os.path.splitext(base_name)[1].lower()
+            matching = []
+            try:
+                for f in os.listdir(dir_name):
+                    if f.lower().endswith(ext):
+                        if strip_sequence_counter(f).lower() == stem:
+                            matching.append(os.path.join(dir_name, f))
+            except Exception:
+                pass
+            if matching:
+                matching.sort()
+                return matching[len(matching) // 2]
+        return norm_path
+
+    # If file_path does not exist directly as a single file (e.g., sequence pattern like comp.%04d.exr)
+    dir_name = os.path.dirname(norm_path)
+    if os.path.isdir(dir_name):
+        base_name = os.path.basename(norm_path)
+        stem = strip_sequence_counter(base_name).lower()
+        ext = os.path.splitext(base_name)[1].lower()
+        matching = []
+        try:
+            for f in os.listdir(dir_name):
+                if not ext or f.lower().endswith(ext):
+                    if not stem or strip_sequence_counter(f).lower() == stem:
+                        matching.append(os.path.join(dir_name, f))
+        except Exception:
+            pass
+        if matching:
+            matching.sort()
+            return matching[len(matching) // 2]
+
+    return None
+
+def ensure_repre_middle_frame_thumbnail(item, project_name, secrets_or_config=None, ayon_client=None):
+    """
+    Ensure an AYON representation item has a thumbnail and metadata (width/height from ffprobe).
+    If AYON has no thumbnail representation, pick a middle frame from the file using ffmpeg/ffprobe
+    and store it in the AYON Thumbnails cache.
+    """
+    if not item or not getattr(item, "is_ayon_item", False):
+        return None
+
+    secrets_or_config = secrets_or_config or {}
+    if not isinstance(getattr(item, "metadata", None), dict):
+        item.metadata = {}
+    
+    # 1. Resolve AYON Thumbnails cache root
+    cache_root = secrets_or_config.get("ayon_thumbnails_cache", "")
+    if not cache_root:
+        cache_root = "_ayon_thumbs_cache"
+    cache_root = expand_env_vars(cache_root)
+    if not os.path.isabs(cache_root):
+        cache_root = os.path.abspath(cache_root)
+
+    project_cache_dir = os.path.join(cache_root, project_name or "default")
+    os.makedirs(project_cache_dir, exist_ok=True)
+
+    rep_id = getattr(item, "repre_id", "")
+    import hashlib
+    thumb_filename = f"{rep_id}.jpg" if rep_id else f"repre_{hashlib.md5((item.file_path or '').encode('utf-8')).hexdigest()}.jpg"
+    target_path = os.path.join(project_cache_dir, thumb_filename).replace("\\", "/")
+
+    ffprobe_path = expand_env_vars(secrets_or_config.get("ffprobe_path", "ffprobe.exe"))
+
+    # Try fetching ffprobe metadata from source file to get accurate width/height
+    file_path = item.file_path or ""
+    source_file = None
+    if file_path and not file_path.startswith("ayon://"):
+        source_file = resolve_middle_frame_source_file(file_path)
+
+    meta = None
+    if source_file and os.path.exists(source_file):
+        try:
+            from logic.metadata import get_image_info_metadata
+            meta = get_image_info_metadata(source_file, ffprobe_path, None)
+            if meta:
+                item.metadata.update(meta)
+        except Exception:
+            pass
+
+    def _set_thumb(qimg, path):
+        if qimg and not qimg.isNull():
+            item.thumbnail_image = qimg
+            item.conversion_thumb_path = path
+            if not item.metadata.get("width") or not item.metadata.get("height"):
+                item.metadata["width"] = qimg.width()
+                item.metadata["height"] = qimg.height()
+            return qimg
+        return None
+
+    # 2. Check if already cached in AYON Thumbnails cache
+    if os.path.exists(target_path) and os.path.getsize(target_path) > 0:
+        qimg = generate_thumbnail_image(target_path, 150)
+        res = _set_thumb(qimg, target_path)
+        if res:
+            return res
+
+    # 3. Try fetching thumbnail from AYON if thumbnail_id exists
+    thumb_id = getattr(item, "thumbnail_id", None)
+    if thumb_id and ayon_client:
+        try:
+            import ayon_api
+            thumbnail = ayon_api.get_thumbnail_by_id(project_name, thumb_id)
+            if thumbnail and getattr(thumbnail, "content", None):
+                from PySide6.QtGui import QImage
+                image = QImage()
+                if image.loadFromData(thumbnail.content):
+                    image.save(target_path, "JPG")
+                    qimg = generate_thumbnail_image(target_path, 150)
+                    res = _set_thumb(qimg, target_path)
+                    if res:
+                        return res
+        except Exception:
+            pass
+
+    # 4. Fallback: Extract middle frame from file using ffmpeg/ffprobe
+    if not source_file or not os.path.exists(source_file):
+        return None
+
+    ffmpeg_path = expand_env_vars(secrets_or_config.get("ffmpeg_path", "ffmpeg.exe"))
+    ext = os.path.splitext(source_file)[1].lower()
+
+    # Standard web/Qt images (jpg, png, bmp)
+    if ext in (".jpg", ".jpeg", ".png", ".bmp"):
+        qimg = generate_thumbnail_image(source_file, 150)
+        if qimg:
+            qimg.save(target_path, "JPG")
+            return _set_thumb(qimg, target_path)
+
+    # Videos / EXR / DPX / TGA / etc.
+    duration = None
+    if meta:
+        duration = meta.get("duration")
+        if not duration and "nb_frames" in meta and "framerate" in meta:
+            try:
+                duration = float(meta["nb_frames"]) / float(meta["framerate"])
+            except Exception:
+                pass
+
+    generated_path = generate_video_thumbnail(
+        source_file, ffmpeg_path, frame_mode="Middle", duration=duration, out_path=target_path
+    )
+
+    if generated_path and os.path.exists(generated_path) and os.path.getsize(generated_path) > 0:
+        qimg = generate_thumbnail_image(generated_path, 150)
+        return _set_thumb(qimg, generated_path)
+
+    return None
+
+
+

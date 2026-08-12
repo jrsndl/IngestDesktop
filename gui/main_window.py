@@ -416,6 +416,10 @@ class MainWindow(QMainWindow):
         self.ayon_panel.show_thumbs_toggled.connect(self._on_show_thumbs_toggled)
         self.ayon_panel.task_status_change_requested.connect(self._on_ayon_task_status_change)
         self.ayon_panel.version_status_change_requested.connect(self._on_ayon_version_status_change)
+        self.ayon_panel.get_folder_repres_requested.connect(self._on_get_folder_repres)
+        self.ayon_panel.get_task_repre_requested.connect(self._on_get_task_repre)
+        self.ayon_panel.get_product_repre_requested.connect(self._on_get_product_repre)
+        self.ayon_panel.get_repre_repre_requested.connect(self._on_get_repre_repre)
         self.h_splitter.addWidget(self.ayon_panel)
 
         # 3. Center Area (Thumbnails + Spreadsheet)
@@ -3879,6 +3883,10 @@ class MainWindow(QMainWindow):
                 if hasattr(item, "uuid") and (not hasattr(item, "data") or callable(item.data)):
                     selected_paths.append(item.uuid)
                     continue
+                if hasattr(item, "data") and getattr(item.data, "is_ayon_item", False):
+                    path_val = item.data.file_path if item.data.file_path else (getattr(item.data, "ayon_path", "") or item.data.label or item.data.filename)
+                    selected_paths.append(path_val)
+                    continue
                 try:
                     if is_csv:
                         # Only items that are in tagged_items exist in CSV mode
@@ -3982,6 +3990,7 @@ class MainWindow(QMainWindow):
             # We need to find which items in our model match these paths
             target_model = self.csv_preview_model if is_csv else self.model
             items_list = self.csv_preview_model.tagged_items if is_csv else self.model.items
+            all_items_list = getattr(self.model, "all_items", items_list)
             
             target_items = set()
             proxy = getattr(self.filter_panel, "proxy", None)
@@ -3989,33 +3998,46 @@ class MainWindow(QMainWindow):
             for p in paths:
                 if not isinstance(p, str):
                     continue
-                p_norm = os.path.normpath(os.path.abspath(p)).lower()
+                is_ayon_p = p.startswith("ayon://") or "ayon" in p.lower()
+                p_norm = p.lower() if is_ayon_p else os.path.normpath(os.path.abspath(p)).lower()
 
-                # 1. Check direct proxy cache map
-                if proxy and hasattr(proxy, "_path_to_item"):
-                    for item_path, item in proxy._path_to_item.items():
-                        item_norm = os.path.normpath(os.path.abspath(item_path)).lower()
-                        if item_norm == p_norm or item_norm.startswith(p_norm + os.sep):
+                # Check AYON items in all_items_list
+                for item in all_items_list:
+                    if getattr(item, "is_ayon_item", False):
+                        path_val = item.file_path if item.file_path else (getattr(item, "ayon_path", "") or item.label or item.filename)
+                        lbl = item.label or item.filename
+                        r_id = getattr(item, "repre_id", "")
+                        if p in (path_val, lbl, r_id) or p_norm in (path_val.lower(), lbl.lower(), r_id.lower()):
                             target_items.add(item)
+                            if item in self.thumb_area.item_to_thumb:
+                                self.thumb_area.item_to_thumb[item].setSelected(True)
 
-                # 2. Check items_list with normalized slash comparison & sequence matching
-                for item in items_list:
-                    item_norm = os.path.normpath(os.path.abspath(item.file_path)).lower()
-                    if item_norm == p_norm or item_norm.startswith(p_norm + os.sep) or p_norm.startswith(item_norm):
-                        target_items.add(item)
-                    else:
-                        item_dir = os.path.dirname(item_norm)
-                        p_dir = os.path.dirname(p_norm)
-                        if item_dir == p_dir:
-                            p_ext = os.path.splitext(p_norm)[1].lower()
-                            it_ext = os.path.splitext(item_norm)[1].lower()
-                            if p_ext == it_ext:
-                                from utils import strip_sequence_counter
-                                import re
-                                p_base = strip_sequence_counter(re.sub(r"([._]v|v)(\d+)", "", os.path.basename(p_norm), flags=re.IGNORECASE))
-                                it_base = strip_sequence_counter(re.sub(r"([._]v|v)(\d+)", "", os.path.basename(item_norm), flags=re.IGNORECASE))
-                                if p_base and it_base and p_base == it_base:
-                                    target_items.add(item)
+                if not is_ayon_p:
+                    # 1. Check direct proxy cache map
+                    if proxy and hasattr(proxy, "_path_to_item"):
+                        for item_path, item in proxy._path_to_item.items():
+                            item_norm = os.path.normpath(os.path.abspath(item_path)).lower()
+                            if item_norm == p_norm or item_norm.startswith(p_norm + os.sep):
+                                target_items.add(item)
+
+                    # 2. Check items_list with normalized slash comparison & sequence matching
+                    for item in items_list:
+                        item_norm = os.path.normpath(os.path.abspath(item.file_path)).lower()
+                        if item_norm == p_norm or item_norm.startswith(p_norm + os.sep) or p_norm.startswith(item_norm):
+                            target_items.add(item)
+                        else:
+                            item_dir = os.path.dirname(item_norm)
+                            p_dir = os.path.dirname(p_norm)
+                            if item_dir == p_dir:
+                                p_ext = os.path.splitext(p_norm)[1].lower()
+                                it_ext = os.path.splitext(item_norm)[1].lower()
+                                if p_ext == it_ext:
+                                    from utils import strip_sequence_counter
+                                    import re
+                                    p_base = strip_sequence_counter(re.sub(r"([._]v|v)(\d+)", "", os.path.basename(p_norm), flags=re.IGNORECASE))
+                                    it_base = strip_sequence_counter(re.sub(r"([._]v|v)(\d+)", "", os.path.basename(item_norm), flags=re.IGNORECASE))
+                                    if p_base and it_base and p_base == it_base:
+                                        target_items.add(item)
 
             for i, item in enumerate(items_list):
                 if item in target_items:
@@ -4030,15 +4052,22 @@ class MainWindow(QMainWindow):
                     if item in self.thumb_area.item_to_thumb:
                         self.thumb_area.item_to_thumb[item].setSelected(True)
             
-            # 3. Sync Scene Items (Backdrops/Notes)
+            # 3. Sync Scene Items (Backdrops/Notes) & AYON Items by path/ID
             for p in paths:
                 if not isinstance(p, str) or not (os.path.isabs(p) or os.path.exists(p)):
-                    # Check for scene items by UUID
+                    # Check for scene items by UUID or AYON items
                     try:
                         for scene_item in self.thumb_area.scene.items():
                             if hasattr(scene_item, "uuid") and scene_item.uuid == p:
                                 scene_item.setSelected(True)
                                 break
+                            if hasattr(scene_item, "data") and getattr(scene_item.data, "is_ayon_item", False):
+                                it_data = scene_item.data
+                                path_val = it_data.file_path if it_data.file_path else (getattr(it_data, "ayon_path", "") or it_data.label or it_data.filename)
+                                lbl = it_data.label or it_data.filename
+                                r_id = getattr(it_data, "repre_id", "")
+                                if p in (path_val, lbl, r_id) or (isinstance(p, str) and p.lower() in (path_val.lower(), lbl.lower(), r_id.lower())):
+                                    scene_item.setSelected(True)
                     except (RuntimeError, AttributeError):
                         continue
             
@@ -5135,8 +5164,109 @@ class MainWindow(QMainWindow):
                     if task_success:
                         self.ayon_panel.update_task_status_in_tree(task_id, new_status)
                         self.log_message(f"Updated status for task '{task_name or task_id}' to '{new_status}'.", "success")
-                    else:
-                        self.log_message(f"Failed to update status for task '{task_name or task_id}' in AYON.", "error")
+
+    def _on_get_folder_repres(self, folder_list):
+        proj_name = self.ayon_panel.combo_project.currentText()
+        if not proj_name or not folder_list:
+            return
+        if not hasattr(self, "_ayon_repre_threads"):
+            self._ayon_repre_threads = []
+        thread = AyonGetRepreThread(self.ayon, proj_name, "folder", folder_list, self.config, secrets=self.secrets)
+        thread.finished_items.connect(self._on_ayon_items_resolved)
+        self._ayon_repre_threads.append(thread)
+        thread.start()
+
+    def _on_get_task_repre(self, task_data):
+        proj_name = self.ayon_panel.combo_project.currentText()
+        if not proj_name or not task_data:
+            return
+        if not hasattr(self, "_ayon_repre_threads"):
+            self._ayon_repre_threads = []
+        thread = AyonGetRepreThread(self.ayon, proj_name, "task", task_data, self.config, secrets=self.secrets)
+        thread.finished_items.connect(self._on_ayon_items_resolved)
+        self._ayon_repre_threads.append(thread)
+        thread.start()
+
+    def _on_get_product_repre(self, product_data):
+        proj_name = self.ayon_panel.combo_project.currentText()
+        if not proj_name or not product_data:
+            return
+        if not hasattr(self, "_ayon_repre_threads"):
+            self._ayon_repre_threads = []
+        thread = AyonGetRepreThread(self.ayon, proj_name, "product", product_data, self.config, secrets=self.secrets)
+        thread.finished_items.connect(self._on_ayon_items_resolved)
+        self._ayon_repre_threads.append(thread)
+        thread.start()
+
+    def _on_get_repre_repre(self, repre_data):
+        proj_name = self.ayon_panel.combo_project.currentText()
+        if not proj_name or not repre_data:
+            return
+        if not hasattr(self, "_ayon_repre_threads"):
+            self._ayon_repre_threads = []
+        thread = AyonGetRepreThread(self.ayon, proj_name, "repre", repre_data, self.config, secrets=self.secrets)
+        thread.finished_items.connect(self._on_ayon_items_resolved)
+        self._ayon_repre_threads.append(thread)
+        thread.start()
+
+    def _on_ayon_items_resolved(self, items):
+        if not items:
+            return
+
+        sec_cfg = dict(self.config or {})
+        sec_cfg.update(getattr(self, "secrets", {}) or {})
+        proj_name = self.ayon_panel.combo_project.currentText() if hasattr(self, "ayon_panel") else ""
+        for item in items:
+            if getattr(item, "is_ayon_item", False) and not getattr(item, "thumbnail_image", None) and not getattr(item, "thumbnail", None):
+                try:
+                    from utils import ensure_repre_middle_frame_thumbnail
+                    ensure_repre_middle_frame_thumbnail(item, proj_name, sec_cfg, ayon_client=getattr(self, "ayon", None))
+                except Exception:
+                    pass
+
+        existing_all = getattr(self.model, "all_items", self.model.items)
+        existing_keys = set()
+        for item in existing_all:
+            if getattr(item, "is_ayon_item", False):
+                r_id = getattr(item, "repre_id", "")
+                f_path = (item.file_path or "").lower()
+                lbl = (item.label or "").lower()
+                if r_id:
+                    existing_keys.add(f"id:{r_id}")
+                if f_path:
+                    existing_keys.add(f"path:{f_path}")
+                if lbl:
+                    existing_keys.add(f"lbl:{lbl}")
+
+        unique_items = []
+        for item in items:
+            r_id = getattr(item, "repre_id", "")
+            f_path = (item.file_path or "").lower()
+            lbl = (item.label or "").lower()
+
+            is_dup = False
+            if r_id and f"id:{r_id}" in existing_keys:
+                is_dup = True
+            elif f_path and f"path:{f_path}" in existing_keys:
+                is_dup = True
+            elif lbl and f"lbl:{lbl}" in existing_keys:
+                is_dup = True
+
+            if not is_dup:
+                if r_id: existing_keys.add(f"id:{r_id}")
+                if f_path: existing_keys.add(f"path:{f_path}")
+                if lbl: existing_keys.add(f"lbl:{lbl}")
+                unique_items.append(item)
+
+        if not unique_items:
+            return
+
+        self.model.add_items(unique_items)
+        if hasattr(self, "thumb_area") and self.thumb_area:
+            self.thumb_area.rearrange_items()
+            
+        if hasattr(self, "filter_panel") and self.filter_panel:
+            self.filter_panel.refresh_views_if_active()
 
     def _get_parse_target(self, item, parse_mode):
         """Helper to compute target string for regex matching according to parse_mode."""
@@ -6012,5 +6142,213 @@ class AyonThumbnailDownloadThread(QThread):
         if download_count > 0 or skip_count > 0:
             self.log.emit(f"AYON task thumbnails update finished. Downloaded: {download_count}, Skipped: {skip_count}")
         self.finished.emit()
+
+
+class AyonGetRepreThread(QThread):
+    finished_items = Signal(list)
+
+    def __init__(self, ayon_client, project_name, mode, target_data, config, secrets=None):
+        super().__init__()
+        self.ayon_client = ayon_client
+        self.project_name = project_name
+        self.mode = mode
+        self.target_data = target_data
+        self.config = config
+        self.secrets = secrets or {}
+
+    def run(self):
+        from logic.ayon_autopick import (
+            autopick_task, autopick_product, autopick_version, autopick_representation
+        )
+        from logic.image_model import ImageItem
+
+        task_type_prio = self.config.get("ayon_item_task_type_priority", "Compositing Editing")
+        task_name_prio = self.config.get("ayon_item_task_name_priority", "comp")
+        prod_type_prio = self.config.get("ayon_item_product_type_priority", "review render plate")
+        prod_name_prio = self.config.get("ayon_item_product_name_priority", "main")
+        ver_mode = self.config.get("ayon_item_product_version", "Max Version")
+        ver_status = self.config.get("ayon_item_product_version_status", "")
+        repre_prio = self.config.get("ayon_item_repre_priority_extension", "mp4 mov png")
+        label_template = self.config.get("ayon_item_label", "{folder_name}/{task_name}/{product_name} v{version}")
+
+        items = []
+
+        def format_label(f_name, t_name, p_name, ver, r_name):
+            try:
+                return label_template.format(
+                    folder_name=f_name or "",
+                    task_name=t_name or "",
+                    product_name=p_name or "",
+                    version=ver or 1,
+                    representation=r_name or ""
+                )
+            except Exception:
+                return f"{f_name}/{t_name}/{p_name} v{ver}"
+
+        if self.mode == "product":
+            p = self.target_data
+            prod_id = p.get("id")
+            prod_name = p.get("name", "")
+            folder_id = p.get("folder_id") or p.get("folderId")
+            folder_name = p.get("folder_name") or p.get("folder_path") or ""
+            task_name = p.get("task_name") or ""
+            ver_id = p.get("version_id")
+            ver_num = p.get("version", 1)
+
+            if not ver_id and prod_id:
+                versions = self.ayon_client.get_versions_for_product(self.project_name, prod_id)
+                v_obj = autopick_version(versions, ver_mode, ver_status)
+                if v_obj:
+                    ver_id = v_obj.get("id")
+                    ver_num = v_obj.get("version", ver_num)
+
+            if ver_id:
+                repres = self.ayon_client.get_representations_for_version(self.project_name, ver_id)
+                rep = autopick_representation(repres, repre_prio)
+                if rep:
+                    path = rep.get("attrib", {}).get("path") or ""
+                    rep_name = rep.get("name", "")
+                    rep_id = rep.get("id", "")
+                    thumb_id = rep.get("thumbnail_id") or rep.get("thumbnailId") or rep.get("thumbnail")
+                    lbl = format_label(folder_name, task_name, prod_name, ver_num, rep_name)
+                    item = ImageItem(
+                        file_path=path or f"ayon://{self.project_name}/{folder_name}/{prod_name}.{rep_name}",
+                        label=lbl,
+                        version=ver_num,
+                        category="AYON",
+                        representation=rep_name,
+                        is_ayon_item=True
+                    )
+                    if rep_id:
+                        setattr(item, "repre_id", rep_id)
+                    if thumb_id:
+                        setattr(item, "thumbnail_id", thumb_id)
+                    items.append(item)
+
+        elif self.mode == "task":
+            t = self.target_data
+            task_id = str(t.get("id"))
+            task_name = t.get("name", "")
+            folder_id = t.get("folderId") or t.get("folder_id")
+            folder_path = t.get("folder_path") or ""
+
+            if folder_id:
+                products = self.ayon_client.get_products_for_folder(self.project_name, folder_id)
+                task_prods = [p for p in products if p.get("task_id") == task_id or p.get("task_name") == task_name]
+                candidates = task_prods if task_prods else products
+                p_obj = autopick_product(candidates, prod_type_prio, prod_name_prio)
+                if p_obj:
+                    prod_id = p_obj.get("id")
+                    prod_name = p_obj.get("name", "")
+                    versions = self.ayon_client.get_versions_for_product(self.project_name, prod_id)
+                    v_obj = autopick_version(versions, ver_mode, ver_status)
+                    if v_obj:
+                        ver_id = v_obj.get("id")
+                        ver_num = v_obj.get("version", 1)
+                        repres = self.ayon_client.get_representations_for_version(self.project_name, ver_id)
+                        rep = autopick_representation(repres, repre_prio)
+                        if rep:
+                            path = rep.get("attrib", {}).get("path") or ""
+                            rep_name = rep.get("name", "")
+                            rep_id = rep.get("id", "")
+                            thumb_id = rep.get("thumbnail_id") or rep.get("thumbnailId") or rep.get("thumbnail")
+                            lbl = format_label(folder_path, task_name, prod_name, ver_num, rep_name)
+                            item = ImageItem(
+                                file_path=path or f"ayon://{self.project_name}/{folder_path}/{prod_name}.{rep_name}",
+                                label=lbl,
+                                version=ver_num,
+                                category="AYON",
+                                representation=rep_name,
+                                is_ayon_item=True
+                            )
+                            if rep_id:
+                                setattr(item, "repre_id", rep_id)
+                            if thumb_id:
+                                setattr(item, "thumbnail_id", thumb_id)
+                            items.append(item)
+
+        elif self.mode == "folder":
+            folders = self.target_data if isinstance(self.target_data, list) else [self.target_data]
+            for f in folders:
+                folder_id = str(f.get("id"))
+                folder_path = f.get("path") or f.get("folder_path") or f.get("name") or ""
+                tasks = f.get("tasks", [])
+                picked_t = autopick_task(tasks, task_type_prio, task_name_prio)
+                task_id = str(picked_t.get("id")) if picked_t else None
+                task_name = picked_t.get("name", "") if picked_t else ""
+
+                products = self.ayon_client.get_products_for_folder(self.project_name, folder_id)
+                task_prods = [p for p in products if p.get("task_id") == task_id or p.get("task_name") == task_name] if task_id else []
+                candidates = task_prods if task_prods else products
+                p_obj = autopick_product(candidates, prod_type_prio, prod_name_prio)
+                if p_obj:
+                    prod_id = p_obj.get("id")
+                    prod_name = p_obj.get("name", "")
+                    versions = self.ayon_client.get_versions_for_product(self.project_name, prod_id)
+                    v_obj = autopick_version(versions, ver_mode, ver_status)
+                    if v_obj:
+                        ver_id = v_obj.get("id")
+                        ver_num = v_obj.get("version", 1)
+                        repres = self.ayon_client.get_representations_for_version(self.project_name, ver_id)
+                        rep = autopick_representation(repres, repre_prio)
+                        if rep:
+                            path = rep.get("attrib", {}).get("path") or ""
+                            rep_name = rep.get("name", "")
+                            rep_id = rep.get("id", "")
+                            thumb_id = rep.get("thumbnail_id") or rep.get("thumbnailId") or rep.get("thumbnail")
+                            lbl = format_label(folder_path, task_name, prod_name, ver_num, rep_name)
+                            item = ImageItem(
+                                file_path=path or f"ayon://{self.project_name}/{folder_path}/{prod_name}.{rep_name}",
+                                label=lbl,
+                                version=ver_num,
+                                category="AYON",
+                                representation=rep_name,
+                                is_ayon_item=True
+                            )
+                            if rep_id:
+                                setattr(item, "repre_id", rep_id)
+                            if thumb_id:
+                                setattr(item, "thumbnail_id", thumb_id)
+                            items.append(item)
+
+        elif self.mode == "repre":
+            rep = self.target_data
+            rep_id = rep.get("id", "")
+            path = rep.get("attrib", {}).get("path") or ""
+            rep_name = rep.get("name", "")
+            thumb_id = rep.get("thumbnail_id") or rep.get("thumbnailId") or rep.get("thumbnail")
+            ctx = rep.get("context") or {}
+            folder_name = ctx.get("folder", {}).get("name") if isinstance(ctx.get("folder"), dict) else (ctx.get("folder_name") or ctx.get("folder") or "")
+            task_name = ctx.get("task", {}).get("name") if isinstance(ctx.get("task"), dict) else (ctx.get("task_name") or ctx.get("task") or "")
+            prod_name = ctx.get("product", {}).get("name") if isinstance(ctx.get("product"), dict) else (ctx.get("product_name") or ctx.get("product") or "")
+            ver_num = ctx.get("version") or rep.get("version", 1)
+
+            lbl = format_label(folder_name, task_name, prod_name, ver_num, rep_name)
+            item = ImageItem(
+                file_path=path or f"ayon://{self.project_name}/{folder_name}/{prod_name}.{rep_name}",
+                label=lbl,
+                version=ver_num,
+                category="AYON",
+                representation=rep_name,
+                is_ayon_item=True
+            )
+            if rep_id:
+                setattr(item, "repre_id", rep_id)
+            if thumb_id:
+                setattr(item, "thumbnail_id", thumb_id)
+            items.append(item)
+
+        # Generate middle frame thumbnail for representation items missing AYON thumbnails
+        from utils import ensure_repre_middle_frame_thumbnail
+        sec_cfg = dict(self.config or {})
+        sec_cfg.update(self.secrets or {})
+        for item in items:
+            try:
+                ensure_repre_middle_frame_thumbnail(item, self.project_name, sec_cfg, ayon_client=self.ayon_client)
+            except Exception as e:
+                print(f"Error ensuring middle frame thumbnail for AYON item: {e}")
+
+        self.finished_items.emit(items)
+
 
 

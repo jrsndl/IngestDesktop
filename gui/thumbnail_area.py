@@ -1228,16 +1228,34 @@ class ThumbnailItem(QGraphicsObject):
             self.setToolTip("")
 
 
-    def boundingRect(self):
-        # 1. Calculate aspect ratio
-        w = self.data.metadata.get("width", 1)
-        h = self.data.metadata.get("height", 1)
+    def _get_aspect_ratio(self):
+        w = 1
+        h = 1
+        if self.data and isinstance(getattr(self.data, "metadata", None), dict):
+            w = self.data.metadata.get("width", 1)
+            h = self.data.metadata.get("height", 1)
         try:
             fw = float(w) if w is not None else 1.0
             fh = float(h) if h is not None else 1.0
-            aspect = fw / fh if fh > 0 else 1.0
         except (ValueError, TypeError):
-            aspect = 1.0
+            fw, fh = 1.0, 1.0
+
+        if (fw <= 1.0 or fh <= 1.0) and self.data:
+            thumb_img = getattr(self.data, "thumbnail_image", None)
+            thumb_pix = getattr(self.data, "thumbnail", None)
+            if thumb_img and not thumb_img.isNull():
+                fw = float(thumb_img.width())
+                fh = float(thumb_img.height())
+            elif thumb_pix and not thumb_pix.isNull():
+                fw = float(thumb_pix.width())
+                fh = float(thumb_pix.height())
+
+        aspect = fw / fh if fh > 0 else 1.0
+        return aspect
+
+    def boundingRect(self):
+        # 1. Calculate aspect ratio
+        aspect = self._get_aspect_ratio()
             
         # 2. Calculate height
         thumb_h = self.size / aspect
@@ -1274,15 +1292,7 @@ class ThumbnailItem(QGraphicsObject):
             scaled.scale(rect.size().toSize(), Qt.KeepAspectRatio)
             thumb_rect = QRectF(0, 0, scaled.width(), scaled.height())
         else:
-            w = self.data.metadata.get("width", 1)
-            h = self.data.metadata.get("height", 1)
-            try:
-                fw = float(w) if w is not None else 1.0
-                fh = float(h) if h is not None else 1.0
-                aspect = fw / fh if fh > 0 else 1.0
-            except (ValueError, TypeError):
-                aspect = 1.0
-            
+            aspect = self._get_aspect_ratio()
             if aspect > (rect.width() / rect.height()):
                 nw = rect.width()
                 nh = nw / aspect
@@ -1325,14 +1335,7 @@ class ThumbnailItem(QGraphicsObject):
             thumb_rect = QRectF(0, 0, scaled.width(), scaled.height())
         else:
             # Placeholder logic
-            w = self.data.metadata.get("width", 1)
-            h = self.data.metadata.get("height", 1)
-            try:
-                fw = float(w) if w is not None else 1.0
-                fh = float(h) if h is not None else 1.0
-                aspect = fw / fh if fh > 0 else 1.0
-            except (ValueError, TypeError):
-                aspect = 1.0
+            aspect = self._get_aspect_ratio()
             
             # Fit placeholder in rect with aspect ratio
             if aspect > (rect.width() / rect.height()):
@@ -1347,7 +1350,10 @@ class ThumbnailItem(QGraphicsObject):
 
         # 2. Draw placeholder or pixmap
         if not pixmap:
-            painter.fillRect(thumb_rect, QColor("#333333")) # Lighter gray for visibility
+            if getattr(self.data, "is_ayon_item", False):
+                painter.fillRect(thumb_rect, QColor("#000000"))
+            else:
+                painter.fillRect(thumb_rect, QColor("#333333"))
         else:
             painter.drawPixmap(thumb_rect, pixmap, QRectF(pixmap.rect()))
 
@@ -1358,27 +1364,36 @@ class ThumbnailItem(QGraphicsObject):
         elif lod < 0.6:
             base_w = 4
             
-        if self.isSelected():
-            sel_width = base_w + 2
-            pen = QPen(QColor("#ffffff"), sel_width)
+        if getattr(self.data, "is_ayon_item", False):
+            if self.isSelected():
+                sel_width = base_w + 3
+                pen = QPen(QColor("#00e5ff"), sel_width)
+            else:
+                pen = QPen(QColor("#00bcd4"), max(2, base_w))
             pen.setCosmetic(True)
             painter.setPen(pen)
+            painter.drawRect(thumb_rect.adjusted(-2, -2, 2, 2))
         else:
-            pen = QPen(QColor("#444444"), max(1, base_w // 2))
-            pen.setCosmetic(True)
-            painter.setPen(pen)
-        
-        painter.drawRect(thumb_rect.adjusted(-4, -4, 4, 4))
+            if self.isSelected():
+                sel_width = base_w + 2
+                pen = QPen(QColor("#ffffff"), sel_width)
+                pen.setCosmetic(True)
+                painter.setPen(pen)
+            else:
+                pen = QPen(QColor("#444444"), max(1, base_w // 2))
+                pen.setCosmetic(True)
+                painter.setPen(pen)
+            painter.drawRect(thumb_rect.adjusted(-4, -4, 4, 4))
 
-        # Inner Border (Tagging)
-        if self.data.is_tagged:
-            tag_color = QColor("#76ff03") if self.data.ayon_path else QColor("#558b2f")
-        else:
-            tag_color = QColor("#c62828")
-        tag_pen = QPen(tag_color, max(1, base_w // 2))
-        tag_pen.setCosmetic(True)
-        painter.setPen(tag_pen)
-        painter.drawRect(thumb_rect.adjusted(-2, -2, 2, 2))
+            # Inner Border (Tagging)
+            if self.data.is_tagged:
+                tag_color = QColor("#76ff03") if self.data.ayon_path else QColor("#558b2f")
+            else:
+                tag_color = QColor("#c62828")
+            tag_pen = QPen(tag_color, max(1, base_w // 2))
+            tag_pen.setCosmetic(True)
+            painter.setPen(tag_pen)
+            painter.drawRect(thumb_rect.adjusted(-2, -2, 2, 2))
         
         # 4. Label - Only if zoomed in and NOT editing
         if lod > 0.05 and not self.is_editing and getattr(self.scene(), "show_labels", True):
@@ -2392,7 +2407,8 @@ class ThumbnailArea(QWidget):
                     new_label = f"{prefix}{suffix}"
                 
                 try:
-                    row = self.model.items.index(thumb.data)
+                    all_items = getattr(self.model, "all_items", self.model.items)
+                    row = all_items.index(thumb.data)
                     idx = self.model.index(row, 2) # Column 2 is Label
                     self.model.setData(idx, new_label, Qt.EditRole)
                 except ValueError:
@@ -2426,8 +2442,9 @@ class ThumbnailArea(QWidget):
 
         # 0b. Check grouped items sharing the same group_key
         g_key = getattr(item_data, "group_key", None)
-        if g_key and hasattr(self, "model") and self.model and hasattr(self.model, "items"):
-            for other in self.model.items:
+        all_items = getattr(self.model, "all_items", getattr(self.model, "items", [])) if hasattr(self, "model") and self.model else []
+        if g_key and all_items:
+            for other in all_items:
                 if getattr(other, "group_key", None) == g_key:
                     o_fp = getattr(other, "file_path", "")
                     if o_fp and os.path.exists(o_fp) and o_fp.lower().endswith(MEDIA_EXTENSIONS):
@@ -2692,7 +2709,7 @@ class ThumbnailArea(QWidget):
         self.item_to_thumb.clear()
         
         if items is None and self.model:
-            items = self.model.items
+            items = getattr(self.model, "all_items", self.model.items)
             
         if not items: return
 
@@ -2721,43 +2738,45 @@ class ThumbnailArea(QWidget):
     def _on_rows_inserted(self, parent, first, last):
         font_size = self.slider_text_size.value()
         thumb_size = self.slider_thumb_size.value()
+        all_items = getattr(self.model, "all_items", self.model.items)
         
         for row in range(first, last + 1):
-            item_data = self.model.items[row]
-            if item_data not in self.item_to_thumb:
-                thumb = ThumbnailItem(item_data)
-                is_custom = getattr(item_data, "is_custom_size", False)
-                if not is_custom:
-                    size_to_use = thumb_size
-                    item_data.size = thumb_size
-                else:
-                    size_to_use = getattr(item_data, "size", thumb_size)
-                thumb.size = size_to_use
-                thumb.is_custom_size = is_custom
-                thumb.font_size = font_size
-                thumb.update_tooltip(self.tooltip_templates, self.model)
-                self.scene.addItem(thumb)
-                self.item_to_thumb[item_data] = thumb
+            if 0 <= row < len(all_items):
+                item_data = all_items[row]
+                if item_data not in self.item_to_thumb:
+                    thumb = ThumbnailItem(item_data)
+                    is_custom = getattr(item_data, "is_custom_size", False)
+                    if not is_custom:
+                        size_to_use = thumb_size
+                        item_data.size = thumb_size
+                    else:
+                        size_to_use = getattr(item_data, "size", thumb_size)
+                    thumb.size = size_to_use
+                    thumb.is_custom_size = is_custom
+                    thumb.font_size = font_size
+                    thumb.update_tooltip(self.tooltip_templates, self.model)
+                    self.scene.addItem(thumb)
+                    self.item_to_thumb[item_data] = thumb
         self.rearrange_items()
 
     def _on_rows_removed(self, parent, first, last):
-        # Items are still in the model at this point (aboutToBeRemoved)
+        all_items = getattr(self.model, "all_items", self.model.items)
         for row in range(first, last + 1):
-            item_data = self.model.items[row]
-            if item_data in self.item_to_thumb:
-                thumb = self.item_to_thumb.pop(item_data)
-                if hasattr(self, "active_players") and thumb in self.active_players:
-                    player = self.active_players.pop(thumb)
-                    player.clear_video()
-                    player.deleteLater()
-                self.scene.removeItem(thumb)
-        self.rearrange_items()
+            if 0 <= row < len(all_items):
+                item_data = all_items[row]
+                if item_data in self.item_to_thumb:
+                    thumb = self.item_to_thumb.pop(item_data)
+                    if hasattr(self, "active_players") and thumb in self.active_players:
+                        player = self.active_players.pop(thumb)
+                        player.clear_video()
+                        player.deleteLater()
+                    self.scene.removeItem(thumb)
 
     def _on_data_changed(self, top_left, bottom_right, roles=None):
-        # Refresh the labels of affected items using the mapping
+        all_items = getattr(self.model, "all_items", self.model.items)
         for row in range(top_left.row(), bottom_right.row() + 1):
-            if row < len(self.model.items):
-                item_data = self.model.items[row]
+            if 0 <= row < len(all_items):
+                item_data = all_items[row]
                 if item_data in self.item_to_thumb:
                     thumb = self.item_to_thumb[item_data]
                     thumb.cached_label = ""
@@ -2791,7 +2810,8 @@ class ThumbnailArea(QWidget):
                 show_reviews = win.config.get("show_reviews", True)
 
         visible_items = []
-        for item_data in self.model.items:
+        all_items = getattr(self.model, "all_items", self.model.items)
+        for item_data in all_items:
             item = self.item_to_thumb.get(item_data)
             if not item: continue
             
@@ -3206,12 +3226,27 @@ class ThumbnailArea(QWidget):
             elif event.key() in (Qt.Key_Delete, Qt.Key_Backspace):
                 if self.view.underMouse() or self.view.hasFocus():
                     selected = self.scene.selectedItems()
-                    # Only act when the entire selection is notes, backdrops, or drawings (not thumbnails)
                     notes = [it for it in selected if isinstance(it, (TextNoteItem, BackdropItem, DrawItem))]
-                    non_notes = [it for it in selected if not isinstance(it, (TextNoteItem, BackdropItem, DrawItem))]
-                    if notes and not non_notes:
-                        self.delete_selected_notes()
-                        self.scene_items_changed.emit()
+                    
+                    ayon_items_to_delete = []
+                    for it in selected:
+                        if hasattr(it, "data") and getattr(it.data, "is_ayon_item", False):
+                            ayon_items_to_delete.append(it.data)
+                            
+                    handled = False
+                    if notes:
+                        non_notes_non_ayon = [it for it in selected if not isinstance(it, (TextNoteItem, BackdropItem, DrawItem)) and not getattr(getattr(it, "data", None), "is_ayon_item", False)]
+                        if not non_notes_non_ayon:
+                            self.delete_selected_notes()
+                            self.scene_items_changed.emit()
+                            handled = True
+
+                    if ayon_items_to_delete:
+                        if self.model:
+                            self.model.remove_items(ayon_items_to_delete)
+                        handled = True
+
+                    if handled:
                         return True
         
         if event.type() == QEvent.Gesture:
@@ -3271,7 +3306,8 @@ class ThumbnailArea(QWidget):
         if new_label and new_label != item.data.label:
             # Update the source of truth (model)
             if self.model:
-                for i, m_item in enumerate(self.model.items):
+                all_items = getattr(self.model, "all_items", self.model.items)
+                for i, m_item in enumerate(all_items):
                     if m_item == item.data:
                         idx = self.model.index(i, 2)
                         self.model.setData(idx, new_label, Qt.EditRole)
@@ -3332,7 +3368,8 @@ class ThumbnailArea(QWidget):
         
         current_row = 0
         current_col = 0
-        for item_data in self.model.items:
+        all_items = getattr(self.model, "all_items", self.model.items)
+        for item_data in all_items:
             item = self.item_to_thumb.get(item_data)
             if not item: continue
             
@@ -3566,7 +3603,8 @@ class ThumbnailArea(QWidget):
         if not target_items:
             # Arrange all visible ThumbnailItems
             target_items = []
-            for item_data in self.model.items:
+            all_items = getattr(self.model, "all_items", self.model.items)
+            for item_data in all_items:
                 item = self.item_to_thumb.get(item_data)
                 if item and item.isVisible():
                     target_items.append(item)
