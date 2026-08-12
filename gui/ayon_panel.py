@@ -221,14 +221,14 @@ class TaskStatusDialog(QDialog):
 
 
 class AyonPanel(QWidget):
-    # Signal emitted when a task is double-clicked: (folder_path, task_name, task_type, assignee)
-    task_selected = Signal(str, str, str, str) 
+    # Signal emitted when a task is double-clicked: (folder_path, task_name, task_type, assignee, task_data)
+    task_selected = Signal(str, str, str, str, dict) 
     # Context menu signals
     unassign_requested = Signal(str) # full_ayon_path
     select_assigned_requested = Signal(str) # full_ayon_path
     clear_all_requested = Signal()
     info_requested = Signal(str) # folder_id
-    product_double_clicked = Signal(str, str, str, str) # (folder_path, task_name, task_type, variant)
+    product_double_clicked = Signal(str, str, str, str, dict) # (folder_path, task_name, task_type, variant, task_data)
     auto_assign_requested = Signal()
     project_changed = Signal(str)
     representations_requested = Signal(str, str) # (project_name, product_id)
@@ -584,9 +584,17 @@ class AyonPanel(QWidget):
             # Store task data and reference to parent folder path
             full_path = f"{folder.get('path')}/{task.get('name')}"
             t_thumb_id = task.get("thumbnailId") or folder.get("thumbnailId")
+            
+            attrib = folder.get("attrib", {})
+            desc = attrib.get("description", "")
+            
             task_data = {
                 **task,
                 "folder_path": folder.get('path'),
+                "folder_name": folder.get('label') or folder.get('name', 'Unknown'),
+                "folder_type": folder.get('type', 'Folder'),
+                "folder_status": folder.get('status', ''),
+                "folder_description": desc,
                 "full_ayon_path": full_path,
                 "thumbnailId": t_thumb_id
             }
@@ -693,7 +701,7 @@ class AyonPanel(QWidget):
             task_name = data.get('name')
             task_type = data.get('type')
             assignee = ", ".join(data.get('assignees', []))
-            self.task_selected.emit(folder_path, task_name, task_type, assignee)
+            self.task_selected.emit(folder_path, task_name, task_type, assignee, data)
 
     def _on_product_double_click(self, index):
         """Calculate variant and emit product_double_clicked signal."""
@@ -727,7 +735,7 @@ class AyonPanel(QWidget):
             folder_path = data.get('folder_path')
             task_name = data.get('name')
             task_type = data.get('type')
-            self.product_double_clicked.emit(folder_path, task_name, task_type, variant)
+            self.product_double_clicked.emit(folder_path, task_name, task_type, variant, data)
 
     def _on_selection_changed(self, selected, deselected):
         indexes = self.tree.selectionModel().selectedIndexes()
@@ -1184,13 +1192,17 @@ class AyonPanel(QWidget):
             if not is_assigned:
                 assign_action = QAction(f"Assign path to selection", self)
                 assign_action.triggered.connect(lambda: self.task_selected.emit(
-                    data.get('folder_path'), data.get('name'), data.get('type'), ", ".join(data.get('assignees', []))
+                    data.get('folder_path'), data.get('name'), data.get('type'), ", ".join(data.get('assignees', [])), data
                 ))
                 menu.addAction(assign_action)
             else:
                 unassign_action = QAction(f"Unassign path", self)
                 unassign_action.triggered.connect(lambda: self.unassign_requested.emit(ayon_path))
                 menu.addAction(unassign_action)
+                
+                select_all_action = QAction("Select All Assigned", self)
+                select_all_action.triggered.connect(lambda checked=False, p=ayon_path: self.select_assigned_requested.emit(p))
+                menu.addAction(select_all_action)
             
         if 'folderId' in data: # Task item
             get_task_repre_action = QAction("Get Task Repre", self)

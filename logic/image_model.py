@@ -48,6 +48,7 @@ class ImageItem:
         self.position = (0, 0) # (x, y)
         self.size = 150
         self.is_manually_moved = False
+        self.has_placed_position = False
         self.is_custom_size = False
         self.preset_name = preset_name
         self.variant = variant
@@ -114,7 +115,7 @@ class ImageTableModel(QAbstractTableModel):
 
     @property
     def items(self):
-        return [item for item in self._items if not getattr(item, "is_ayon_item", False)]
+        return self._items
 
     @items.setter
     def items(self, value):
@@ -262,6 +263,12 @@ class ImageTableModel(QAbstractTableModel):
             else:
                 # For EditRole in non-editable columns
                 return None
+                
+        elif role == Qt.ToolTipRole:
+            template = getattr(self, "tooltip_template", "")
+            if template:
+                return self.expand_tokens(template, item)
+            return None
         
         elif role == Qt.CheckStateRole and col == 0:
             return Qt.Checked if item.is_tagged else Qt.Unchecked
@@ -620,11 +627,56 @@ class ImageTableModel(QAbstractTableModel):
         if not prod_name_val and (not text or "{product_name}" in text.lower() or "{prod_name}" in text.lower()):
             prod_name_val = self._expand_string(self.product_name_template, item, use_global_camel=True)
 
+        folder_path_val = item.metadata.get("folder_path") or ayon_folder_path or item.ayon_path or ""
+        folder_name_val = item.metadata.get("folder_name") or folder_name or ""
+        folder_desc_val = item.metadata.get("folder_description") or ""
+        folder_status_val = item.metadata.get("folder_status") or ""
+
+        task_name_val = item.ayon_task_name or item.metadata.get("task_name") or task_name or ""
+        task_type_val = item.ayon_task_type or item.metadata.get("task_type") or ""
+        task_desc_val = item.metadata.get("task_description") or ""
+        task_status_val = item.metadata.get("task_status") or ""
+
+        prod_name_val_final = item.metadata.get("product_name") or prod_name_val
+        prod_type_val = item.product_type or item.metadata.get("product_type") or ""
+        prod_ver_val = item.metadata.get("product_version") or (f"v{item.effective_version:03d}" if isinstance(item.effective_version, int) else str(item.effective_version))
+        prod_status_val = item.metadata.get("product_status") or ""
+        prod_source_val = item.metadata.get("product_source") or ""
+
+        version_val = str(item.effective_version)
+        repre_val = item.representation or item.metadata.get("representation") or repre_expanded
+
         # Replacement mapping
         replacements = {
-            "{product_type}": item.product_type or "",
-            "{task_name}": task_name,
-            "{folder_name}": folder_name,
+            "{folder_path}": folder_path_val,
+            "{folder path}": folder_path_val,
+            "{folder_name}": folder_name_val,
+            "{folder name}": folder_name_val,
+            "{folder_description}": folder_desc_val,
+            "{folder description}": folder_desc_val,
+            "{folder_status}": folder_status_val,
+            "{folder status}": folder_status_val,
+            "{task_name}": task_name_val,
+            "{task name}": task_name_val,
+            "{task_type}": task_type_val,
+            "{task type}": task_type_val,
+            "{task_description}": task_desc_val,
+            "{task description}": task_desc_val,
+            "{task_status}": task_status_val,
+            "{task status}": task_status_val,
+            "{product_name}": prod_name_val_final,
+            "{product name}": prod_name_val_final,
+            "{product_type}": prod_type_val,
+            "{product type}": prod_type_val,
+            "{product_version}": prod_ver_val,
+            "{product version}": prod_ver_val,
+            "{product_status}": prod_status_val,
+            "{product status}": prod_status_val,
+            "{product_source}": prod_source_val,
+            "{product source}": prod_source_val,
+            "{Product Source}": prod_source_val,
+            "{version}": version_val,
+            "{representation}": repre_val,
             "{variant_parsed}": item.metadata.get("variant_parsed", ""),
             "{sequence}": item.metadata.get("sequence", ""),
             "{episode}": item.metadata.get("episode", ""),
@@ -633,13 +685,12 @@ class ImageTableModel(QAbstractTableModel):
             "{AYON_PATH}": item.ayon_path or "",
             "{ayon_path_val}": item.ayon_path or "",
             "{ayon_folder_path}": ayon_folder_path,
-            "{product_name}": prod_name_val,
-            "{PRODUCT_NAME}": prod_name_val,
-            "{prod_name}": prod_name_val,
-            "{PROD_NAME}": prod_name_val,
-            "{item.version}": str(item.effective_version),
-            "{ayon_task_name}": item.ayon_task_name or "",
-            "{ayon_task_type}": item.ayon_task_type or "",
+            "{PRODUCT_NAME}": prod_name_val_final,
+            "{prod_name}": prod_name_val_final,
+            "{PROD_NAME}": prod_name_val_final,
+            "{item.version}": version_val,
+            "{ayon_task_name}": task_name_val,
+            "{ayon_task_type}": task_type_val,
             "{ayon_task_assignee}": item.ayon_task_assignee or "",
             "{label}": item.label or "",
             "{variant}": variant_val,

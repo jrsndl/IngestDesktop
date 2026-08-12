@@ -5,21 +5,62 @@ from PySide6.QtGui import QAction
 from PySide6.QtCore import Signal, Qt, QSize, QEvent, QModelIndex, QItemSelection, QItemSelectionModel
 
 class ScalingDelegate(QStyledItemDelegate):
-    def paint(self, painter, option, index):
-        pixmap = index.data(Qt.DecorationRole)
-        if pixmap:
-            # Scale to row height minus some padding
-            margin = 2
-            rect = option.rect.adjusted(margin, margin, -margin, -margin)
-            size = rect.size()
-            scaled_pixmap = pixmap.scaled(size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+    def __init__(self, parent=None, is_thumb_col=False):
+        super().__init__(parent)
+        self.is_thumb_col = is_thumb_col
+
+    def _is_group_start(self, index):
+        model = index.model()
+        row = index.row()
+        if row == 0: return False
+        
+        if not getattr(model, "show_grouped", False):
+            return False
             
-            # Center in rect
-            x = rect.x() + (rect.width() - scaled_pixmap.width()) // 2
-            y = rect.y() + (rect.height() - scaled_pixmap.height()) // 2
-            painter.drawPixmap(x, y, scaled_pixmap)
+        items = getattr(model, "items", [])
+        if row < len(items) and (row - 1) >= 0:
+            item = items[row]
+            prev_item = items[row-1]
+            g1 = getattr(item, "group_index", -1)
+            g2 = getattr(prev_item, "group_index", -1)
+            return g1 != g2
+        return False
+
+    def paint(self, painter, option, index):
+        opt = option
+        
+        is_start = self._is_group_start(index)
+        if is_start:
+            from PySide6.QtWidgets import QTableView
+            tv = option.widget
+            if isinstance(tv, QTableView):
+                h = tv.verticalHeader().defaultSectionSize()
+                gap = h // 2
+                # Draw gap background
+                from PySide6.QtGui import QColor
+                painter.fillRect(option.rect.x(), option.rect.y(), option.rect.width(), gap, QColor("#111111"))
+                
+                import copy
+                opt = copy.copy(option)
+                opt.rect = option.rect.adjusted(0, gap, 0, 0)
+
+        if self.is_thumb_col:
+            pixmap = index.data(Qt.DecorationRole)
+            if pixmap:
+                # Scale to row height minus some padding
+                margin = 2
+                rect = opt.rect.adjusted(margin, margin, -margin, -margin)
+                size = rect.size()
+                scaled_pixmap = pixmap.scaled(size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                
+                # Center in rect
+                x = rect.x() + (rect.width() - scaled_pixmap.width()) // 2
+                y = rect.y() + (rect.height() - scaled_pixmap.height()) // 2
+                painter.drawPixmap(x, y, scaled_pixmap)
+            else:
+                super().paint(painter, opt, index)
         else:
-            super().paint(painter, option, index)
+            super().paint(painter, opt, index)
 
     def sizeHint(self, option, index):
         pixmap = index.data(Qt.DecorationRole)
@@ -153,6 +194,7 @@ class SpreadsheetPanel(QWidget):
         # Filters state
         self._last_age_filter = (False, 0)
         self._last_search_text = ""
+        self._last_ignore_text = ""
 
     def setModel(self, standard_model, csv_model):
         self.standard_model = standard_model
@@ -194,10 +236,10 @@ class SpreadsheetPanel(QWidget):
         # Set row height for thumbnails
         self.table.verticalHeader().setDefaultSectionSize(40)
         
-        # Clear delegate from CSV mode (index 0)
-        self.table.setItemDelegateForColumn(0, QStyledItemDelegate(self.table))
-        # Set delegate for thumbnail column (index 1)
-        self.table.setItemDelegateForColumn(1, ScalingDelegate(self.table))
+        # Set delegates for all columns to handle row dividers
+        for col in range(self.table.model().columnCount()):
+            is_thumb = (col == 1)
+            self.table.setItemDelegateForColumn(col, ScalingDelegate(self.table, is_thumb_col=is_thumb))
         
         # Set columns to Interactive to allow user adjustment
         header = self.table.horizontalHeader()
@@ -234,7 +276,7 @@ class SpreadsheetPanel(QWidget):
         self.table.setModel(self.csv_model)
         self.table.verticalHeader().setDefaultSectionSize(40)
         # Set delegate for thumbnail column (index 1 in CSV mode)
-        self.table.setItemDelegateForColumn(1, ScalingDelegate(self.table))
+        self.table.setItemDelegateForColumn(1, ScalingDelegate(self.table, is_thumb_col=True))
         # Clear delegate for index 0
         self.table.setItemDelegateForColumn(0, QStyledItemDelegate(self.table))
         
@@ -295,13 +337,34 @@ class SpreadsheetPanel(QWidget):
         self.table.verticalHeader().setDefaultSectionSize(h)
         # Also adjust thumbnail column width (index 1)
         self.table.resizeColumnToContents(1)
+        self._apply_row_heights()
 
-    def update_filtering(self, age_filter=None, search_text=None):
+    def _apply_row_heights(self):
+        model = self.table.model()
+        if not model or self._is_csv_mode: return
+        
+        default_h = self.table.verticalHeader().defaultSectionSize()
+        show_grouped = getattr(model, "show_grouped", False)
+        
+        for row in range(model.rowCount()):
+            h = default_h
+            if show_grouped and row > 0:
+                items = getattr(model, "items", [])
+                if row < len(items) and (row - 1) >= 0:
+                    item = items[row]
+                    prev_item = items[row-1]
+                    if getattr(item, "group_index", -1) != getattr(prev_item, "group_index", -1):
+                        h = default_h + (default_h // 2)
+            self.table.setRowHeight(row, h)
+
+    def update_filtering(self, age_filter=None, search_text=None, ignore_text=None):
         """Update row visibility based on active filters."""
         if age_filter is not None:
             self._last_age_filter = age_filter
         if search_text is not None:
             self._last_search_text = search_text
+        if ignore_text is not None:
+            self._last_ignore_text = ignore_text
             
         show_reviews = True
         win = self.window() if hasattr(self, "window") else None
@@ -324,10 +387,11 @@ class SpreadsheetPanel(QWidget):
         
         age_enabled, age_val = self._last_age_filter
         search_term = self._last_search_text
+        ignore_strings = self._last_ignore_text.lower().split() if getattr(self, "_last_ignore_text", "") else []
         
         v_stack_enabled = getattr(self.table.model(), "v_stack_enabled", False)
 
-        if not selected_only and not tagged_only and not assigned_only and not age_enabled and not search_term and not v_stack_enabled and show_reviews:
+        if not selected_only and not tagged_only and not assigned_only and not age_enabled and not search_term and not ignore_strings and not v_stack_enabled and show_reviews:
             for row in range(self.table.model().rowCount()):
                 self.table.setRowHidden(row, False)
             return
@@ -342,6 +406,16 @@ class SpreadsheetPanel(QWidget):
             matches_search = (not search_term or 
                               search_term in item.label.lower() or 
                               search_term in item.filename.lower())
+            
+            is_ignored = False
+            if ignore_strings:
+                lbl_lower = item.label.lower()
+                fn_lower = item.filename.lower()
+                for ign in ignore_strings:
+                    if ign in lbl_lower or ign in fn_lower:
+                        is_ignored = True
+                        break
+            
             is_rev = getattr(item, "is_review_repre", False)
             
             hidden = False
@@ -355,6 +429,8 @@ class SpreadsheetPanel(QWidget):
                 hidden = True
             if search_term and not matches_search:
                 hidden = True
+            if is_ignored:
+                hidden = True
             if not show_reviews and is_rev:
                 hidden = True
             
@@ -362,6 +438,8 @@ class SpreadsheetPanel(QWidget):
                 hidden = True
                 
             self.table.setRowHidden(row, hidden)
+            
+        self._apply_row_heights()
 
     def eventFilter(self, source, event):
         if event.type() == QEvent.Enter:

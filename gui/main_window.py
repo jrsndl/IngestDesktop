@@ -119,6 +119,7 @@ class HelpContentWidget(QWidget):
         y = draw_shortcut(painter, col1_rect, "-", "Zoom Out", y)
         y = draw_shortcut(painter, col1_rect, "Z", "Reset Zoom", y)
         y = draw_shortcut(painter, col1_rect, "F", "Focus Selection", y)
+        y = draw_shortcut(painter, col1_rect, "Alt + A", "Arrange items", y)
         y = draw_shortcut(painter, col1_rect, "Ctrl+Wheel", "Zoom at cursor", y)
 
         # Col 2
@@ -463,6 +464,7 @@ class MainWindow(QMainWindow):
         self.filter_panel = FilterPanel(self.model, self)
         self.filter_panel.age_changed.connect(self._on_age_filter_changed)
         self.filter_panel.search_changed.connect(self._on_filter_search_changed)
+        self.filter_panel.ignore_changed.connect(self._on_filter_ignore_changed)
         self.filter_panel.sequences_toggled.connect(self._on_filter_sequences_toggled)
         self.filter_panel.toggles_changed.connect(self._save_filter_toggles)
         
@@ -1937,6 +1939,8 @@ class MainWindow(QMainWindow):
         
         # Update sliders first so items are sized correctly before rearrange
         self.thumb_area.slider_text_size.setValue(default_text_size)
+        
+        self.model.tooltip_template = self.config.get("item_info_generic", "")
         self.thumb_area.slider_thumb_size.setValue(default_thumb_size)
         self.thumb_area.rearrange_items(force=True)
         self.thumb_area.high_res_size = self.config.get("thumb_size", 512)
@@ -1947,7 +1951,7 @@ class MainWindow(QMainWindow):
         self.thumb_area.update_label_validator(label_regex)
         
         # Update Tooltip templates
-        tt_keys = ["item_info_stills", "item_info_sequences", "item_info_videos", "item_info_other"]
+        tt_keys = ["item_info_stills", "item_info_sequences", "item_info_videos", "item_info_other", "item_info_ayon"]
         tt_templates = {k: self.config.get(k, "") for k in tt_keys}
         self.thumb_area.set_tooltip_templates(tt_templates)
         
@@ -2120,6 +2124,7 @@ class MainWindow(QMainWindow):
             self.config["thumbnails_show_text"] = self.thumb_area.btn_show_text.isChecked()
             self.config["default_text_size"] = self.thumb_area.slider_text_size.value()
             self.config["default_thumb_size"] = self.thumb_area.slider_thumb_size.value()
+            self.config["player_mode"] = self.thumb_area.player_mode
 
         # 4. Filter Panel
         if hasattr(self, "filter_panel") and self.filter_panel:
@@ -2150,6 +2155,8 @@ class MainWindow(QMainWindow):
 
         # 2. Thumbnails Panel
         if hasattr(self, "thumb_area") and self.thumb_area:
+            self.model.tooltip_template = self.config.get("item_info_generic", "")
+            
             default_cols = self.config.get("default_columns", 12)
             default_text_size = self.config.get("default_text_size", 10)
             default_thumb_size = self.config.get("default_thumb_size", 150)
@@ -2161,14 +2168,24 @@ class MainWindow(QMainWindow):
             self.thumb_area._last_arrange_vals["gap_h"] = gap_h
             self.thumb_area._last_arrange_vals["gap_v"] = gap_v
             
-            # Update sliders first so items are sized correctly before rearrange
             self.thumb_area.slider_text_size.setValue(default_text_size)
             self.thumb_area.slider_thumb_size.setValue(default_thumb_size)
+            
             self.thumb_area.rearrange_items(force=True)
             
             show_text = self.config.get("thumbnails_show_text", True)
             self.thumb_area.btn_show_text.setChecked(show_text)
             self.thumb_area._on_show_text_toggled(show_text)
+            
+            player_mode = self.config.get("player_mode", "stop")
+            self.thumb_area.player_mode = player_mode
+            if player_mode == "stop":
+                self.thumb_area.btn_player_mode.setText("Player: Stop")
+            elif player_mode == "selected":
+                self.thumb_area.btn_player_mode.setText("Player: Selected")
+            elif player_mode == "all":
+                self.thumb_area.btn_player_mode.setText("Player: All")
+            self.thumb_area.update_video_overlay_geometry()
 
         # 3. Filter Panel
         if hasattr(self, "filter_panel") and self.filter_panel:
@@ -3919,20 +3936,21 @@ class MainWindow(QMainWindow):
         finally:
             self._selection_lock = False
 
-    def _sync_selection_from_filter(self, selected=None, deselected=None):
+    def _sync_selection_from_filter(self, selected=None, deselected=None, selected_paths=None):
         """Sync selection from FilterPanel tree to Thumbs and Table."""
         if self._selection_lock: return
         
-        # Get selected paths from tree
-        selected_indexes = self.filter_panel.tree.selectionModel().selectedIndexes()
-        paths = set()
         is_csv = self.spreadsheet._is_csv_mode
-        for idx in selected_indexes:
-            if idx.column() == 0:
-                source_idx = self.filter_panel.proxy.mapToSource(idx)
-                
-                # Get the actual source model
-                source_model = self.filter_panel.proxy.sourceModel()
+        if selected_paths is not None:
+            paths = set(selected_paths)
+        else:
+            # Get selected paths from tree
+            selected_indexes = self.filter_panel.tree.selectionModel().selectedIndexes()
+            paths = set()
+            for idx in selected_indexes:
+                if idx.column() == 0:
+                    source_idx = self.filter_panel.proxy.mapToSource(idx)
+                    source_model = self.filter_panel.proxy.sourceModel()
                 
                 if hasattr(source_model, "filePath"):
                     path = source_model.filePath(source_idx)
@@ -3950,13 +3968,19 @@ class MainWindow(QMainWindow):
                     if isinstance(path, str):
                         norm_p = os.path.normpath(os.path.abspath(path)).lower()
                         items_list = self.csv_preview_model.tagged_items if is_csv else self.model.items
-                        for it in items_list:
-                            if os.path.normpath(os.path.abspath(it.file_path)).lower() == norm_p:
+                        all_items_list = getattr(self.model, "all_items", items_list)
+                        for it in all_items_list:
+                            if getattr(it, "file_path", None) and os.path.normpath(os.path.abspath(it.file_path)).lower() == norm_p:
                                 is_known_item_path = True
                                 break
                     
-                    if isinstance(path, str) and (is_path_model or os.path.isabs(path) or os.path.exists(path) or is_known_item_path):
-                        paths.add(os.path.normpath(os.path.abspath(path)))
+                    if isinstance(path, str):
+                        paths.add(path)
+                        if is_path_model or os.path.isabs(path) or os.path.exists(path) or is_known_item_path:
+                            try:
+                                paths.add(os.path.normpath(os.path.abspath(path)))
+                            except Exception:
+                                pass
                     elif not isinstance(path, dict):
                         # Use only hashable IDs (ints/strings)
                         paths.add(path)
@@ -4033,9 +4057,8 @@ class MainWindow(QMainWindow):
                                 it_ext = os.path.splitext(item_norm)[1].lower()
                                 if p_ext == it_ext:
                                     from utils import strip_sequence_counter
-                                    import re
-                                    p_base = strip_sequence_counter(re.sub(r"([._]v|v)(\d+)", "", os.path.basename(p_norm), flags=re.IGNORECASE))
-                                    it_base = strip_sequence_counter(re.sub(r"([._]v|v)(\d+)", "", os.path.basename(item_norm), flags=re.IGNORECASE))
+                                    p_base = strip_sequence_counter(os.path.basename(p_norm))
+                                    it_base = strip_sequence_counter(os.path.basename(item_norm))
                                     if p_base and it_base and p_base == it_base:
                                         target_items.add(item)
 
@@ -4226,15 +4249,38 @@ class MainWindow(QMainWindow):
         # Trigger re-filtering in both views
         self.spreadsheet.update_filtering(
             age_filter=(self._age_filter_enabled, self._age_filter_value),
-            search_text=self._search_filter_text
+            search_text=self._search_filter_text,
+            ignore_text=getattr(self, "_ignore_filter_text", "")
         )
         self.thumb_area.rearrange_items(
             age_filter=(self._age_filter_enabled, self._age_filter_value),
-            search_text=self._search_filter_text
+            search_text=self._search_filter_text,
+            ignore_text=getattr(self, "_ignore_filter_text", "")
         )
         
         # Save search state immediately
         self.config["filter_search_text"] = text
+        self.save_config()
+
+    def _on_filter_ignore_changed(self, text, enabled):
+        if self._selection_lock: return
+        self._ignore_filter_text = text if enabled else ""
+        
+        # Trigger re-filtering in both views
+        self.spreadsheet.update_filtering(
+            age_filter=(self._age_filter_enabled, self._age_filter_value),
+            search_text=getattr(self, "_search_filter_text", ""),
+            ignore_text=self._ignore_filter_text
+        )
+        self.thumb_area.rearrange_items(
+            age_filter=(self._age_filter_enabled, self._age_filter_value),
+            search_text=getattr(self, "_search_filter_text", ""),
+            ignore_text=self._ignore_filter_text
+        )
+        
+        # Save ignore state immediately
+        self.config["filter_ignore_text"] = text
+        self.config["filter_ignore_enabled"] = enabled
         self.save_config()
 
     def _on_rename_to_label_requested(self, paths):
@@ -4581,7 +4627,7 @@ class MainWindow(QMainWindow):
             
             QTimer.singleShot(0, restore_pan)
 
-    def _on_ayon_task_selected(self, folder_path, task_name, task_type, assignee=""):
+    def _on_ayon_task_selected(self, folder_path, task_name, task_type, assignee="", task_data=None):
         """Assign AYON path to selected items."""
         # Get selected rows robustly
         selection_model = self.spreadsheet.table.selectionModel()
@@ -4611,6 +4657,17 @@ class MainWindow(QMainWindow):
             item.ayon_task_type = task_type
             item.ayon_task_assignee = assignee
             
+            item.metadata["folder_path"] = folder_path
+            if task_data:
+                item.metadata["folder_name"] = task_data.get("folder_name") or task_data.get("name", "")
+                item.metadata["folder_type"] = task_data.get("folder_type", "")
+                item.metadata["folder_status"] = task_data.get("folder_status", "")
+                item.metadata["folder_description"] = task_data.get("folder_description", "")
+                item.metadata["task_name"] = task_data.get("task_name") or task_data.get("name") or task_name
+                item.metadata["task_type"] = task_data.get("task_type") or task_data.get("type") or task_type
+                item.metadata["task_description"] = task_data.get("task_description") or task_data.get("description") or task_data.get("attrib", {}).get("description", "")
+                item.metadata["task_status"] = task_data.get("task_status") or task_data.get("status", "")
+            
         # Notify the model that the AYON Path column (14) has changed for these rows
         start_idx = self.model.index(min(selected_rows), 14)
         end_idx = self.model.index(max(selected_rows), 14)
@@ -4619,10 +4676,10 @@ class MainWindow(QMainWindow):
         # Feedback
         self.log_message(f"Assigned '{ayon_path}' to {len(selected_rows)} items.")
 
-    def _on_ayon_product_selected(self, folder_path, task_name, task_type, variant):
+    def _on_ayon_product_selected(self, folder_path, task_name, task_type, variant, task_data=None):
         """Assign AYON path AND update label to variant for selected items."""
         # 1. Set the AYON path (reuse existing logic)
-        self._on_ayon_task_selected(folder_path, task_name, task_type)
+        self._on_ayon_task_selected(folder_path, task_name, task_type, task_data=task_data)
         
         # 2. Update the labels for the same selected items
         # Re-fetching selection to be safe, though _on_ayon_task_selected doesn't clear it
@@ -6173,27 +6230,65 @@ class AyonGetRepreThread(QThread):
 
         items = []
 
-        def format_label(f_name, t_name, p_name, ver, r_name):
-            try:
-                return label_template.format(
-                    folder_name=f_name or "",
-                    task_name=t_name or "",
-                    product_name=p_name or "",
-                    version=ver or 1,
-                    representation=r_name or ""
-                )
-            except Exception:
-                return f"{f_name}/{t_name}/{p_name} v{ver}"
+        from logic.image_model import ImageItem, ImageTableModel
+        model_expander = ImageTableModel()
+
+        def make_ayon_item(f_path, f_name, f_desc, f_stat, t_name, t_type, t_desc, t_stat, p_name, p_type, v_num, v_stat, p_src, r_name, path, rep_id=None, thumb_id=None):
+            ver_str = f"v{v_num:03d}" if isinstance(v_num, int) else str(v_num)
+            item = ImageItem(
+                file_path=path or f"ayon://{self.project_name}/{f_path}/{p_name}.{r_name}",
+                label="",
+                version=v_num,
+                category="AYON",
+                product_type=p_type,
+                representation=r_name,
+                is_ayon_item=True
+            )
+            item.ayon_path = f"{f_path}/{t_name}" if t_name else f_path
+            item.ayon_task_name = t_name
+            item.ayon_task_type = t_type
+            item.metadata.update({
+                "folder_path": f_path,
+                "folder_name": f_name,
+                "folder_description": f_desc,
+                "folder_status": f_stat,
+                "task_name": t_name,
+                "task_type": t_type,
+                "task_description": t_desc,
+                "task_status": t_stat,
+                "product_name": p_name,
+                "product_type": p_type,
+                "product_version": ver_str,
+                "product_status": v_stat,
+                "product_source": p_src,
+                "version": v_num,
+                "representation": r_name,
+            })
+            item.label = model_expander._expand_string(label_template, item) or f"{f_name}/{t_name}/{p_name} v{v_num}"
+            if rep_id:
+                setattr(item, "repre_id", rep_id)
+            if thumb_id:
+                setattr(item, "thumbnail_id", thumb_id)
+            return item
 
         if self.mode == "product":
             p = self.target_data
             prod_id = p.get("id")
             prod_name = p.get("name", "")
+            prod_type = p.get("type") or p.get("productType", "")
             folder_id = p.get("folder_id") or p.get("folderId")
-            folder_name = p.get("folder_name") or p.get("folder_path") or ""
+            folder_path = p.get("folder_path") or p.get("path") or ""
+            folder_name = p.get("folder_name") or (os.path.basename(folder_path) if folder_path else "")
+            folder_desc = p.get("folder_description") or p.get("description", "")
+            folder_stat = p.get("folder_status") or p.get("status", "")
             task_name = p.get("task_name") or ""
+            task_type = p.get("task_type") or ""
+            task_desc = p.get("task_description") or ""
+            task_stat = p.get("task_status") or ""
             ver_id = p.get("version_id")
             ver_num = p.get("version", 1)
+            ver_stat = p.get("version_status", "")
+            ver_src = p.get("product_source", "")
 
             if not ver_id and prod_id:
                 versions = self.ayon_client.get_versions_for_product(self.project_name, prod_id)
@@ -6201,6 +6296,8 @@ class AyonGetRepreThread(QThread):
                 if v_obj:
                     ver_id = v_obj.get("id")
                     ver_num = v_obj.get("version", ver_num)
+                    ver_stat = v_obj.get("status", ver_stat)
+                    ver_src = v_obj.get("attrib", {}).get("source") or v_obj.get("data", {}).get("source", ver_src)
 
             if ver_id:
                 repres = self.ayon_client.get_representations_for_version(self.project_name, ver_id)
@@ -6210,27 +6307,26 @@ class AyonGetRepreThread(QThread):
                     rep_name = rep.get("name", "")
                     rep_id = rep.get("id", "")
                     thumb_id = rep.get("thumbnail_id") or rep.get("thumbnailId") or rep.get("thumbnail")
-                    lbl = format_label(folder_name, task_name, prod_name, ver_num, rep_name)
-                    item = ImageItem(
-                        file_path=path or f"ayon://{self.project_name}/{folder_name}/{prod_name}.{rep_name}",
-                        label=lbl,
-                        version=ver_num,
-                        category="AYON",
-                        representation=rep_name,
-                        is_ayon_item=True
+                    item = make_ayon_item(
+                        folder_path, folder_name, folder_desc, folder_stat,
+                        task_name, task_type, task_desc, task_stat,
+                        prod_name, prod_type, ver_num, ver_stat, ver_src, rep_name,
+                        path, rep_id, thumb_id
                     )
-                    if rep_id:
-                        setattr(item, "repre_id", rep_id)
-                    if thumb_id:
-                        setattr(item, "thumbnail_id", thumb_id)
                     items.append(item)
 
         elif self.mode == "task":
             t = self.target_data
             task_id = str(t.get("id"))
             task_name = t.get("name", "")
+            task_type = t.get("type", "")
+            task_desc = t.get("description") or t.get("attrib", {}).get("description", "")
+            task_stat = t.get("status", "")
             folder_id = t.get("folderId") or t.get("folder_id")
-            folder_path = t.get("folder_path") or ""
+            folder_path = t.get("folder_path") or t.get("path") or ""
+            folder_name = t.get("folder_name") or (os.path.basename(folder_path) if folder_path else "")
+            folder_desc = t.get("folder_description", "")
+            folder_stat = t.get("folder_status", "")
 
             if folder_id:
                 products = self.ayon_client.get_products_for_folder(self.project_name, folder_id)
@@ -6240,11 +6336,14 @@ class AyonGetRepreThread(QThread):
                 if p_obj:
                     prod_id = p_obj.get("id")
                     prod_name = p_obj.get("name", "")
+                    prod_type = p_obj.get("type") or p_obj.get("productType", "")
                     versions = self.ayon_client.get_versions_for_product(self.project_name, prod_id)
                     v_obj = autopick_version(versions, ver_mode, ver_status)
                     if v_obj:
                         ver_id = v_obj.get("id")
                         ver_num = v_obj.get("version", 1)
+                        ver_stat = v_obj.get("status", "")
+                        ver_src = v_obj.get("attrib", {}).get("source") or v_obj.get("data", {}).get("source", "")
                         repres = self.ayon_client.get_representations_for_version(self.project_name, ver_id)
                         rep = autopick_representation(repres, repre_prio)
                         if rep:
@@ -6252,19 +6351,12 @@ class AyonGetRepreThread(QThread):
                             rep_name = rep.get("name", "")
                             rep_id = rep.get("id", "")
                             thumb_id = rep.get("thumbnail_id") or rep.get("thumbnailId") or rep.get("thumbnail")
-                            lbl = format_label(folder_path, task_name, prod_name, ver_num, rep_name)
-                            item = ImageItem(
-                                file_path=path or f"ayon://{self.project_name}/{folder_path}/{prod_name}.{rep_name}",
-                                label=lbl,
-                                version=ver_num,
-                                category="AYON",
-                                representation=rep_name,
-                                is_ayon_item=True
+                            item = make_ayon_item(
+                                folder_path, folder_name, folder_desc, folder_stat,
+                                task_name, task_type, task_desc, task_stat,
+                                prod_name, prod_type, ver_num, ver_stat, ver_src, rep_name,
+                                path, rep_id, thumb_id
                             )
-                            if rep_id:
-                                setattr(item, "repre_id", rep_id)
-                            if thumb_id:
-                                setattr(item, "thumbnail_id", thumb_id)
                             items.append(item)
 
         elif self.mode == "folder":
@@ -6272,10 +6364,16 @@ class AyonGetRepreThread(QThread):
             for f in folders:
                 folder_id = str(f.get("id"))
                 folder_path = f.get("path") or f.get("folder_path") or f.get("name") or ""
+                folder_name = f.get("label") or f.get("name") or os.path.basename(folder_path)
+                folder_desc = f.get("description") or f.get("attrib", {}).get("description", "")
+                folder_stat = f.get("status", "")
                 tasks = f.get("tasks", [])
                 picked_t = autopick_task(tasks, task_type_prio, task_name_prio)
                 task_id = str(picked_t.get("id")) if picked_t else None
                 task_name = picked_t.get("name", "") if picked_t else ""
+                task_type = picked_t.get("type", "") if picked_t else ""
+                task_desc = (picked_t.get("description") or picked_t.get("attrib", {}).get("description", "")) if picked_t else ""
+                task_stat = picked_t.get("status", "") if picked_t else ""
 
                 products = self.ayon_client.get_products_for_folder(self.project_name, folder_id)
                 task_prods = [p for p in products if p.get("task_id") == task_id or p.get("task_name") == task_name] if task_id else []
@@ -6284,11 +6382,14 @@ class AyonGetRepreThread(QThread):
                 if p_obj:
                     prod_id = p_obj.get("id")
                     prod_name = p_obj.get("name", "")
+                    prod_type = p_obj.get("type") or p_obj.get("productType", "")
                     versions = self.ayon_client.get_versions_for_product(self.project_name, prod_id)
                     v_obj = autopick_version(versions, ver_mode, ver_status)
                     if v_obj:
                         ver_id = v_obj.get("id")
                         ver_num = v_obj.get("version", 1)
+                        ver_stat = v_obj.get("status", "")
+                        ver_src = v_obj.get("attrib", {}).get("source") or v_obj.get("data", {}).get("source", "")
                         repres = self.ayon_client.get_representations_for_version(self.project_name, ver_id)
                         rep = autopick_representation(repres, repre_prio)
                         if rep:
@@ -6296,19 +6397,12 @@ class AyonGetRepreThread(QThread):
                             rep_name = rep.get("name", "")
                             rep_id = rep.get("id", "")
                             thumb_id = rep.get("thumbnail_id") or rep.get("thumbnailId") or rep.get("thumbnail")
-                            lbl = format_label(folder_path, task_name, prod_name, ver_num, rep_name)
-                            item = ImageItem(
-                                file_path=path or f"ayon://{self.project_name}/{folder_path}/{prod_name}.{rep_name}",
-                                label=lbl,
-                                version=ver_num,
-                                category="AYON",
-                                representation=rep_name,
-                                is_ayon_item=True
+                            item = make_ayon_item(
+                                folder_path, folder_name, folder_desc, folder_stat,
+                                task_name, task_type, task_desc, task_stat,
+                                prod_name, prod_type, ver_num, ver_stat, ver_src, rep_name,
+                                path, rep_id, thumb_id
                             )
-                            if rep_id:
-                                setattr(item, "repre_id", rep_id)
-                            if thumb_id:
-                                setattr(item, "thumbnail_id", thumb_id)
                             items.append(item)
 
         elif self.mode == "repre":
@@ -6319,23 +6413,25 @@ class AyonGetRepreThread(QThread):
             thumb_id = rep.get("thumbnail_id") or rep.get("thumbnailId") or rep.get("thumbnail")
             ctx = rep.get("context") or {}
             folder_name = ctx.get("folder", {}).get("name") if isinstance(ctx.get("folder"), dict) else (ctx.get("folder_name") or ctx.get("folder") or "")
+            folder_path = ctx.get("folder", {}).get("path") if isinstance(ctx.get("folder"), dict) else (ctx.get("folder_path") or folder_name)
+            folder_desc = rep.get("folder_description", "")
+            folder_stat = rep.get("folder_status", "")
             task_name = ctx.get("task", {}).get("name") if isinstance(ctx.get("task"), dict) else (ctx.get("task_name") or ctx.get("task") or "")
+            task_type = ctx.get("task", {}).get("type") if isinstance(ctx.get("task"), dict) else (ctx.get("task_type") or ctx.get("task_type") or "")
+            task_desc = rep.get("task_description", "")
+            task_stat = rep.get("task_status", "")
             prod_name = ctx.get("product", {}).get("name") if isinstance(ctx.get("product"), dict) else (ctx.get("product_name") or ctx.get("product") or "")
+            prod_type = ctx.get("product", {}).get("type") if isinstance(ctx.get("product"), dict) else (ctx.get("product_type") or "")
             ver_num = ctx.get("version") or rep.get("version", 1)
+            ver_stat = rep.get("version_status", "")
+            ver_src = rep.get("attrib", {}).get("source") or rep.get("data", {}).get("source", "")
 
-            lbl = format_label(folder_name, task_name, prod_name, ver_num, rep_name)
-            item = ImageItem(
-                file_path=path or f"ayon://{self.project_name}/{folder_name}/{prod_name}.{rep_name}",
-                label=lbl,
-                version=ver_num,
-                category="AYON",
-                representation=rep_name,
-                is_ayon_item=True
+            item = make_ayon_item(
+                folder_path, folder_name, folder_desc, folder_stat,
+                task_name, task_type, task_desc, task_stat,
+                prod_name, prod_type, ver_num, ver_stat, ver_src, rep_name,
+                path, rep_id, thumb_id
             )
-            if rep_id:
-                setattr(item, "repre_id", rep_id)
-            if thumb_id:
-                setattr(item, "thumbnail_id", thumb_id)
             items.append(item)
 
         # Generate middle frame thumbnail for representation items missing AYON thumbnails

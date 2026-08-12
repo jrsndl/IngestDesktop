@@ -1211,18 +1211,26 @@ class ThumbnailItem(QGraphicsObject):
 
     def update_tooltip(self, templates, model):
         self.tooltip_templates = templates
-        if not templates or not model:
+        if not model:
             return
             
-        cat = self.data.category.lower()
-        key = "other"
-        if "sequence" in cat: key = "sequences"
-        elif "still" in cat: key = "stills"
-        elif "video" in cat: key = "videos"
+        template = getattr(model, "tooltip_template", "")
         
-        template = templates.get(f"item_info_{key}", "")
+        if not template and templates:
+            cat = getattr(self.data, "category", "").lower()
+            key = "other"
+            if getattr(self.data, "is_ayon_item", False) or cat == "ayon":
+                key = "ayon"
+            elif "sequence" in cat: key = "sequences"
+            elif "still" in cat: key = "stills"
+            elif "video" in cat: key = "videos"
+            template = templates.get(f"item_info_{key}", "")
+            
         if template:
-            expanded = model.expand_tokens(template, self.data)
+            if hasattr(model, "expand_tokens"):
+                expanded = model.expand_tokens(template, self.data)
+            else:
+                expanded = model._expand_string(template, self.data, use_global_camel=False)
             self.setToolTip(expanded)
         else:
             self.setToolTip("")
@@ -1366,10 +1374,10 @@ class ThumbnailItem(QGraphicsObject):
             
         if getattr(self.data, "is_ayon_item", False):
             if self.isSelected():
-                sel_width = base_w + 3
+                sel_width = base_w + 2
                 pen = QPen(QColor("#00e5ff"), sel_width)
             else:
-                pen = QPen(QColor("#00bcd4"), max(2, base_w))
+                pen = QPen(QColor("#00bcd4"), max(1, base_w // 2))
             pen.setCosmetic(True)
             painter.setPen(pen)
             painter.drawRect(thumb_rect.adjusted(-2, -2, 2, 2))
@@ -1510,11 +1518,19 @@ class ThumbnailItem(QGraphicsObject):
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.ItemPositionChange and self.scene():
+            grabber = self.scene().mouseGrabberItem()
+            is_user_move = False
+            if grabber == self:
+                is_user_move = True
+            elif self.isSelected() and grabber and grabber.isSelected():
+                is_user_move = True
+
             # If moved by user (interaction)
-            if self.scene().mouseGrabberItem() == self:
-                # Only hide editor if this is a real drag, not a tiny wiggle during dblclick
+            if is_user_move:
                 new_pos = value.toPointF() if hasattr(value, 'toPointF') else value
-                if (new_pos - self.pos()).manhattanLength() > 2:
+                
+                # Only hide editor if this is a real drag, not a tiny wiggle during dblclick
+                if grabber == self and (new_pos - self.pos()).manhattanLength() > 2:
                     for view in self.scene().views():
                         area = view.parent()
                         if hasattr(area, 'inline_editor') and area.inline_editor.isVisible():
@@ -1527,6 +1543,13 @@ class ThumbnailItem(QGraphicsObject):
                 self.is_manually_moved = True
                 self.data.is_manually_moved = True
                 self.data.position = (new_pos.x(), new_pos.y())
+                self.data.has_placed_position = True
+                for view in self.scene().views():
+                    area = view.parent()
+                    if hasattr(area, "item_positions") and hasattr(area, "_get_item_key"):
+                        key = area._get_item_key(self.data)
+                        if key:
+                            area.item_positions[key] = (new_pos.x(), new_pos.y())
 
         if change in (QGraphicsItem.ItemPositionHasChanged, QGraphicsItem.ItemTransformHasChanged):
             if self.scene():
@@ -2046,6 +2069,7 @@ class ArrangeDialog(QDialog):
         init_thumb_size = initial_values.get("thumb_size", 150) if initial_values else 150
         init_sort = initial_values.get("sort_by", "File Name") if initial_values else "File Name"
         init_reverse = initial_values.get("reverse", False) if initial_values else False
+        init_group_cols = initial_values.get("group_cols", False) if initial_values else False
 
         # Sort Row
         sort_layout = QHBoxLayout()
@@ -2091,6 +2115,12 @@ class ArrangeDialog(QDialog):
             self.slider_cols.valueChanged.connect(self._emit_changed)
             col_layout.addWidget(self.slider_cols)
             col_layout.addWidget(self.lbl_cols)
+            
+            self.chk_group_cols = QCheckBox("Group to Columns")
+            self.chk_group_cols.setChecked(init_group_cols)
+            self.chk_group_cols.toggled.connect(self._emit_changed)
+            col_layout.addWidget(self.chk_group_cols)
+            
             layout.addLayout(col_layout)
             
         # Gap (Horizontal) - only for horizontal or grid
@@ -2145,7 +2175,8 @@ class ArrangeDialog(QDialog):
             "gap_v": self.slider_gap_v.value() if self.slider_gap_v else 0,
             "cols": self.slider_cols.value() if self.slider_cols else 1,
             "sort_by": self.combo_sort.currentText(),
-            "reverse": self.chk_reverse.isChecked()
+            "reverse": self.chk_reverse.isChecked(),
+            "group_cols": self.chk_group_cols.isChecked() if hasattr(self, "chk_group_cols") else False
         }
         return vals
 
@@ -2186,10 +2217,13 @@ class ThumbnailArea(QWidget):
         self._path_filter = ""
         self._last_age_filter = (False, 0)
         self._last_search_text = ""
+        self._last_ignore_text = ""
         self.tooltip_templates = {}
         self._deferred_scene_items_change = False
+        self._marked_placement_pos = None
+        self.item_positions = {}
         
-        self.player_mode = "selected" # "stop", "selected", "all"
+        self.player_mode = "stop" # "stop", "selected", "all"
         self.show_reviews = True
         self.active_players = {} # mapping: ThumbnailItem -> VideoPlayerOverlay
         
@@ -2260,7 +2294,7 @@ class ThumbnailArea(QWidget):
         self.controls_layout.addWidget(self.slider_thumb_size)
         
         add_v_line(self.controls_layout)
-        self.btn_player_mode = QPushButton("Player: Selected")
+        self.btn_player_mode = QPushButton("Player: Stop")
         self.btn_player_mode.clicked.connect(self._cycle_player_mode)
         self.controls_layout.addWidget(self.btn_player_mode)
         
@@ -2679,6 +2713,15 @@ class ThumbnailArea(QWidget):
         self.model.modelReset.connect(self.add_items)
         self.model.dataChanged.connect(self._on_data_changed)
 
+    def _get_item_key(self, item_data):
+        if not item_data:
+            return None
+        if getattr(item_data, "file_path", None):
+            return item_data.file_path
+        if getattr(item_data, "ayon_path", None):
+            return item_data.ayon_path
+        return id(item_data)
+
     def clear_canvas(self):
         """Completely clear the scene of all elements, including thumbnails, notes, and backdrops."""
         if hasattr(self, "active_players"):
@@ -2783,7 +2826,7 @@ class ThumbnailArea(QWidget):
                     thumb.update_tooltip(self.tooltip_templates, self.model)
                     thumb.update()
 
-    def rearrange_items(self, age_filter=None, search_text=None, force=False):
+    def rearrange_items(self, age_filter=None, search_text=None, ignore_text=None, force=False):
         if not self.item_to_thumb or not self.model: return
         
         for item in self.item_to_thumb.values():
@@ -2793,11 +2836,12 @@ class ThumbnailArea(QWidget):
             self._last_age_filter = age_filter
         if search_text is not None:
             self._last_search_text = search_text
+        if ignore_text is not None:
+            self._last_ignore_text = ignore_text
             
-        
-        
         age_enabled, age_val = self._last_age_filter
         search_term = self._last_search_text
+        ignore_strings = self._last_ignore_text.lower().split() if getattr(self, "_last_ignore_text", "") else []
 
         v_stack_enabled = getattr(self.model, "v_stack_enabled", False)
 
@@ -2830,10 +2874,19 @@ class ThumbnailArea(QWidget):
                               search_term in item_data.label.lower() or 
                               search_term in item_data.filename.lower())
             
+            is_ignored = False
+            if ignore_strings:
+                lbl_lower = item_data.label.lower()
+                fn_lower = item_data.filename.lower()
+                for ign in ignore_strings:
+                    if ign in lbl_lower or ign in fn_lower:
+                        is_ignored = True
+                        break
+            
             is_visible_ver = not v_stack_enabled or self.model.is_item_visible_by_v_stack(item_data, True)
             is_rev = getattr(item_data, "is_review_repre", False)
             
-            if show_by_tag and in_path and is_young_enough and matches_search and is_visible_ver and (show_reviews or not is_rev):
+            if show_by_tag and in_path and is_young_enough and matches_search and not is_ignored and is_visible_ver and (show_reviews or not is_rev):
                 item.show()
                 visible_items.append(item)
             else:
@@ -2873,8 +2926,84 @@ class ThumbnailArea(QWidget):
             vals["gap_v"] = dynamic_gap_v
             self._last_arrange_vals["gap_v"] = dynamic_gap_v
             
-        # Use (0,0) as anchor for the main layout
-        self._apply_arrangement(visible_items, "grid", vals, anchor=(0, 0), ignore_manual=not force)
+        if force:
+            self._apply_arrangement(visible_items, "grid", vals, anchor=(0, 0), ignore_manual=False)
+        else:
+            already_placed = []
+            unplaced = []
+            for thumb in visible_items:
+                key = self._get_item_key(thumb.data)
+                has_pos = (
+                    getattr(thumb.data, "has_placed_position", False) or
+                    getattr(thumb, "is_manually_moved", False) or
+                    getattr(thumb.data, "is_manually_moved", False) or
+                    (key in self.item_positions)
+                )
+                if has_pos:
+                    if key in self.item_positions:
+                        px, py = self.item_positions[key]
+                    else:
+                        px, py = thumb.data.position
+                    thumb.setPos(px, py)
+                    thumb.data.position = (px, py)
+                    thumb.data.has_placed_position = True
+                    if key: self.item_positions[key] = (px, py)
+                    already_placed.append(thumb)
+                else:
+                    unplaced.append(thumb)
+
+            if unplaced:
+                if self._marked_placement_pos is not None:
+                    start_x = self._marked_placement_pos.x()
+                    start_y = self._marked_placement_pos.y()
+                elif already_placed:
+                    max_x = max(t.sceneBoundingRect().right() for t in already_placed)
+                    min_y = min(t.sceneBoundingRect().top() for t in already_placed)
+                    start_x = max_x + vals["gap_h"]
+                    start_y = min_y
+                else:
+                    start_x = 0.0
+                    start_y = 0.0
+
+                gap_h = vals["gap_h"]
+                gap_v = vals["gap_v"]
+
+                # Get existing placed bounding rects (placed thumbnails, notes, backdrops, etc.)
+                placed_rects = [
+                    it.sceneBoundingRect() for it in self.scene.items()
+                    if it.isVisible() and it not in unplaced
+                ]
+
+                curr_x = start_x
+                for thumb in unplaced:
+                    rect = thumb.boundingRect()
+                    item_w = rect.width() if rect.width() > 0 else getattr(thumb, "size", 150) + gap_h
+                    item_h = rect.height() if rect.height() > 0 else getattr(thumb, "size", 150) + 50 + gap_v
+
+                    test_x = curr_x
+                    test_y = start_y
+
+                    # Shift test_y down by one item height + vertical gap if overlap detected
+                    step_y = max(item_h + gap_v, 50.0)
+                    while True:
+                        test_rect = QRectF(test_x, test_y, item_w, item_h)
+                        if any(test_rect.intersects(r) for r in placed_rects):
+                            test_y += step_y
+                        else:
+                            break
+
+                    thumb.setPos(test_x, test_y)
+                    thumb.data.position = (test_x, test_y)
+                    thumb.data.has_placed_position = True
+                    key = self._get_item_key(thumb.data)
+                    if key:
+                        self.item_positions[key] = (test_x, test_y)
+
+                    placed_rects.append(QRectF(test_x, test_y, item_w, item_h))
+                    curr_x = test_x + item_w + gap_h
+
+                self._marked_placement_pos = QPointF(curr_x, start_y)
+
         self.scene.update()
         self.view.viewport().update()
         self.update_video_overlay_geometry()
@@ -3038,7 +3167,7 @@ class ThumbnailArea(QWidget):
         if event.type() == QEvent.MouseButtonPress:
             self._tooltip_timer.stop()
             QToolTip.hideText()
-            if source is self.view.viewport():
+            if source in (self.view, self.view.viewport()):
                 self._last_click_scene_pos = self.view.mapToScene(event.pos())
                 
                 is_middle = event.button() == Qt.MiddleButton
@@ -3050,6 +3179,11 @@ class ThumbnailArea(QWidget):
                     self.view.viewport().setCursor(Qt.ClosedHandCursor)
                     return True
                     
+                if event.button() == Qt.LeftButton:
+                    if not self.view.itemAt(event.pos()):
+                        self._marked_placement_pos = self.view.mapToScene(event.pos())
+                        self._show_placement_marker(self._marked_placement_pos)
+
                 if event.button() == Qt.RightButton:
                     # Select the item under the mouse if it's not already selected,
                     # but do not clear selection if right-clicking empty space or a selected item.
@@ -3187,7 +3321,10 @@ class ThumbnailArea(QWidget):
                         return True
 
             # Global shortcuts (only when editor is NOT active)
-            if event.key() == Qt.Key_Space:
+            if event.key() == Qt.Key_A and (event.modifiers() & Qt.AltModifier):
+                self._on_arrange("grid")
+                return True
+            elif event.key() == Qt.Key_Space:
                 if self.view.underMouse():
                     self.maximize_toggle_requested.emit()
                     return True
@@ -3253,6 +3390,41 @@ class ThumbnailArea(QWidget):
             return self.gestureEvent(event)
             
         return super().eventFilter(source, event)
+
+    def _show_placement_marker(self, pos):
+        from PySide6.QtWidgets import QGraphicsEllipseItem
+        from PySide6.QtGui import QPen, QColor, QBrush
+        from PySide6.QtCore import QVariantAnimation
+        
+        if not hasattr(self, "_active_marker_anims"):
+            self._active_marker_anims = []
+            
+        r = 60
+        marker = QGraphicsEllipseItem(pos.x() - r, pos.y() - r, r * 2, r * 2)
+        marker.setPen(QPen(QColor(0, 255, 255), 4))
+        marker.setBrush(QBrush(QColor(0, 255, 255, 80)))
+        marker.setZValue(9999)
+        self.scene.addItem(marker)
+        
+        anim = QVariantAnimation()
+        anim.setStartValue(1.0)
+        anim.setEndValue(0.0)
+        anim.setDuration(400)
+        
+        self._active_marker_anims.append(anim)
+        
+        def update_opacity(val):
+            marker.setOpacity(val)
+            
+        def remove_marker():
+            if marker in self.scene.items():
+                self.scene.removeItem(marker)
+            if anim in self._active_marker_anims:
+                self._active_marker_anims.remove(anim)
+                
+        anim.valueChanged.connect(update_opacity)
+        anim.finished.connect(remove_marker)
+        anim.start()
 
     def _start_inline_rename(self, item):
         # Ensure we have a ThumbnailItem (or a child of one)
@@ -3478,6 +3650,7 @@ class ThumbnailArea(QWidget):
         
         menu.addSeparator()
         arrange_action = QAction("Arrange", self)
+        arrange_action.setShortcut("Alt+A")
         arrange_action.triggered.connect(lambda: self._on_arrange("grid"))
         menu.addAction(arrange_action)
         
@@ -3603,10 +3776,13 @@ class ThumbnailArea(QWidget):
         if not target_items:
             # Arrange all visible ThumbnailItems
             target_items = []
-            all_items = getattr(self.model, "all_items", self.model.items)
+            all_items = getattr(self.model, "all_items", getattr(self.model, "items", []))
             for item_data in all_items:
                 item = self.item_to_thumb.get(item_data)
-                if item and item.isVisible():
+                if item and item.isVisible() and item not in target_items:
+                    target_items.append(item)
+            for item in self.scene.items():
+                if isinstance(item, ThumbnailItem) and item.isVisible() and item not in target_items:
                     target_items.append(item)
                     
         if not target_items: return
@@ -3634,12 +3810,19 @@ class ThumbnailArea(QWidget):
             vals = self._arrange_dialog.get_values()
             self._apply_arrangement(target_items, mode, vals, anchor, mark_manual=True)
             self._last_arrange_vals = vals # Save for next time
+            if target_items:
+                max_x = max(it.sceneBoundingRect().right() for it in target_items)
+                min_y = min(it.sceneBoundingRect().top() for it in target_items)
+                self._marked_placement_pos = QPointF(max_x + vals.get("gap_h", 20), min_y)
             self._arrange_dialog = None
             
         def revert():
             for item, pos in initial_pos.items():
                 item.setPos(pos)
                 item.data.position = (pos.x(), pos.y())
+                key = self._get_item_key(item.data)
+                if key:
+                    self.item_positions[key] = (pos.x(), pos.y())
                 if item in initial_sizes:
                     old_size, old_custom = initial_sizes[item]
                     item.prepareGeometryChange()
@@ -3747,6 +3930,47 @@ class ThumbnailArea(QWidget):
                     row_heights.append(current_max_h)
                     current_max_h = 0
 
+        group_cols = vals.get("group_cols", False)
+        if mode == "grid" and group_cols:
+            groups = {}
+            for item in items:
+                gk = getattr(item.data, "group_key", "")
+                if gk not in groups:
+                    groups[gk] = []
+                groups[gk].append(item)
+                
+            group_keys = list(groups.keys())
+            
+            col_widths = []
+            for gk in group_keys:
+                max_w = 0
+                for item in groups[gk]:
+                    max_w = max(max_w, get_item_w(item))
+                col_widths.append(max_w)
+                
+            for c_idx, gk in enumerate(group_keys):
+                g_items = groups[gk]
+                current_y_offset = 0
+                x_pos = sum(col_widths[:c_idx]) + (c_idx * gap_h)
+                
+                for item in g_items:
+                    h = get_item_h(item)
+                    new_x = start_x + x_pos
+                    new_y = start_y + current_y_offset
+                    
+                    item.setPos(new_x, new_y)
+                    item.data.position = (new_x, new_y)
+                    item.data.has_placed_position = True
+                    key = self._get_item_key(item.data)
+                    if key: self.item_positions[key] = (new_x, new_y)
+                    if mark_manual:
+                        item.is_manually_moved = True
+                        item.data.is_manually_moved = True
+                    current_y_offset += h + gap_v
+            
+            self.scene.update()
+            return
+            
         current_y_offset = 0
         for i, item in enumerate(items):
             h = get_item_h(item)
@@ -3768,6 +3992,9 @@ class ThumbnailArea(QWidget):
             
             item.setPos(new_x, new_y)
             item.data.position = (new_x, new_y)
+            item.data.has_placed_position = True
+            key = self._get_item_key(item.data)
+            if key: self.item_positions[key] = (new_x, new_y)
             if mark_manual:
                 item.is_manually_moved = True
                 item.data.is_manually_moved = True

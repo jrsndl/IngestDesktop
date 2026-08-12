@@ -46,7 +46,7 @@ class AyonClient:
             # Get all folders
             folders = list(ayon_api.get_folders(
                 project_name,
-                fields=["id", "name", "path", "type", "label", "status", "parentId", "thumbnailId"]
+                fields=["id", "name", "path", "type", "label", "status", "parentId", "thumbnailId", "attrib"]
             ))
             
             # Get all tasks

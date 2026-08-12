@@ -30,13 +30,13 @@ class CSVPreviewModel(QAbstractTableModel):
             elif line.strip():
                 self.column_defs.append((line.strip(), ""))
         
-        self.tagged_items = [item for item in self.source_model.items if item.is_tagged]
+        self.tagged_items = [item for item in self.source_model.items if item.is_tagged and not getattr(item, "is_ayon_item", False)]
         self.is_review_row = [False] * len(self.tagged_items)
         self.endResetModel()
 
     def _refresh_data(self):
         self.beginResetModel()
-        self.tagged_items = [item for item in self.source_model.items if item.is_tagged]
+        self.tagged_items = [item for item in self.source_model.items if item.is_tagged and not getattr(item, "is_ayon_item", False)]
         self.is_review_row = [False] * len(self.tagged_items)
         self.endResetModel()
 

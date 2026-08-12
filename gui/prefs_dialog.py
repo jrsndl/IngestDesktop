@@ -215,6 +215,12 @@ class PreferencesDialog(QDialog):
         self.ayon_item_repre_priority_extension = QLineEdit(self.config.get("ayon_item_repre_priority_extension", "mp4 mov png"))
         self.ayon_item_label = QLineEdit(self.config.get("ayon_item_label", "{folder_name}/{task_name}/{product_name} v{version}"))
 
+        self.item_info_ayon = QPlainTextEdit(self.config.get("item_info_ayon", ""))
+        self.item_info_ayon.setMaximumHeight(80)
+        self.item_info_ayon.setMinimumHeight(80)
+        from PySide6.QtWidgets import QSizePolicy
+        self.item_info_ayon.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
         def _create_line():
             line = QFrame()
             line.setFrameShape(QFrame.HLine)
@@ -230,6 +236,7 @@ class PreferencesDialog(QDialog):
         self.ayon_items_form.addRow("Repre Priority by Extension:", self.ayon_item_repre_priority_extension)
         self.ayon_items_form.addRow(_create_line())
         self.ayon_items_form.addRow("AYON item label:", self.ayon_item_label)
+        self.ayon_items_form.addRow("Item Info (Tooltip):", self.item_info_ayon)
 
         self.ayon_items_layout.addLayout(self.ayon_items_form)
         self.ayon_items_layout.addStretch()
@@ -590,6 +597,13 @@ class PreferencesDialog(QDialog):
         self.gui_form.addRow("Inline Video Player:", self.disable_inline_video)
         self.gui_form.addRow("Drawing Cache Location:", self.drawing_cache_location)
         self.gui_form.addRow("Drawing Cache Path:", self.drawing_cache_path)
+
+        self.item_info_generic = QPlainTextEdit(self.config.get("item_info_generic", ""))
+        self.item_info_generic.setMaximumHeight(80)
+        self.item_info_generic.setMinimumHeight(80)
+        from PySide6.QtWidgets import QSizePolicy
+        self.item_info_generic.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.gui_form.addRow("Item Info (Tooltip):", self.item_info_generic)
 
         self.gui_layout.addLayout(self.gui_form)
         self.gui_layout.addStretch()
@@ -1065,6 +1079,7 @@ class PreferencesDialog(QDialog):
             "timeout_seconds": self.timeout_seconds.value(),
             "age_source": self.age_source.currentText(),
             "label_allowed_chars": self.label_regex.text(),
+            "item_info_generic": self.item_info_generic.toPlainText(),
             "detect_sequences": self.detect_sequences.isChecked(),
             "seq_thumb_frame": self.seq_thumb_frame.currentText(),
             "default_scan_folder": self.default_scan_folder.text(),
@@ -1149,6 +1164,7 @@ class PreferencesDialog(QDialog):
             "ayon_item_product_version_status": self.ayon_item_product_version_status.text(),
             "ayon_item_repre_priority_extension": self.ayon_item_repre_priority_extension.text(),
             "ayon_item_label": self.ayon_item_label.text(),
+            "item_info_ayon": self.item_info_ayon.toPlainText(),
             "group_by": self.group_by.text(),
             "group_do_not_export_missing_repres": self.group_do_not_export_missing_repres.isChecked(),
             "group_definitions": [w.get_data() for w in self.group_widgets],

@@ -251,6 +251,9 @@ class TagColorProxyModel(QSortFilterProxyModel):
             if not is_dir and abs_path:
                 item = self._path_to_item.get(abs_path)
                 if item:
+                    if getattr(item, "is_ayon_item", False):
+                        return item.label or item.filename
+                        
                     key = self.main_model.get_version_stack_key(item)
                     stack = self.main_model.version_stacks.get(key)
                     
@@ -297,6 +300,10 @@ class TagColorProxyModel(QSortFilterProxyModel):
                 return QColor("#00bcd4") # Cyan for scene items
             
             if abs_path and abs_path in self._path_info:
+                item = self._path_to_item.get(abs_path)
+                if item and getattr(item, "is_ayon_item", False):
+                    return QColor("#00bcd4") # Cyan for AYON items
+
                 info = self._path_info[abs_path]
                 is_tagged, age_min, label, review_status, filename = info[0], info[1], info[2], info[3], info[4]
                 
@@ -401,6 +408,7 @@ class FilterPanel(QWidget):
         
         self.tree = QTreeView()
         self.tree.setModel(self.proxy)
+        self._reconnect_selection_signal()
         self.tree.setHeaderHidden(True)
         for i in range(1, self.fs_model.columnCount()):
             self.tree.hideColumn(i)
@@ -719,6 +727,7 @@ class FilterPanel(QWidget):
         self.proxy._rebuild_cache()
 
     def set_root_folder(self, path):
+        self._root_path = path
         self.fs_model.setRootPath(path)
         if self.proxy.sourceModel() == self.fs_model:
             source_idx = self.fs_model.index(path)
@@ -751,6 +760,15 @@ class FilterPanel(QWidget):
             
             if hasattr(model, "rootPath"): # QFileSystemModel
                 source_idx = model.index(norm_p)
+                if not source_idx.isValid():
+                    all_items = getattr(self.main_model, "all_items", getattr(self.main_model, "items", []))
+                    for item in all_items:
+                        p_val = item.file_path if item.file_path else (getattr(item, "ayon_path", "") or item.label or item.filename)
+                        if p in (p_val, item.label, item.filename, getattr(item, "repre_id", "")) or (isinstance(p, str) and str(p).lower() in (p_val.lower(), (item.label or "").lower(), (item.filename or "").lower())):
+                            if item.file_path and (os.path.isabs(item.file_path) or os.path.exists(item.file_path)):
+                                source_idx = model.index(os.path.normpath(os.path.abspath(item.file_path)))
+                                if source_idx.isValid():
+                                    break
             else: # QStandardItemModel
                 norm_p_lower = norm_p.lower() if isinstance(norm_p, str) else norm_p
                 
@@ -900,6 +918,14 @@ class FilterPanel(QWidget):
         
         self.proxy.set_ignore_filter(self.ignore_bar.text(), self.chk_ignore.isChecked())
         self.proxy.set_filters(search_text, minutes, enabled)
+
+        if self.proxy.sourceModel() == self.fs_model:
+            root_path = getattr(self, "_root_path", None) or self.fs_model.rootPath()
+            if root_path:
+                source_idx = self.fs_model.index(root_path)
+                proxy_idx = self.proxy.mapFromSource(source_idx)
+                if proxy_idx.isValid():
+                    self.tree.setRootIndex(proxy_idx)
 
         self.restore_tree_expansion_state(expanded_paths)
 
