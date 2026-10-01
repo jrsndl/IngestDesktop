@@ -57,7 +57,7 @@
                 "Convert Review Command": "",
                 "Review Representation": "h264",
                 "Review Colorspace": "Output - sRGB",
-                "Review Tags": "passing;ftracreview;webreview",
+                "Review Tags": "passing;ftrackreview;webreview",
                 "Active": false
             },
             {
@@ -87,7 +87,7 @@
                 "Convert Review Command": "",
                 "Review Representation": "h264",
                 "Review Colorspace": "Output - sRGB",
-                "Review Tags": "passing;ftracreview;webreview",
+                "Review Tags": "passing;ftrackreview;webreview",
                 "Active": false
             },
             {
@@ -117,7 +117,7 @@
                 "Convert Review Command": "",
                 "Review Representation": "h264",
                 "Review Colorspace": "Output - sRGB",
-                "Review Tags": "passing;ftracreview;webreview",
+                "Review Tags": "passing;ftrackreview;webreview",
                 "Active": true
             }
         ],
@@ -149,7 +149,7 @@
                 "Convert Review Command": "{ffmpeg} -r {fps} -start_number {frame_start} -apply_trc bt709 -i \"{filename_printf}\" -pix_fmt yuv420p -crf 18 -c:a aac -b:a 192k -g 1 -vf  scale=in_color_matrix=bt709:out_color_matrix=bt709 -movflags faststart -color_primaries bt709 -color_trc bt709 -colorspace bt709 -y \"{prefs_review_path}\"",
                 "Review Representation": "h264",
                 "Review Colorspace": "Output - sRGB",
-                "Review Tags": "passing;ftracreview;webreview",
+                "Review Tags": "passing;ftrackreview;webreview",
                 "Active": false
             },
             {
@@ -179,7 +179,7 @@
                 "Convert Review Command": "",
                 "Review Representation": "h264",
                 "Review Colorspace": "Output - sRGB",
-                "Review Tags": "passing;ftracreview;webreview",
+                "Review Tags": "passing;ftrackreview;webreview",
                 "Active": true
             }
         ],
@@ -211,7 +211,7 @@
                 "Convert Review Command": "",
                 "Review Representation": "h264",
                 "Review Colorspace": "Output - sRGB",
-                "Review Tags": "passing;ftracreview;webreview",
+                "Review Tags": "passing;ftrackreview;webreview",
                 "Active": true
             }
         ],
@@ -243,7 +243,7 @@
                 "Convert Review Command": "",
                 "Review Representation": "h264",
                 "Review Colorspace": "Output - sRGB",
-                "Review Tags": "passing;ftracreview;webreview",
+                "Review Tags": "passing;ftrackreview;webreview",
                 "Active": true
             }
         ]

@@ -132,7 +132,7 @@ class CSVPreviewModel(QAbstractTableModel):
                         return p_data.get("Review Colorspace", "Output - sRGB")
                     elif header_lower == "representation tags":
                         p_data = item.preset_data or {}
-                        return p_data.get("Review Tags", "passing;ftracreview;webreview")
+                        return p_data.get("Review Tags", "passing;ftrackreview;webreview")
                 
                 return self.source_model._expand_string(template, item, use_global_camel=True)
         

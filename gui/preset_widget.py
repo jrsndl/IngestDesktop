@@ -180,7 +180,7 @@ class PresetWidget(QFrame):
         # Row 11: Rev. Colorspace, Rev. Tags
         self.review_colorspace = QLineEdit("Output - sRGB")
         self.add_to_grid(11, 0, "Rev. Color:", self.review_colorspace)
-        self.review_rep_tags = QLineEdit("passing;ftracreview;webreview")
+        self.review_rep_tags = QLineEdit("passing;ftrackreview;webreview")
         self.add_to_grid(11, 1, "Rev. Tags:", self.review_rep_tags)
 
         # Row 12: Review Cmd (Full width)
@@ -275,7 +275,7 @@ class PresetWidget(QFrame):
             self.convert_review_cmd.setPlainText(data.get("Convert Review Command", ""))
             self.review_representation.setText(data.get("Review Representation", "h264"))
             self.review_colorspace.setText(data.get("Review Colorspace", "Output - sRGB"))
-            self.review_rep_tags.setText(data.get("Review Tags", "passing;ftracreview;webreview"))
+            self.review_rep_tags.setText(data.get("Review Tags", "passing;ftrackreview;webreview"))
             
             self._update_title(self.name.text())
             return
@@ -351,7 +351,7 @@ class PresetWidget(QFrame):
         
         self.review_representation.setText("h264")
         self.review_colorspace.setText("Output - sRGB")
-        self.review_rep_tags.setText("passing;ftracreview;webreview")
+        self.review_rep_tags.setText("passing;ftrackreview;webreview")
         
         self._update_title(self.name.text())
 

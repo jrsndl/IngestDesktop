@@ -46,4 +46,5 @@ _drawcache/
 tttest*.json
 tttest*.yaml
 
+/plan
 _claude/
