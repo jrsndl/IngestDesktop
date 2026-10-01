@@ -2,6 +2,22 @@ import os
 import ayon_api
 import logging
 
+def _last_versions_by_product(project_name, product_ids, log=None):
+    """{product_id: last version entity}. One request when the library supports it,
+    instead of one request per product."""
+    product_ids = [p for p in product_ids if p]
+    if not product_ids:
+        return {}
+    bulk = getattr(ayon_api, "get_last_versions", None)
+    if bulk is not None:
+        try:
+            return {str(k): v for k, v in (bulk(project_name, product_ids=product_ids) or {}).items()}
+        except Exception as e:
+            if log:
+                log.warning(f"Bulk last-version query failed, falling back to per product: {e}")
+    return {str(pid): ayon_api.get_last_version_by_product_id(project_name, pid) for pid in product_ids}
+
+
 class AyonClient:
     def __init__(self, server_url=None, api_key=None):
         self.is_connected = False
@@ -17,11 +33,21 @@ class AyonClient:
             return False
             
         try:
+            # ayon_api keeps one global connection; drop it so a changed URL/key is used
+            close = getattr(ayon_api, "close_connection", None)
+            if close:
+                try:
+                    close()
+                except Exception:
+                    pass
             os.environ["AYON_SERVER_URL"] = server_url
             os.environ["AYON_API_KEY"] = api_key
             
-            # Test connection
+            # Test connection (and the key, when the library can check it)
             self.con = ayon_api.get_server_api_connection()
+            validate = getattr(self.con, "validate_token", None)
+            if validate is not None and validate() is False:
+                raise RuntimeError("AYON API key was rejected by the server")
             self.is_connected = True
             self.log.info("Successfully connected to AYON")
             return True
@@ -90,10 +116,11 @@ class AyonClient:
         try:
             products = list(ayon_api.get_products(project_name, folder_ids=folder_ids))
             self.log.info(f"Found {len(products)} products in folders {folder_ids}")
+            last_versions = _last_versions_by_product(project_name, [p["id"] for p in products], self.log)
             res = {}
             for prod in products:
                 # Get last version
-                last_v = ayon_api.get_last_version_by_product_id(project_name, prod["id"])
+                last_v = last_versions.get(str(prod["id"]))
                 v_num = last_v["version"] if last_v else 0
                 f_id = str(prod["folderId"])
                 p_name = prod["name"]
@@ -112,10 +139,11 @@ class AyonClient:
         if not self.is_connected: return []
         try:
             products = list(ayon_api.get_products(project_name, folder_ids=[folder_id]))
+            last_versions = _last_versions_by_product(project_name, [p["id"] for p in products], self.log)
             res = []
             for prod in products:
                 # Get last version
-                last_v = ayon_api.get_last_version_by_product_id(project_name, prod["id"])
+                last_v = last_versions.get(str(prod["id"]))
                 v_num = last_v["version"] if last_v else 0
                 p_name = prod["name"]
                 p_type = prod.get("productType") or prod.get("type")

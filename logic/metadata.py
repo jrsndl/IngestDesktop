@@ -3,6 +3,8 @@ import subprocess
 import json
 import logging
 
+from logic.proc import resolve_tool, run_tool
+
 IMAGE_EXTENSIONS = {
     ".exr", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".tga", ".dpx", ".hdr"
 }
@@ -15,8 +17,9 @@ def get_ffprobe_data(path_to_file, ffprobe_exe, logger=None, timeout=6.0):
     if logger is None:
         logger = logging.getLogger(__name__)
 
-    if not ffprobe_exe or not os.path.exists(ffprobe_exe):
-        logger.warning(f"FFprobe not found at: {ffprobe_exe}")
+    ffprobe_exe = resolve_tool(ffprobe_exe)
+    if not ffprobe_exe:
+        logger.warning("FFprobe not found (check Preferences > Conversions > ffprobe path)")
         return {}
 
     args = [
@@ -28,13 +31,8 @@ def get_ffprobe_data(path_to_file, ffprobe_exe, logger=None, timeout=6.0):
         path_to_file
     ]
 
-    # Hide window on Windows
-    creationflags = 0
-    if os.name == 'nt':
-        creationflags = 0x08000000 # subprocess.CREATE_NO_WINDOW
-
     try:
-        result = subprocess.run(args, capture_output=True, text=True, check=True, creationflags=creationflags, timeout=timeout)
+        result = run_tool(args, timeout=timeout)
         return json.loads(result.stdout)
     except Exception as e:
         logger.error(f"Failed to get ffprobe data for {path_to_file}: {e}")
@@ -48,8 +46,9 @@ def get_oiio_info_for_input(path_to_file, oiiotool_exe, logger=None, timeout=6.0
     if logger is None:
         logger = logging.getLogger(__name__)
 
-    if not oiiotool_exe or not os.path.exists(oiiotool_exe):
-        logger.warning(f"OIIOTool not found at: {oiiotool_exe}")
+    oiiotool_exe = resolve_tool(oiiotool_exe)
+    if not oiiotool_exe:
+        logger.warning("OIIOTool not found (check Preferences > Conversions > oiiotool path)")
         return {}
 
     # oiiotool doesn't have a direct JSON output for info in older versions
@@ -62,13 +61,8 @@ def get_oiio_info_for_input(path_to_file, oiiotool_exe, logger=None, timeout=6.0
         path_to_file
     ]
 
-    # Hide window on Windows
-    creationflags = 0
-    if os.name == 'nt':
-        creationflags = 0x08000000 # subprocess.CREATE_NO_WINDOW
-
     try:
-        result = subprocess.run(args, capture_output=True, text=True, check=True, creationflags=creationflags, timeout=timeout)
+        result = run_tool(args, timeout=timeout)
         import xml.etree.ElementTree as ET
         root = ET.fromstring(result.stdout)
         
@@ -99,6 +93,45 @@ def get_oiio_info_for_input(path_to_file, oiiotool_exe, logger=None, timeout=6.0
 def is_oiio_supported(oiiotool_exe):
     return oiiotool_exe and os.path.exists(oiiotool_exe)
 
+def parse_rate(value):
+    """'24000/1001' -> 23.976..., '25' -> 25.0, '0/0' or junk -> None."""
+    if value is None:
+        return None
+    s = str(value).strip()
+    try:
+        if "/" in s:
+            num, den = s.split("/", 1)
+            num, den = float(num), float(den)
+            return num / den if den else None
+        v = float(s)
+        return v if v > 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def timecode_to_frames(tc, fps):
+    """SMPTE timecode -> frame number.
+
+    Uses the nominal (rounded) rate, as timecode does: 01:00:00:00 @ 23.976 = 86400.
+    A ';' or '.' before the frames field marks drop-frame (29.97 / 59.94).
+    """
+    tc = str(tc).strip()
+    drop = ";" in tc or tc.count(".") == 1 and ":" in tc
+    parts = tc.replace(";", ":").replace(".", ":").split(":")
+    if len(parts) != 4:
+        return None
+    h, m, s, f = (int(p) for p in parts)
+    nominal = int(round(float(fps)))
+    if nominal <= 0:
+        return None
+    total = ((h * 3600) + (m * 60) + s) * nominal + f
+    if drop and nominal in (30, 60):
+        drop_frames = 2 if nominal == 30 else 4
+        total_minutes = h * 60 + m
+        total -= drop_frames * (total_minutes - total_minutes // 10)
+    return total
+
+
 def get_image_info_metadata(path_to_file, ffprobe_exe, oiiotool_exe, keys=None, logger=None, timeout=6.0):
     """Get flattened metadata from image file.
     
@@ -128,7 +161,22 @@ def get_image_info_metadata(path_to_file, ffprobe_exe, oiiotool_exe, keys=None, 
             if stream.get("codec_type") == "video":
                 video_stream = stream
                 break
-        return _ffprobe_metadata_conversion(video_stream)
+        out = _ffprobe_metadata_conversion(video_stream)
+        # MOV/MXF often keep the timecode in a tmcd/data stream or the container tags
+        if "timecode" not in out:
+            for stream in ffprobe_stream.get("streams", []):
+                tc = (stream.get("tags") or {}).get("timecode")
+                if tc:
+                    out["timecode"] = tc
+                    break
+        if "timecode" not in out:
+            tc = ((ffprobe_stream.get("format") or {}).get("tags") or {}).get("timecode")
+            if tc:
+                out["timecode"] = tc
+        fmt_dur = (ffprobe_stream.get("format") or {}).get("duration")
+        if "duration" not in out and fmt_dur:
+            out["duration"] = fmt_dur
+        return out
 
     metadata_stream = None
     ext = os.path.splitext(path_to_file)[-1].lower()
@@ -158,43 +206,30 @@ def get_image_info_metadata(path_to_file, ffprobe_exe, oiiotool_exe, keys=None, 
         return {}
 
     # Extract framerate
-    if "r_frame_rate" in metadata_stream or "framespersecond" in metadata_stream:
-        rate_info = metadata_stream.get("r_frame_rate")
-        if rate_info is None:
-            rate_info = metadata_stream.get("framespersecond")
-
-        if "/" in str(rate_info):
-            try:
-                num, den = str(rate_info).split("/")
-                rate_info = float(num) / float(den)
-            except: pass
-
-        try:
-            metadata_stream["framerate"] = float(str(rate_info))
-        except Exception as e:
-            logger.warning(f"Failed to evaluate '{rate_info}' to framerate: {e}")
+    # avg_frame_rate is the real rate; r_frame_rate can be a field/timebase rate
+    for rate_key in ("avg_frame_rate", "r_frame_rate", "framespersecond"):
+        rate = parse_rate(metadata_stream.get(rate_key))
+        if rate:
+            metadata_stream["framerate"] = rate
+            break
 
     # Ensure width and height are integers
     for key in ["width", "height"]:
         if key in metadata_stream:
             try:
                 metadata_stream[key] = int(metadata_stream[key])
-            except: pass
+            except (TypeError, ValueError):
+                pass
 
     # Calculate start_from_tc if possible
     if "timecode" in metadata_stream and "framerate" in metadata_stream:
         tc = str(metadata_stream["timecode"])
         try:
-            fps = float(metadata_stream["framerate"])
-            # Handle various TC formats (HH:MM:SS:FF or HH:MM:SS;FF)
-            parts = tc.replace(";", ":").split(":")
-            if len(parts) == 4:
-                h, m, s, f = map(int, parts)
-                # Simple non-drop frame math
-                start_frame = int((h * 3600 + m * 60 + s) * fps + f)
+            start_frame = timecode_to_frames(tc, metadata_stream["framerate"])
+            if start_frame is not None:
                 metadata_stream["start_from_tc"] = start_frame
-        except Exception:
-            pass
+        except (TypeError, ValueError) as e:
+            logger.warning(f"Cannot read timecode '{tc}': {e}")
 
     # Calculate nb_frames (total frame count) if missing but duration/fps exist
     if "nb_frames" not in metadata_stream:

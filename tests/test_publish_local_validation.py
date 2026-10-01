@@ -12,6 +12,10 @@ class TestPublishLocalValidation(unittest.TestCase):
     def setUp(self):
         self.window = MainWindow()
         self.model = self.window.model
+        # Tests run on default settings (tests/conftest.py), where the product name
+        # comes from each file's label; keep the identity on path/variant/version so
+        # these files count as duplicates whatever the product name template is.
+        self.window.config["duplicate_identity"] = "{ayon_path_val}{variant}{item.version}"
         
     def test_token_expansion_in_replacements(self):
         item = ImageItem(file_path="/tmp/shot_010_v001.exr", label="shot_010_v001")

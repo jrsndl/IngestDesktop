@@ -1,26 +1,57 @@
 import os
 import time
-import re
-import fnmatch
+import threading
+import traceback
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 from PySide6.QtCore import QThread, Signal
-from utils import (get_all_files, get_version_from_name, generate_thumbnail_image, 
+from utils import (get_all_files, generate_thumbnail_image,
                    generate_video_thumbnail, generate_placeholder_thumbnail_image,
-                   strip_sequence_counter, get_sequence_counter, evaluate_preset,
-                   calculate_thumbnail_time)
+                   evaluate_preset, calculate_thumbnail_time)
 from logic.image_model import ImageItem
 from logic.metadata import get_image_info_metadata
+from logic import paths as item_paths
+from logic.seqparse import split_name, frame_range_info, format_frame
+from logic.tag_parser import parse_item_tags
+from logic.pairing import PairIndex
+
+
+def sequence_key(file_path, base, ext, version):
+    """Identity of a sequence/still independent of which frame represents it."""
+    return (os.path.normcase(os.path.normpath(os.path.dirname(file_path))),
+            os.path.normcase(base), ext.lower(), version)
+
 
 class ImageScanner(QThread):
-    progress = Signal(int, int) # current, total
+    """Scan a folder and build ImageItems.
+
+    Order of operations
+    -------------------
+    Phase 1 (fast, items are shown as soon as it ends):
+      1. walk the folder, drop ignored / drawing-cache / generated-thumbnail files
+      2. group image files into sequences (logic/seqparse.py rules)
+      3. per item: parse version + tags from the name (logic/tag_parser.py)
+      4. per item: pick the preset (may use the label), fill preset fields
+      5. per item: existing review/thumbnail on disk, file times, preview image
+      -> emit `finished(items)`  (name kept for compatibility; this is NOT QThread.finished)
+    Phase 2 (background):
+      6. ffprobe/oiiotool metadata per item (timeout per call, not per scan),
+         video thumbnails, video frame range, thumbnail time
+      -> emit `item_updated(item)` per item, then `metadata_done()`
+    Grouping / review pairing is done by the main window after phase 1, with the
+    final tags, so it is never computed from half-filled items.
+    """
+    progress = Signal(int, int)  # current, total
     status_text = Signal(str)
     finished = Signal(list)
     item_updated = Signal(object)
+    metadata_done = Signal()
     canceled = Signal()
     log = Signal(str)
 
-    def __init__(self, directory, recursive=True, version_regex="_v(\\d+)", 
+    def __init__(self, directory, recursive=True, version_regex=r"([._]v|v)(\d+)",
                  thumbnail_size=150, age_source="Modification Date",
-                 detect_sequences=True, seq_thumb_frame="Middle", 
+                 detect_sequences=True, seq_thumb_frame="Middle",
                  extensions=None, presets=None,
                  stills_start_frame=1001, stills_end_frame=1001,
                  video_start_from_tc=False, video_start_frame=1001,
@@ -28,10 +59,10 @@ class ImageScanner(QThread):
                  oiiotool_path="oiiotool.exe", ocio_config="", stills_thumb_same=True,
                  thumb_suffix="_thumbnail", thumb_format=".jpg",
                  thumb_location="Relative to Source Folder", thumb_location_path="_thumbs",
-                  timeout=6, default_fps=25.0, use_fps_from_metadata=True,
-                  drawing_cache_location="relative to source folder",
-                  drawing_cache_path="_drawcache",
-                  ignore_enabled=True, ignore_text=""):
+                 timeout=6, default_fps=25.0, use_fps_from_metadata=True,
+                 drawing_cache_location="relative to source folder",
+                 drawing_cache_path="_drawcache",
+                 ignore_enabled=True, ignore_text="", config=None, pair_existing_media=True):
         super().__init__()
         self.directory = directory
         self.recursive = recursive
@@ -55,544 +86,430 @@ class ImageScanner(QThread):
         self.thumb_format = thumb_format
         self.thumb_location = thumb_location
         self.thumb_location_path = thumb_location_path
-        self.timeout = timeout
+        self.timeout = timeout  # seconds per external tool call (ffprobe/ffmpeg/oiiotool)
         self.default_fps = default_fps
         self.use_fps_from_metadata = use_fps_from_metadata
         self.drawing_cache_location = drawing_cache_location
         self.drawing_cache_path = drawing_cache_path
         self.ignore_enabled = ignore_enabled
         self.ignore_text = ignore_text
+        # Full preferences (tag parsing rules). When None, tags are parsed by the GUI.
+        self.config = config
+        # Link footage to thumbnails / review movies that already exist (logic/pairing.py)
+        self.pair_existing_media = pair_existing_media
+        self._pairs = None
+        self._paired = {}  # footage path (normcase) -> (thumb_path, review_path)
+        self._paired_reviews = {}  # review movie path (normcase) -> footage path
         self._is_canceled = False
 
     def cancel(self):
         self._is_canceled = True
 
+    # ------------------------------------------------------------------
     def run(self):
+        try:
+            self._run()
+        except Exception as e:  # never leave the UI waiting in "scanning"
+            msg = f"[Error] Scan failed: {e}"
+            print(msg)
+            traceback.print_exc()
+            self.log.emit(msg)
+            self.status_text.emit(msg)
+            self.finished.emit([])
+            self.metadata_done.emit()
+
+    def _canceled(self):
+        if self._is_canceled:
+            self.canceled.emit()
+            return True
+        return False
+
+    def _run(self):
         if not os.path.exists(self.directory):
             self.finished.emit([])
+            self.metadata_done.emit()
             return
 
-        print(f"[Timer] Starting directory scan in: {self.directory}...")
         start_time = time.perf_counter()
         self.status_text.emit("Scanning Files...")
         all_files = get_all_files(self.directory, self.recursive)
         if not all_files:
             self.finished.emit([])
+            self.metadata_done.emit()
             return
         self.status_text.emit(f"Scanning Files, {len(all_files)} files found")
 
-        # Categorization logic (defaults if config is empty)
+        groups, videos, others = self._classify(all_files)
+        if groups is None:
+            return  # canceled
+        if self.pair_existing_media:
+            groups = self._pair_existing_media(all_files, groups, videos)
+
+        total_units = len(groups) + len(videos) + len(others)
+        current = 0
+        final_items = []
+
+        # 1. Image groups (stills and sequences)
+        for key, entries in groups.items():
+            if self._canceled():
+                return
+            final_items.append(self._make_image_item(entries))
+            current += 1
+            self.progress.emit(current, total_units)
+
+        # 2. Videos
+        for f in videos:
+            if self._canceled():
+                return
+            item = ImageItem(f, category="Video", frame_start=self.video_start_frame,
+                             frame_end=self.video_start_frame,
+                             version=split_name(f, self.version_regex).version or 1)
+            item._meta_source = f
+            item._video_start_from_tc = self.video_start_from_tc
+            item._video_default_start = self.video_start_frame
+            item.seq_key = sequence_key(f, os.path.basename(f), "", None)
+            footage = self._paired_reviews.get(os.path.normcase(os.path.abspath(f)))
+            if footage:
+                # review of other footage: kept for publishing, hidden in canvas / right panel
+                item.metadata["paired_review_of"] = footage.replace("\\", "/")
+                item.metadata["is_paired_review"] = True
+                item.is_review_repre = True
+            self._finish_item(item, "videos", f)
+            final_items.append(item)
+            current += 1
+            self.progress.emit(current, total_units)
+
+        # 3. Others
+        for f in others:
+            if self._canceled():
+                return
+            item = ImageItem(f, category="Other", version=split_name(f, self.version_regex).version or 1)
+            item.seq_key = sequence_key(f, os.path.basename(f), "", None)
+            self._finish_item(item, "other", f)
+            final_items.append(item)
+            current += 1
+            self.progress.emit(current, total_units)
+
+        elapsed = time.perf_counter() - start_time
+        self.status_text.emit(f"Scan files took {elapsed:.2f} seconds.")
+        self.log.emit(f"[Timer] Scan files took {elapsed:.4f} seconds.")
+        self.finished.emit(final_items)
+
+        self._fetch_metadata(final_items)
+        self.metadata_done.emit()
+
+    # ------------------------------------------------------------------
+    def _pair_existing_media(self, all_files, groups, videos):
+        """Find existing thumbnails/reviews for every footage item; files used as
+        thumbnails are removed from the item list."""
+        review_suffixes = {p.get("Review Suffix") for plist in self.presets.values()
+                           for p in plist if isinstance(p, dict) and p.get("Review Suffix")}
+        self._pairs = PairIndex(all_files, self.directory, (self.thumb_suffix, *review_suffixes))
+        consumed = set()
+        footage = [(sorted(e[2] for e in entries), len(entries) > 1) for entries in groups.values()]
+        footage += [([v], False) for v in videos]
+        for paths, is_seq in footage:
+            first = paths[0]
+            thumb = self._pairs.thumbnail_for(first, is_seq)
+            review = self._pairs.review_for(first, is_seq)
+            if thumb or review:
+                self._paired[os.path.normcase(os.path.abspath(first))] = (thumb, review)
+            if thumb:
+                consumed.add(os.path.normcase(os.path.abspath(thumb)))
+            if review:
+                self._paired_reviews.setdefault(os.path.normcase(os.path.abspath(review)), first)
+        if consumed:
+            kept = {}
+            for key, entries in groups.items():
+                if len(entries) == 1 and os.path.normcase(os.path.abspath(entries[0][2])) in consumed:
+                    continue  # this file is a thumbnail of other footage, not an item
+                kept[key] = entries
+            n = len(groups) - len(kept)
+            if n:
+                self.log.emit(f"Paired {n} existing thumbnail file(s) with their footage.")
+            groups = kept
+        return groups
+
+    def _classify(self, all_files):
         def parse_exts(s, default):
-            if not s: return default
-            return {e.strip().lower() for e in s.split() if e.strip()}
+            if not s:
+                return default
+            return {e.strip().lower() if e.strip().startswith(".") else "." + e.strip().lower()
+                    for e in s.split() if e.strip()}
 
-        default_img = {".jpg", ".jpeg", ".png", ".tga", ".exr", ".dpx", ".psd"}
-        default_vid = {".mov", ".mp4", ".mxf"}
-        
-        img_exts = parse_exts(self.extensions.get("stills"), default_img)
-        # Merge sequence extensions into the same pool as they are both image groups
-        img_exts.update(parse_exts(self.extensions.get("sequences"), set()))
-        
-        vid_exts = parse_exts(self.extensions.get("videos"), default_vid)
+        img_exts = parse_exts(self.extensions.get("stills"), {".jpg", ".jpeg", ".png", ".tga", ".exr", ".dpx", ".psd"})
+        img_exts |= parse_exts(self.extensions.get("sequences"), set())
+        vid_exts = parse_exts(self.extensions.get("videos"), {".mov", ".mp4", ".mxf"})
         other_exts = parse_exts(self.extensions.get("other"), set())
-        
-        groups = {} # (dir, base_name, ext, version) -> [file_paths]
-        others = []
-        videos = []
 
-        # Resolve drawing cache directory absolute path for exclusion
-        cache_dir_lower = None
+        cache_dir = None
         if self.drawing_cache_path:
             if self.drawing_cache_location == "relative to source folder":
-                if self.directory:
-                    cache_dir_lower = os.path.normpath(os.path.join(self.directory, self.drawing_cache_path)).lower()
+                cache_dir = os.path.join(self.directory, self.drawing_cache_path)
             else:
-                if os.path.isabs(self.drawing_cache_path):
-                    cache_dir_lower = os.path.normpath(self.drawing_cache_path).lower()
-                else:
-                    cache_dir_lower = os.path.normpath(os.path.abspath(self.drawing_cache_path)).lower()
+                cache_dir = os.path.abspath(self.drawing_cache_path)
+            cache_dir = os.path.normcase(os.path.normpath(cache_dir))
 
         ignore_patterns = []
         if self.ignore_enabled and self.ignore_text:
             ignore_patterns = [p.strip().lower() for p in self.ignore_text.split() if p.strip()]
 
-        self._file_lookup = {os.path.basename(f).lower(): f for f in all_files}
+        thumb_tail = (self.thumb_suffix + self.thumb_format).lower() if self.thumb_suffix and self.thumb_format else None
 
+        groups = {}   # key -> [(frame, frame_str, path, parts)]
+        videos, others = [], []
         for f in all_files:
-            if self._is_canceled:
-                self.canceled.emit()
-                return
-
-            if self.timeout > 0 and time.perf_counter() - start_time > self.timeout:
-                warning_msg = f"[Warning] Scan operation timed out after {self.timeout} seconds. Stopping operation."
-                print(warning_msg)
-                self.status_text.emit(warning_msg)
-                self.finished.emit([])
-                return
-
-            # Check ignore filter strings against full absolute path
-            if ignore_patterns:
-                abs_f_norm = os.path.normpath(os.path.abspath(f)).lower()
-                if any(pat in abs_f_norm for pat in ignore_patterns):
-                    continue
-
-            # Exclude files inside the drawing cache folder
-            if cache_dir_lower:
-                f_norm_path = os.path.normpath(f).lower()
-                if f_norm_path.startswith(cache_dir_lower + os.sep) or f_norm_path == cache_dir_lower:
-                    continue
-
-            # Completely ignore generated thumbnails
-            filename_lower = f.lower()
-            if filename_lower.endswith("_thumbnail.png") or \
-               (self.thumb_suffix and self.thumb_format and \
-                self.thumb_suffix.lower() in filename_lower and \
-                filename_lower.endswith(self.thumb_format.lower())):
+            if self._canceled():
+                return None, None, None
+            norm = os.path.normcase(os.path.normpath(os.path.abspath(f)))
+            if ignore_patterns and any(p in norm.lower() for p in ignore_patterns):
+                continue
+            if cache_dir and (norm == cache_dir or norm.startswith(cache_dir + os.sep)):
+                continue
+            base_lower = os.path.basename(f).lower()
+            # generated thumbnails: only the file NAME is checked (not folder names)
+            if base_lower.endswith("_thumbnail.png") or (thumb_tail and base_lower.endswith(thumb_tail)):
                 continue
 
             ext = os.path.splitext(f)[1].lower()
             if ext in img_exts:
-                directory = os.path.dirname(f)
-                filename = os.path.basename(f)
-                
-                # 1. Extract version
-                version = get_version_from_name(filename, self.version_regex)
-                
-                if self.detect_sequences:
-                    # 2. Strip version from filename for further pattern matching
-                    name_no_ver = re.sub(self.version_regex, "", filename, flags=re.IGNORECASE)
-                    # 3. Only strip sequence counter if one exists after version is removed
-                    if get_sequence_counter(name_no_ver):
-                        base_name = strip_sequence_counter(name_no_ver)
-                        key = (directory, base_name, ext, version)
-                    else:
-                        key = (directory, filename, ext, version)
+                parts = split_name(f, self.version_regex)
+                if self.detect_sequences and parts.frame is not None:
+                    key = sequence_key(f, parts.base, ext, parts.version)
                 else:
-                    # If detection is off, every file gets its own unique key
-                    key = (directory, filename, ext, version)
-                
-                if key not in groups:
-                    groups[key] = []
-                groups[key].append(f)
+                    key = ("file", norm)
+                groups.setdefault(key, []).append((parts.frame, parts.frame_str, f, parts))
             elif ext in vid_exts:
                 videos.append(f)
             elif ext in other_exts:
                 others.append(f)
-            # If extensions are defined for some categories, we skip everything else?
-            # Actually, let's only skip if the user has defined ANY explicit lists.
-            # Otherwise we keep the "default everything else is Other" behavior.
             elif not (img_exts or vid_exts or other_exts):
                 others.append(f)
+        return groups, videos, others
 
-        # Process groups into items
-        final_items = []
-        
-        # Total units to process (groups + videos + others)
-        total_units = len(groups) + len(videos) + len(others)
-        current = 0
+    def _make_image_item(self, entries):
+        entries = sorted(entries, key=lambda e: (e[0] is None, e[0] if e[0] is not None else 0, e[2]))
+        paths = [e[2] for e in entries]
+        first_path = paths[0]
+        parts = entries[0][3]
+        version = parts.version if parts.version is not None else 1
 
-        # 1. Process Image Groups (Stills and Sequences)
-        for key, paths in groups.items():
-            if self._is_canceled:
-                self.canceled.emit()
-                return
-            if self.timeout > 0 and time.perf_counter() - start_time > self.timeout:
-                warning_msg = f"[Warning] Scan operation timed out after {self.timeout} seconds. Stopping operation."
-                print(warning_msg)
-                self.status_text.emit(warning_msg)
-                self.finished.emit([])
-                return
-            
-            paths.sort()
-            first_path = paths[0]
-            directory, base_name, ext, version = key
-            
-            category = "Sequence" if len(paths) > 1 else "Still"
-            
-            # For sequences, label is the base name. For stills, use filename minus ext.
-            if category == "Sequence":
-                label = base_name
-                # Calculate frame range
-                first_name = os.path.basename(paths[0])
-                last_name = os.path.basename(paths[-1])
-                
-                # Strip version from these names as well to ensure we get the right counter
-                fn_no_ver = re.sub(self.version_regex, "", first_name, flags=re.IGNORECASE)
-                ln_no_ver = re.sub(self.version_regex, "", last_name, flags=re.IGNORECASE)
-                
-                first_f = get_sequence_counter(fn_no_ver)
-                last_f = get_sequence_counter(ln_no_ver)
-                
-                if first_f and last_f:
-                    category = f"sequence[{first_f}-{last_f}]"
-                
-                nb_frames = len(paths)
-                # Determine path for metadata/thumbnail
-                if self.seq_thumb_frame == "Middle":
-                    source_path = paths[len(paths) // 2]
-                elif self.seq_thumb_frame == "Second" and len(paths) > 1:
-                    source_path = paths[1]
-                else:
-                    source_path = first_path
+        if len(paths) > 1:
+            frames = [e[0] for e in entries]
+            pad = max(e[3].pad for e in entries)
+            first_f, last_f, n_missing, missing_preview = frame_range_info(frames)
+            label = parts.label
+            category = f"sequence[{format_frame(first_f, pad)}-{format_frame(last_f, pad)}]"
+            if self.seq_thumb_frame == "Middle":
+                source_path = paths[len(paths) // 2]
+            elif self.seq_thumb_frame == "Second":
+                source_path = paths[1]
             else:
-                label = os.path.splitext(os.path.basename(first_path))[0]
                 source_path = first_path
-                first_f = self.stills_start_frame
-                last_f = self.stills_end_frame
-                nb_frames = 1
+            item = ImageItem(source_path, label=label, version=version, category=category,
+                             is_sequence=True, frame_start=first_f, frame_end=last_f)
+            item.metadata["nb_frames"] = len(paths)
+            item.metadata["frame_padding"] = pad
+            item.metadata["seq_thumbnail_path"] = source_path.replace("\\", "/")
+            if n_missing:
+                item.metadata["missing_frames"] = n_missing
+                preview = ", ".join(str(m) for m in missing_preview)
+                more = "..." if n_missing > len(missing_preview) else ""
+                self.log.emit(f"[Warning] {label}: {n_missing} missing frame(s) in {first_f}-{last_f}: {preview}{more}")
+            p_type = "sequences"
+        else:
+            source_path = first_path
+            label = os.path.splitext(os.path.basename(first_path))[0]
+            item = ImageItem(source_path, label=label, version=version, category="Still",
+                             frame_start=self.stills_start_frame, frame_end=self.stills_end_frame)
+            item.metadata["nb_frames"] = 1
+            p_type = "stills"
 
-            p_type = "sequences" if len(paths) > 1 else "stills"
-            is_seq = (len(paths) > 1)
-            matched_p = evaluate_preset(first_path, self.presets, p_type, label=label)
-            preset_name = matched_p.get("Name") if matched_p else None
-            variant = matched_p.get("Variant") if matched_p else None
-            product_type = matched_p.get("Product Type") if matched_p else None
-            camel_case = matched_p.get("CamelCase", True) if matched_p else True
-            representation = matched_p.get("Representation", "{extension}") if matched_p else "{extension}"
-            colorspace = matched_p.get("Colorspace", "sRGB") if matched_p else "sRGB"
-            rep_tags = matched_p.get("Tags", "passing") if matched_p else "passing"
-            
-            item = ImageItem(source_path, label=label, version=version, category=category, 
-                             preset_name=preset_name, variant=variant, product_type=product_type, camel_case=camel_case,
-                             representation=representation, colorspace=colorspace, rep_tags=rep_tags, is_sequence=is_seq,
-                             preset_data=matched_p, frame_start=first_f, frame_end=last_f)
-            
-            # Initial Review Status
-            if matched_p and matched_p.get("Convert Review", True):
-                rev_p = self._get_expected_review_path(item, matched_p)
-                if rev_p and os.path.exists(rev_p) and os.path.getsize(rev_p) > 0:
-                    item.review_file_path = rev_p
-                    item.review_status = "done"
-                else:
-                    item.review_status = "waiting"
+        item.seq_key = sequence_key(first_path, parts.base, parts.ext, parts.version)
+        item._meta_source = first_path
+        self._finish_item(item, p_type, first_path, thumb_source=source_path)
+        return item
+
+    def _finish_item(self, item, p_type, first_path, thumb_source=None):
+        # 3. version + tags from the name, before anything that depends on them
+        if self.config is not None:
+            try:
+                parse_item_tags(item, self.config, self.directory)
+                item._tags_parsed = True
+            except Exception as e:
+                self.log.emit(f"[Warning] Tag parsing failed for {item.filename}: {e}")
+
+        # 4. preset
+        matched_p = evaluate_preset(first_path, self.presets, p_type, label=item.label) or None
+        item.preset_data = matched_p or {}
+        item.preset_name = matched_p.get("Name") if matched_p else None
+        item.variant = matched_p.get("Variant") if matched_p else None
+        item.product_type = matched_p.get("Product Type") if matched_p else None
+        item.camel_case = matched_p.get("CamelCase", True) if matched_p else True
+        item.representation = matched_p.get("Representation", "{extension}") if matched_p else "{extension}"
+        item.colorspace = matched_p.get("Colorspace", "sRGB") if matched_p else "sRGB"
+        item.rep_tags = matched_p.get("Tags", "passing") if matched_p else "passing"
+
+        # 5. existing thumbnail / review found by pairing (same name, see logic/pairing.py)
+        paired_thumb, paired_review = self._paired.get(os.path.normcase(os.path.abspath(first_path)), (None, None))
+        if paired_thumb:
+            item.conversion_thumb_path = paired_thumb.replace("\\", "/")
+            item.metadata["paired_thumbnail"] = item.conversion_thumb_path
+        if paired_review:
+            item.review_file_path = paired_review.replace("\\", "/")
+            item.metadata["paired_review"] = item.review_file_path
+            item.review_status = "done"
+        # 6. otherwise review status from the preset's expected location
+        elif matched_p and matched_p.get("Convert Review", True):
+            rev = item_paths.find_existing_review(item.file_path, item.is_sequence, self.directory, matched_p)
+            if rev:
+                item.review_file_path = rev
+                item.review_status = "done"
             else:
-                item.review_status = "do not convert"
-            
-            item.metadata["nb_frames"] = nb_frames
-            if is_seq:
-                item.metadata["seq_thumbnail_path"] = source_path.replace("\\", "/")
-            self._fill_metadata(item, source_path)
-            
-            # Save ref for metadata extraction later
-            item._meta_source = first_path
-            
-            final_items.append(item)
-            current += 1
-            self.progress.emit(current, total_units)
+                item.review_status = "waiting"
+        else:
+            item.review_status = "do not convert"
 
-        # 2. Process Videos
-        for f in videos:
-            if self._is_canceled:
-                self.canceled.emit()
-                return
-            if self.timeout > 0 and time.perf_counter() - start_time > self.timeout:
-                warning_msg = f"[Warning] Scan operation timed out after {self.timeout} seconds. Stopping operation."
-                print(warning_msg)
-                self.status_text.emit(warning_msg)
-                self.finished.emit([])
-                return
-            
-            matched_p = evaluate_preset(f, self.presets, "videos", label=os.path.splitext(os.path.basename(f))[0])
-            preset_name = matched_p.get("Name") if matched_p else None
-            variant = matched_p.get("Variant") if matched_p else None
-            product_type = matched_p.get("Product Type") if matched_p else None
-            camel_case = matched_p.get("CamelCase", True) if matched_p else True
-            representation = matched_p.get("Representation", "{extension}") if matched_p else "{extension}"
-            colorspace = matched_p.get("Colorspace", "sRGB") if matched_p else "sRGB"
-            rep_tags = matched_p.get("Tags", "passing") if matched_p else "passing"
-            
-            start_f = self.video_start_frame
-            item = ImageItem(f, category="Video", preset_name=preset_name, variant=variant, product_type=product_type, camel_case=camel_case,
-                             representation=representation, colorspace=colorspace, rep_tags=rep_tags,
-                             preset_data=matched_p, frame_start=start_f, frame_end=start_f)
-            
-            # Initial Review Status
-            if matched_p and matched_p.get("Convert Review", True):
-                rev_p = self._get_expected_review_path(item, matched_p)
-                if rev_p and os.path.exists(rev_p) and os.path.getsize(rev_p) > 0:
-                    item.review_file_path = rev_p
-                    item.review_status = "done"
-                else:
-                    item.review_status = "waiting"
-            else:
-                item.review_status = "do not convert"
-            self._fill_metadata(item, f)
-            
-            # Save ref for metadata extraction later
-            item._meta_source = f
-            item._video_start_from_tc = self.video_start_from_tc
-            item._video_default_start = self.video_start_frame
+        self._fill_metadata(item, thumb_source or first_path)
 
-            final_items.append(item)
-            current += 1
-            self.progress.emit(current, total_units)
-
-        # 3. Process Others
-        for f in others:
-            if self._is_canceled:
-                self.canceled.emit()
-                return
-            if self.timeout > 0 and time.perf_counter() - start_time > self.timeout:
-                warning_msg = f"[Warning] Scan operation timed out after {self.timeout} seconds. Stopping operation."
-                print(warning_msg)
-                self.status_text.emit(warning_msg)
-                self.finished.emit([])
-                return
-            
-            matched_p = evaluate_preset(f, self.presets, "other", label=os.path.splitext(os.path.basename(f))[0])
-            preset_name = matched_p.get("Name") if matched_p else None
-            variant = matched_p.get("Variant") if matched_p else None
-            product_type = matched_p.get("Product Type") if matched_p else None
-            camel_case = matched_p.get("CamelCase", True) if matched_p else True
-            representation = matched_p.get("Representation", "{extension}") if matched_p else "{extension}"
-            colorspace = matched_p.get("Colorspace", "sRGB") if matched_p else "sRGB"
-            rep_tags = matched_p.get("Tags", "passing") if matched_p else "passing"
-            item = ImageItem(f, category="Other", preset_name=preset_name, variant=variant, product_type=product_type, camel_case=camel_case,
-                             representation=representation, colorspace=colorspace, rep_tags=rep_tags,
-                             preset_data=matched_p)
-            
-            # Initial Review Status
-            if matched_p and matched_p.get("Convert Review", True):
-                rev_p = self._get_expected_review_path(item, matched_p)
-                if rev_p and os.path.exists(rev_p) and os.path.getsize(rev_p) > 0:
-                    item.review_file_path = rev_p
-                    item.review_status = "done"
-                else:
-                    item.review_status = "waiting"
-            else:
-                item.review_status = "do not convert"
-            self._fill_metadata(item, f)
-            final_items.append(item)
-            current += 1
-            self.progress.emit(current, total_units)
-
-        # Perform grouping-based review pairing for all scanned items
-        try:
-            from logic.grouping_engine import compute_group_key, pair_group_reviews
-            group_by_template = getattr(self, "group_by", None) or "{folder_name}{task_name}{variant}{version}"
-            groups = {}
-            for item in final_items:
-                key = compute_group_key(item, group_by_template)
-                item.group_key = key
-                groups.setdefault(key, []).append(item)
-
-            for key, g_items in groups.items():
-                pair_group_reviews(g_items)
-        except Exception as e:
-            print(f"[Warning] Group review pairing during scan failed: {e}")
-
-        elapsed = time.perf_counter() - start_time
-        print(f"[Timer] Scan files took {elapsed:.4f} seconds.")
-        self.status_text.emit(f"Scan files took {elapsed:.4f} seconds.")
-        self.log.emit(f"[Timer] Scan files took {elapsed:.4f} seconds.")
-        
-        self.finished.emit(final_items)
-        
-        # --- Phase 2: Async Metadata Extraction ---
-        # Filter items that actually need metadata (sequences and videos)
-        meta_queue = [item for item in final_items if hasattr(item, "_meta_source")]
-        if not meta_queue:
+    # ------------------------------------------------------------------
+    def _fetch_metadata(self, final_items):
+        meta_queue = [it for it in final_items if hasattr(it, "_meta_source")]
+        if not meta_queue or self._is_canceled:
             return
+        start = time.perf_counter()
+        total = len(meta_queue)
+        done = [0]
+        lock = threading.Lock()
 
-        print(f"[Timer] Starting to fetch metadata for {len(meta_queue)} items...")
-        meta_start_time = time.perf_counter()
-
-        total_meta = len(meta_queue)
-        checked_meta = 0
-
-        def process_item_metadata(item):
-            if self._is_canceled: return
-            if self.timeout > 0 and time.perf_counter() - meta_start_time > self.timeout:
-                warning_msg = f"[Warning] Metadata fetching timed out after {self.timeout} seconds. Stopping operation."
-                print(warning_msg)
-                self.status_text.emit(warning_msg)
-                self._is_canceled = True
+        def work(item):
+            if self._is_canceled:
                 return
-            
-            metadata = get_image_info_metadata(item._meta_source, self.ffprobe_path, self.oiiotool_path, timeout=self.timeout)
-            if not metadata: return
-            
-            item.metadata.update(metadata)
-            
-            # 1. Video Thumbnail Generation
-            if item.category == "Video" and not getattr(item, "conversion_thumb_path", None):
-                expected_thumb = self._get_expected_thumb_path(item)
-                # Ensure the directory for expected_thumb exists
-                os.makedirs(os.path.dirname(expected_thumb), exist_ok=True)
-                
-                if not os.path.exists(expected_thumb):
-                    duration = metadata.get("duration")
-                    generate_video_thumbnail(item._meta_source, self.ffmpeg_path, 
-                                             frame_mode=self.seq_thumb_frame, duration=duration,
-                                             out_path=expected_thumb)
-                
-                # Update icon if thumbnail exists now
-                if os.path.exists(expected_thumb):
-                    item.thumbnail_image = generate_thumbnail_image(expected_thumb, self.thumbnail_size)
-                    item.conversion_thumb_path = expected_thumb
-
-            # 2. Special handling for videos: start/end frames
-            if item.category == "Video":
-                if getattr(item, "_video_start_from_tc", False):
-                    start_from_tc = metadata.get("start_from_tc")
-                    if start_from_tc is not None:
-                        item.frame_start = start_from_tc
-                
-                # Calculate frame_end based on nb_frames
-                nb_frames_val = item.metadata.get("nb_frames")
-                try:
-                    nb_frames_val = int(nb_frames_val)
-                    item.frame_end = item.frame_start + nb_frames_val - 1
-                except (ValueError, TypeError):
-                    item.frame_end = item.frame_start
-
-            # 3. Calculate thumbnail time for ffmpeg seeking
+            metadata = get_image_info_metadata(item._meta_source, self.ffprobe_path,
+                                               self.oiiotool_path, timeout=self.timeout)
+            if metadata:
+                item.metadata.update(metadata)
+                if item.category == "Video":
+                    self._video_postprocess(item, metadata)
             fps = self._resolve_fps(item)
             nb = item.metadata.get("nb_frames", 1)
-            item.metadata["thumbnail_time"] = calculate_thumbnail_time(nb, fps, mode=self.seq_thumb_frame, default_fps=self.default_fps)
-            
-            nonlocal checked_meta
-            checked_meta += 1
-            self.status_text.emit(f"Gathering metadata from Files, {checked_meta} from {total_meta} files checked")
+            item.metadata["thumbnail_time"] = calculate_thumbnail_time(
+                nb, fps, mode=self.seq_thumb_frame, default_fps=self.default_fps)
+            with lock:
+                done[0] += 1
+                n = done[0]
+            self.status_text.emit(f"Gathering metadata from Files, {n} from {total} files checked")
             self.item_updated.emit(item)
 
-        # Use a thread pool to extract metadata in parallel
-        # 4-8 workers is usually good for I/O and external processes
-        from concurrent.futures import ThreadPoolExecutor
         with ThreadPoolExecutor(max_workers=4) as executor:
-            executor.map(process_item_metadata, meta_queue)
+            futures = {executor.submit(work, it): it for it in meta_queue}
+            for fut in as_completed(futures):
+                exc = fut.exception()
+                if exc is not None:
+                    self.log.emit(f"[Warning] Metadata failed for {futures[fut].filename}: {exc}")
 
-        meta_elapsed = time.perf_counter() - meta_start_time
-        print(f"[Timer] Metadata fetching took {meta_elapsed:.4f} seconds.")
-        self.status_text.emit(f"Metadata fetching took {meta_elapsed:.4f} seconds.")
-        self.log.emit(f"[Timer] Metadata fetching took {meta_elapsed:.4f} seconds.")
+        elapsed = time.perf_counter() - start
+        self.status_text.emit(f"Metadata fetching took {elapsed:.2f} seconds.")
+        self.log.emit(f"[Timer] Metadata fetching took {elapsed:.4f} seconds.")
+
+    def _video_postprocess(self, item, metadata):
+        if not getattr(item, "conversion_thumb_path", None):
+            expected_thumb = self._get_expected_thumb_path(item)
+            try:
+                os.makedirs(os.path.dirname(expected_thumb), exist_ok=True)
+            except OSError as e:
+                self.log.emit(f"[Warning] Cannot create thumbnail folder: {e}")
+            if not os.path.exists(expected_thumb):
+                generate_video_thumbnail(item._meta_source, self.ffmpeg_path,
+                                         frame_mode=self.seq_thumb_frame,
+                                         duration=metadata.get("duration"),
+                                         out_path=expected_thumb, timeout=self.timeout)
+            if os.path.exists(expected_thumb):
+                item.thumbnail_image = generate_thumbnail_image(expected_thumb, self.thumbnail_size)
+                item.conversion_thumb_path = expected_thumb
+
+        if getattr(item, "_video_start_from_tc", False):
+            start_from_tc = metadata.get("start_from_tc")
+            if start_from_tc is not None:
+                item.frame_start = start_from_tc
+        try:
+            item.frame_end = item.frame_start + int(item.metadata.get("nb_frames")) - 1
+        except (ValueError, TypeError):
+            item.frame_end = item.frame_start
 
     def _resolve_fps(self, item):
-        fps_val = None
         p_data = item.preset_data or {}
         if p_data.get("FPS Override", False):
-            fps_preset = p_data.get("FPS")
-            if fps_preset is not None:
-                try:
-                    fps_val = float(fps_preset)
-                except (ValueError, TypeError):
-                    pass
-        else:
-            use_meta = getattr(self, "use_fps_from_metadata", True)
-            if use_meta and p_data.get("FPS From Metadata", True):
-                fps_meta = item.metadata.get("framerate")
-                if fps_meta is not None:
-                    try:
-                        fps_val = float(fps_meta)
-                    except (ValueError, TypeError):
-                        pass
-        if fps_val is None:
-            fps_val = self.default_fps
-        return fps_val
+            try:
+                return float(p_data.get("FPS"))
+            except (ValueError, TypeError):
+                pass
+        elif self.use_fps_from_metadata and p_data.get("FPS From Metadata", True):
+            try:
+                v = item.metadata.get("framerate")
+                if v is not None:
+                    return float(v)
+            except (ValueError, TypeError):
+                pass
+        return self.default_fps
 
     def _get_expected_thumb_path(self, item):
-        """Calculate the expected generated thumbnail path based on preferences."""
-        source_file = item.file_path.replace("\\", "/")
-        base_dir = os.path.dirname(source_file)
-        filename = os.path.basename(source_file)
-        name_no_ext, _ = os.path.splitext(filename)
-        
-        if item.is_sequence:
-            name_no_ext = strip_sequence_counter(name_no_ext)
-            
-        # Determine target directory
-        target_dir = base_dir
-        if self.thumb_location == "Relative to Source Folder":
-            if self.directory:
-                target_dir = os.path.join(self.directory, self.thumb_location_path).replace("\\", "/")
-        elif self.thumb_location == "Custom":
-            target_dir = self.thumb_location_path.replace("\\", "/")
-            
-        # Basename with suffix
-        target_filename = f"{name_no_ext}{self.thumb_suffix}{self.thumb_format}"
-        
-        return os.path.join(target_dir, target_filename).replace("\\", "/")
+        return item_paths.thumb_path(item.file_path, item.is_sequence, self.directory,
+                                     self.thumb_location, self.thumb_location_path,
+                                     self.thumb_suffix, self.thumb_format)
 
     def _get_expected_review_path(self, item, preset_data=None):
-        """Calculate the expected generated review video path based on preset."""
-        p_data = preset_data or item.preset_data or {}
-        r_loc = p_data.get("Review Location", "Relative to Source Folder")
-        r_path = p_data.get("Review Path", "_reviews")
-        r_suf = p_data.get("Review Suffix", "_review")
-        r_fmt = p_data.get("Review Format", ".mp4")
-
-        source_file = item.file_path.replace("\\", "/")
-        base_dir = os.path.dirname(source_file)
-        filename = os.path.basename(source_file)
-        name_no_ext, _ = os.path.splitext(filename)
-        if item.is_sequence:
-            name_no_ext = strip_sequence_counter(name_no_ext)
-
-        target_dir = base_dir
-        if r_loc == "Relative to Source Folder":
-            if self.directory:
-                target_dir = os.path.join(self.directory, r_path).replace("\\", "/")
-        elif r_loc == "Custom":
-            target_dir = r_path.replace("\\", "/")
-
-        target_filename = f"{name_no_ext}{r_suf}{r_fmt}"
-        expected = os.path.join(target_dir, target_filename).replace("\\", "/")
-        if os.path.exists(expected) and os.path.getsize(expected) > 0:
-            return expected
-
-        # Fallback search using scanned tree files
-        if hasattr(self, "_file_lookup") and self._file_lookup:
-            candidates = [
-                f"{name_no_ext}{r_suf}{r_fmt}".lower(),
-                f"{name_no_ext}_review.mp4".lower(),
-                f"{name_no_ext}_review.mov".lower(),
-                f"{name_no_ext}.mp4".lower(),
-                f"{name_no_ext}.mov".lower(),
-            ]
-            for cand in candidates:
-                if cand in self._file_lookup:
-                    cand_path = self._file_lookup[cand]
-                    if os.path.exists(cand_path) and os.path.getsize(cand_path) > 0:
-                        return cand_path.replace("\\", "/")
-
-        return expected
+        found = item_paths.find_existing_review(item.file_path, item.is_sequence, self.directory,
+                                                preset_data or item.preset_data)
+        return found or item_paths.review_path(item.file_path, item.is_sequence, self.directory,
+                                               preset_data or item.preset_data)
 
     def _fill_metadata(self, item, file_path):
-        """Helper to fill common metadata for an item."""
-        # Check if expected generated thumbnail already exists on disk
+        """Preview image, file times and age."""
         expected_thumb = self._get_expected_thumb_path(item)
-        if os.path.exists(expected_thumb) and os.path.getsize(expected_thumb) > 0:
+        paired = getattr(item, "conversion_thumb_path", "")
+        if paired and item_paths.existing_file(paired):
+            item.thumbnail_image = generate_thumbnail_image(paired, self.thumbnail_size)
+        elif item_paths.existing_file(expected_thumb):
             item.conversion_thumb_path = expected_thumb
             item.thumbnail_image = generate_thumbnail_image(expected_thumb, self.thumbnail_size)
-        else:
-            # Thumbnail
-            if item.category == "Video":
-                # Check for existing sidecar thumbnail
-                thumb_path = file_path + "_thumbnail.png"
-                if os.path.exists(thumb_path):
-                    item.thumbnail_image = generate_thumbnail_image(thumb_path, self.thumbnail_size)
-                else:
-                    # Use gray placeholder until background extraction finishes
-                    item.thumbnail_image = generate_placeholder_thumbnail_image(self.thumbnail_size, "#555555")
+        elif item.category == "Video":
+            sidecar = file_path + "_thumbnail.png"
+            if os.path.exists(sidecar):
+                item.thumbnail_image = generate_thumbnail_image(sidecar, self.thumbnail_size)
             else:
-                item.thumbnail_image = generate_thumbnail_image(file_path, self.thumbnail_size)
-        
-        # Times
+                item.thumbnail_image = generate_placeholder_thumbnail_image(self.thumbnail_size, "#555555")
+        else:
+            item.thumbnail_image = generate_thumbnail_image(file_path, self.thumbnail_size)
+
         try:
             item.modification_time = os.path.getmtime(file_path)
             item.creation_time = os.path.getctime(file_path)
-            
-            # Age
             source_time = item.modification_time if self.age_source == "Modification Date" else item.creation_time
             item.age_minutes = int((time.time() - source_time) / 60)
-            
-            # Initial thumbnail_time for stills/sequences (videos handled in Phase 2)
-            if item.category != "Video":
-                fps = self._resolve_fps(item)
-                nb = item.metadata.get("nb_frames", 1)
-                item.metadata["thumbnail_time"] = calculate_thumbnail_time(nb, fps, mode=self.seq_thumb_frame, default_fps=self.default_fps)
-        except Exception:
+        except OSError:
             pass
+        if item.category != "Video":
+            fps = self._resolve_fps(item)
+            nb = item.metadata.get("nb_frames", 1)
+            item.metadata["thumbnail_time"] = calculate_thumbnail_time(nb, fps, mode=self.seq_thumb_frame,
+                                                                       default_fps=self.default_fps)
+
+
+def _kill_process_tree(proc):
+    """Kill a shell=True process and everything it started (ffmpeg under cmd.exe)."""
+    if proc is None or proc.poll() is not None:
+        return
+    import subprocess
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                           capture_output=True, creationflags=0x08000000)
+        else:
+            proc.kill()
+    except Exception as e:
+        print(f"Failed to kill conversion process: {e}")
+
 
 class ThumbnailConversionWorker(QThread):
     item_updated = Signal(object)
@@ -639,13 +556,6 @@ class ThumbnailConversionWorker(QThread):
             if self._is_canceled:
                 break
                 
-            if self.timeout > 0 and time.perf_counter() - start_time > self.timeout:
-                warning_msg = f"[Warning] Thumbnail generation timed out after {self.timeout} seconds. Stopping operation."
-                print(warning_msg)
-                self.log.emit(warning_msg)
-                self.status_text.emit(warning_msg)
-                break
-            
             self.progress.emit(i + 1, total)
             self.status_text.emit(f"Creating Thumbnails, {i+1} from {total} done")
             
@@ -675,6 +585,17 @@ class ThumbnailConversionWorker(QThread):
                 print(f"Skipping conversion for {item.file_path}: no command template found (preset or general)")
                 continue
                 
+            paired = (item.metadata or {}).get("paired_thumbnail")
+            if paired and not self.force and os.path.isfile(paired):
+                # An existing thumbnail was paired during the scan: use it, don't regenerate
+                item.conversion_thumb_path = paired
+                from utils import generate_thumbnail_image
+                qimage = generate_thumbnail_image(paired, self.config.get("default_thumb_size", 150))
+                if qimage:
+                    item.thumbnail_image = qimage
+                self.item_updated.emit(item)
+                continue
+
             try:
                 # Expand tokens to get the final command and target path
                 cmd = self.model.expand_tokens(cmd_template, item)
@@ -712,31 +633,31 @@ class ThumbnailConversionWorker(QThread):
                 print(f"[Timer] Starting to execute conversion subprocess for {item.label}...")
                 self.log.emit(f"Starting to execute conversion subprocess for {item.label}...")
                 start_cmd_time = time.perf_counter()
-                self.process = subprocess.Popen(cmd, shell=True, 
-                                                stdout=subprocess.PIPE, 
-                                                stderr=subprocess.PIPE, 
-                                                text=True, 
+                self.process = subprocess.Popen(cmd, shell=True,
+                                                stdin=subprocess.DEVNULL,
+                                                stdout=subprocess.PIPE,
+                                                stderr=subprocess.PIPE,
+                                                text=True, encoding="utf-8", errors="replace",
                                                 creationflags=creationflags)
                 
                 try:
-                    # Calculate remaining time for the overall operation, but at least 0.1s
-                    rem_time = max(0.1, self.timeout - (time.perf_counter() - start_time)) if self.timeout > 0 else None
-                    stdout, stderr = self.process.communicate(timeout=rem_time)
+                    # Timeout applies to THIS command only; a slow file does not stop the batch
+                    per_cmd = self.timeout if self.timeout and self.timeout > 0 else None
+                    stdout, stderr = self.process.communicate(timeout=per_cmd)
                     returncode = self.process.returncode
                 except subprocess.TimeoutExpired:
-                    # If it times out, kill it and its children
-                    self.cancel() 
-                    stdout, stderr = "", f"Timeout: conversion took more than {self.timeout} seconds."
+                    _kill_process_tree(self.process)
+                    try:
+                        self.process.communicate(timeout=5)
+                    except Exception:
+                        pass
+                    stdout, stderr = "", f"Timeout: conversion took more than {self.timeout} seconds (Preferences > Conversions > Timeout)."
                     returncode = -1
-                    warning_msg = f"[Warning] Thumbnail generation timed out after {self.timeout} seconds. Stopping operation."
-                    print(warning_msg)
-                    self.log.emit(warning_msg)
-                    self.status_text.emit(warning_msg)
-                    self._is_canceled = True
                 except Exception as e:
                     stdout, stderr = "", str(e)
                     returncode = -1
                 finally:
+                    _kill_process_tree(self.process)
                     self.process = None
                 
                 elapsed_cmd = time.perf_counter() - start_cmd_time
@@ -868,17 +789,29 @@ class ReviewConversionWorker(QThread):
                 if os.name == 'nt':
                     creationflags = 0x08000000 # CREATE_NO_WINDOW
                 
-                self.process = subprocess.Popen(cmd, shell=True, 
-                                                stdout=subprocess.PIPE, 
-                                                stderr=subprocess.PIPE, 
-                                                text=True, 
+                # stdout is not read -> DEVNULL (a full stdout pipe would deadlock the tool);
+                # stdin closed so a tool can never wait for a "[y/N]" answer.
+                self.process = subprocess.Popen(cmd, shell=True,
+                                                stdin=subprocess.DEVNULL,
+                                                stdout=subprocess.DEVNULL,
+                                                stderr=subprocess.PIPE,
+                                                text=True, encoding="utf-8", errors="replace",
                                                 creationflags=creationflags)
                 
+                tail_lines = []
                 try:
                     import re
                     # Regex for ffmpeg time output: time=00:00:04.00
                     time_regex = re.compile(r"time=(\d+:\d+:\d+\.\d+)")
-                    duration = float(item.metadata.get("duration", 0))
+                    frame_regex = re.compile(r"frame=\s*(\d+)")
+                    try:
+                        duration = float(item.metadata.get("duration", 0) or 0)
+                    except (TypeError, ValueError):
+                        duration = 0.0
+                    try:
+                        nb_frames = int(item.metadata.get("nb_frames", 0) or 0)
+                    except (TypeError, ValueError):
+                        nb_frames = 0
                     last_pct = -1
                     
                     # Read stderr line by line for progress
@@ -890,7 +823,19 @@ class ReviewConversionWorker(QThread):
                         
                         if not line:
                             continue
-                            
+                        tail_lines.append(line.rstrip())
+                        if len(tail_lines) > 15:
+                            tail_lines.pop(0)
+
+                        # Sequences have no duration: use the frame counter instead
+                        f_match = frame_regex.search(line)
+                        if f_match and duration <= 0 and nb_frames > 1:
+                            pct = min(100, int(int(f_match.group(1)) * 100 / nb_frames))
+                            if pct // 10 > last_pct // 10:
+                                last_pct = pct
+                                item.review_status = f"processing {pct}%"
+                                self.item_updated.emit(item)
+
                         # Parse time
                         match = time_regex.search(line)
                         if match and duration > 0:
@@ -910,11 +855,12 @@ class ReviewConversionWorker(QThread):
                                     self.item_updated.emit(item)
                     
                     returncode = self.process.wait()
-                    stdout, stderr = "", "" # Not used anymore for success check
+                    stdout, stderr = "", "\n".join(tail_lines)
                 except Exception as e:
                     stdout, stderr = "", str(e)
                     returncode = -1
                 finally:
+                    _kill_process_tree(self.process)
                     self.process = None
                 
                 if returncode == 0 and os.path.exists(target_path) and os.path.getsize(target_path) > 0:

@@ -48,3 +48,5 @@ tttest*.yaml
 
 /plan
 _claude/
+
+/session.json

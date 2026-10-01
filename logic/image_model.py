@@ -1,6 +1,8 @@
 import os
 import re
 from utils import strip_sequence_counter, app_dir
+from logic import tokens
+from logic import paths as item_paths
 from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex, Signal
 from PySide6.QtGui import QPixmap, QColor
 
@@ -8,14 +10,15 @@ def parse_version_folder(directory, version_regex):
     if not directory:
         return None, None
     base = os.path.basename(directory)
-    match = re.match(r"^" + version_regex + r"$", base, re.IGNORECASE)
+    try:
+        match = re.match(r"^(?:" + version_regex + r")$", base, re.IGNORECASE)
+    except re.error:
+        return None, None
     if match:
-        try:
-            ver = int(match.group(2))
-            parent = os.path.dirname(directory)
-            return parent, ver
-        except (IndexError, ValueError):
-            pass
+        from logic.seqparse import version_from_match
+        ver = version_from_match(match)
+        if ver is not None:
+            return os.path.dirname(directory), ver
     return None, None
 
 class ImageItem:
@@ -70,6 +73,42 @@ class ImageItem:
         self.is_review_repre = False
         self.is_ayon_item = is_ayon_item
         self.model = None
+        # Values copied from the AYON folder/task the item is assigned to
+        # (wins over parsed values while assigned), and the values parsed from
+        # the file name (restored when the assignment is cleared).
+        self.ayon_context = {}
+        self.parsed_tags = {}
+
+    @property
+    def is_hidden_paired_review(self):
+        """A review movie that was paired by name with footage (logic/pairing.py).
+        It stays in the model so it is published with the footage (CSV), but it is
+        not shown as its own item in the canvas or the right panel."""
+        return bool((self.metadata or {}).get("paired_review_of"))
+
+    AYON_CONTEXT_KEYS = ("folder_path", "folder_name", "folder_type", "folder_status",
+                         "folder_description", "task_name", "task_type",
+                         "task_description", "task_status")
+
+    def remember_ayon_context(self):
+        """Snapshot the AYON values currently written into metadata by an assignment."""
+        self.ayon_context = {k: self.metadata.get(k, "") for k in self.AYON_CONTEXT_KEYS
+                             if self.metadata.get(k)}
+
+    def clear_ayon_assignment(self):
+        """Remove the AYON assignment and fall back to values parsed from the file name."""
+        self.ayon_path = ""
+        self.ayon_task_name = ""
+        self.ayon_task_type = ""
+        self.ayon_task_assignee = ""
+        self.ayon_context = {}
+        if not self.parsed_tags:
+            return  # unknown origin (e.g. old project file): leave metadata as it is
+        for k in self.AYON_CONTEXT_KEYS:
+            if k in self.parsed_tags:
+                self.metadata[k] = self.parsed_tags[k]
+            else:
+                self.metadata.pop(k, None)
 
     @property
     def effective_version(self):
@@ -213,25 +252,26 @@ class ImageTableModel(QAbstractTableModel):
                 if col == 11 and (base_colliding or eff_colliding):
                     return QColor("#ff8c00")
                     
-            # Dim non-editable text columns
-            if col in [3, 5, 6, 7, 8, 11, 12, 13, 14, 15, 16]:
-                return QColor("#888888")
-            
+            # Ingest status colours must win over the generic dimming below
             if col == 16:
                 if item.ingest_status == "OK":
                     return QColor("#4caf50")
                 elif item.ingest_status == "Failed":
                     return QColor("#f44336")
+
+            # Dim non-editable text columns
+            if col in [3, 5, 6, 7, 8, 11, 12, 13, 14, 15, 16]:
+                return QColor("#888888")
             return None
 
         if role in [Qt.DisplayRole, Qt.EditRole]:
             if col == 2: return item.label
-            if col == 3: # Variant (Effective Variant)
-                return item.effective_variant
+            if col == 3: # Variant (Effective Variant, tokens filled in)
+                return self.variant_value(item)
             if col == 4: # Variant User
                 return getattr(item, "variant_user", "")
             if col == 5: # Product Name
-                return self._expand_string(self.product_name_template, item, use_global_camel=True)
+                return self.product_name(item)
             if col == 6: # Group By
                 key = getattr(item, "group_key", "") or "-"
                 if getattr(item, "group_error", False):
@@ -375,6 +415,8 @@ class ImageTableModel(QAbstractTableModel):
             self.layoutChanged.emit()
 
     def add_items(self, new_items):
+        if not new_items:
+            return  # beginInsertRows(n, n-1) would be an invalid range
         for item in new_items:
             item.model = self
             if hasattr(item, "thumbnail_image") and item.thumbnail_image:
@@ -409,7 +451,6 @@ class ImageTableModel(QAbstractTableModel):
     def get_version_stack_key(self, item):
         import os
         import re
-        from utils import strip_sequence_counter
         
         filename = os.path.basename(item.file_path)
         version_regex = getattr(self, "version_regex", r"([._]v|v)(\d+)")
@@ -426,12 +467,22 @@ class ImageTableModel(QAbstractTableModel):
             
             # 2. remove the version by the regex (entire match)
             clean_name = re.sub(version_regex, "", name_no_counter, flags=re.IGNORECASE)
-            return (clean_name.lower(), True)
+            return (self._stack_dir(item, version_regex), clean_name.lower(), True)
         else:
             # Still / video / other category:
             # 1. remove the version by the regex (entire match)
             clean_name = re.sub(version_regex, "", filename, flags=re.IGNORECASE)
-            return (clean_name.lower(), False)
+            return (self._stack_dir(item, version_regex), clean_name.lower(), False)
+
+    @staticmethod
+    def _stack_dir(item, version_regex):
+        """Folder part of a version-stack key: same name in different shot folders must
+        not stack, but shot/v001/x.exr and shot/v002/x.exr (version folders) should."""
+        d = os.path.dirname(item.file_path or "")
+        parent, ver = parse_version_folder(d, version_regex)
+        if ver is not None:
+            d = parent
+        return os.path.normcase(os.path.normpath(d)) if d else ""
 
     def rebuild_version_stacks(self):
         old_picked = {key: stack["picked"] for key, stack in getattr(self, "version_stacks", {}).items() if stack["picked"] is not None}
@@ -539,9 +590,9 @@ class ImageTableModel(QAbstractTableModel):
             if column == 3:
                 if getattr(item, "variant_user", "") and item.variant_user.strip():
                     return item.variant_user.strip()
-                return self._expand_string(item.variant, item)
+                return self.variant_value(item)
             if column == 4: return getattr(item, "variant_user", "") or ""
-            if column == 5: return self._expand_string(self.product_name_template, item, use_global_camel=True)
+            if column == 5: return self.product_name(item)
             if column == 6: return getattr(item, "group_key", "") or ""
             if column == 7: return item.category
             if column == 8: return item.preset_name or ""
@@ -553,323 +604,101 @@ class ImageTableModel(QAbstractTableModel):
             if column == 14: return item.ayon_path
             return ""
 
+        def safe_key(item):
+            v = get_value(item)
+            if v is None:
+                return (2, "")
+            if isinstance(v, bool):
+                return (0, int(v))
+            if isinstance(v, (int, float)):
+                return (0, v)
+            sv = str(v)
+            return (0, int(sv)) if sv.strip().isdigit() else (1, sv.lower())
+
         reverse = (order == Qt.DescendingOrder)
-        self.items.sort(key=get_value, reverse=reverse)
+        # Proper layout change so selections/editors follow their rows
+        self.layoutAboutToBeChanged.emit()
+        old_items = list(self._items)
+        persistent = self.persistentIndexList()
+        self._items.sort(key=safe_key, reverse=reverse)
+        new_row = {id(it): r for r, it in enumerate(self._items)}
+        for idx in persistent:
+            if 0 <= idx.row() < len(old_items):
+                r = new_row.get(id(old_items[idx.row()]))
+                if r is not None:
+                    self.changePersistentIndex(idx, self.index(r, idx.column()))
         self.layoutChanged.emit()
 
+    # ------------------------------------------------------------------
+    # Token expansion: all logic lives in logic/tokens.py (pure Python).
+    # The model only supplies settings (product name template, fps, tool
+    # paths, thumbnail/review path rules) through the attributes below.
+    # ------------------------------------------------------------------
+    @property
+    def app_dir(self):
+        return app_dir
+
+    def prefs_thumb_path(self, item):
+        return self._get_prefs_thumb_path(item)
+
+    def prefs_review_path(self, item):
+        return self._get_prefs_review_path(item)
+
+    def product_name(self, item):
+        """Final product name (template + CamelCase from Preferences)."""
+        return tokens.expand("{product_name}", item, self)
+
+    def variant_value(self, item):
+        """Variant with tokens such as {label} or {variant_parsed} filled in."""
+        return tokens.expand("{variant}", item, self)
+
     def _get_replacements(self, item, text="", use_global_camel=False):
-        """Build the dictionary of token replacements for an item."""
-        ayon_parts = [p for p in item.ayon_path.split("/") if p]
-        task_name = item.metadata.get("task_name", "")
-        folder_name = item.metadata.get("folder_name", "")
-        
-        if ayon_parts:
-            # If assigned, prefer the AYON names unless metadata explicitly overrides?
-            # Actually, usually AYON is the source of truth for these tokens once assigned.
-            # But let's allow metadata to provide them if AYON is empty.
-            if not task_name:
-                task_name = ayon_parts[-1]
-            if not folder_name and len(ayon_parts) > 1:
-                folder_name = ayon_parts[-2]
-        
-        parent_folder = os.path.basename(os.path.dirname(item.file_path))
-        ayon_folder_path = "/".join(item.ayon_path.split("/")[:-1])
-        
-        # Filename with hashes for sequences
-        filename_val = item.file_path.replace("\\", "/")
-        filename_printf_val = filename_val
-        if item.is_sequence:
-            import re
-            base, ext = os.path.splitext(filename_val)
-            # Find the last number in the basename
-            match = re.search(r"(\d+)$", base)
-            if match:
-                digits = match.group(1)
-                hashes = "#" * len(digits)
-                filename_val = base[:match.start()] + hashes + ext
-                printf = f"%0{len(digits)}d"
-                filename_printf_val = base[:match.start()] + printf + ext
-        
-        p_data = item.preset_data or {}
-        
-        # Precompute expanded representation only if "{repre}" is actually in the text to avoid eager recursive loops
-        repre_template = item.representation or p_data.get("Representation") or "{extension}"
-        repre_expanded = self._expand_string(repre_template, item) if (text and "{repre}" in text.lower() and text != repre_template) else repre_template
-        
-        # Resolve FPS
-        fps_val = None
-        if p_data.get("FPS Override", False):
-            fps_preset = p_data.get("FPS")
-            if fps_preset is not None:
-                try:
-                    fps_val = float(fps_preset)
-                except (ValueError, TypeError):
-                    pass
-        else:
-            use_meta = getattr(self, "use_fps_from_metadata", True)
-            if use_meta and p_data.get("FPS From Metadata", True):
-                fps_meta = item.metadata.get("framerate")
-                if fps_meta is not None:
-                    try:
-                        fps_val = float(fps_meta)
-                    except (ValueError, TypeError):
-                        pass
-        if fps_val is None:
-            fps_val = getattr(self, "default_fps", 25.0)
-
-        fps_str = str(fps_val) if fps_val is not None else ""
-        fps_int_str = str(int(round(fps_val))) if fps_val is not None else ""
-
-        variant_user_val = getattr(item, "variant_user", "")
-        variant_val = item.effective_variant
-
-        prod_name_val = self._expand_string(self.product_name_template, item, use_global_camel=True) if (text and ("{product_name}" in text.lower() or "{prod_name}" in text.lower()) and text != self.product_name_template) else ""
-        if not prod_name_val and (not text or "{product_name}" in text.lower() or "{prod_name}" in text.lower()):
-            prod_name_val = self._expand_string(self.product_name_template, item, use_global_camel=True)
-
-        folder_path_val = item.metadata.get("folder_path") or ayon_folder_path or item.ayon_path or ""
-        folder_name_val = item.metadata.get("folder_name") or folder_name or ""
-        folder_desc_val = item.metadata.get("folder_description") or ""
-        folder_status_val = item.metadata.get("folder_status") or ""
-
-        task_name_val = item.ayon_task_name or item.metadata.get("task_name") or task_name or ""
-        task_type_val = item.ayon_task_type or item.metadata.get("task_type") or ""
-        task_desc_val = item.metadata.get("task_description") or ""
-        task_status_val = item.metadata.get("task_status") or ""
-
-        prod_name_val_final = item.metadata.get("product_name") or prod_name_val
-        prod_type_val = item.product_type or item.metadata.get("product_type") or ""
-        prod_ver_val = item.metadata.get("product_version") or (f"v{item.effective_version:03d}" if isinstance(item.effective_version, int) else str(item.effective_version))
-        prod_status_val = item.metadata.get("product_status") or ""
-        prod_source_val = item.metadata.get("product_source") or ""
-
-        version_val = str(item.effective_version)
-        repre_val = item.representation or item.metadata.get("representation") or repre_expanded
-
-        # Replacement mapping
-        replacements = {
-            "{folder_path}": folder_path_val,
-            "{folder path}": folder_path_val,
-            "{folder_name}": folder_name_val,
-            "{folder name}": folder_name_val,
-            "{folder_description}": folder_desc_val,
-            "{folder description}": folder_desc_val,
-            "{folder_status}": folder_status_val,
-            "{folder status}": folder_status_val,
-            "{task_name}": task_name_val,
-            "{task name}": task_name_val,
-            "{task_type}": task_type_val,
-            "{task type}": task_type_val,
-            "{task_description}": task_desc_val,
-            "{task description}": task_desc_val,
-            "{task_status}": task_status_val,
-            "{task status}": task_status_val,
-            "{product_name}": prod_name_val_final,
-            "{product name}": prod_name_val_final,
-            "{product_type}": prod_type_val,
-            "{product type}": prod_type_val,
-            "{product_version}": prod_ver_val,
-            "{product version}": prod_ver_val,
-            "{product_status}": prod_status_val,
-            "{product status}": prod_status_val,
-            "{product_source}": prod_source_val,
-            "{product source}": prod_source_val,
-            "{Product Source}": prod_source_val,
-            "{version}": version_val,
-            "{representation}": repre_val,
-            "{variant_parsed}": item.metadata.get("variant_parsed", ""),
-            "{sequence}": item.metadata.get("sequence", ""),
-            "{episode}": item.metadata.get("episode", ""),
-            "{parent_folder}": parent_folder,
-            "{ayon_path}": item.ayon_path or "",
-            "{AYON_PATH}": item.ayon_path or "",
-            "{ayon_path_val}": item.ayon_path or "",
-            "{ayon_folder_path}": ayon_folder_path,
-            "{PRODUCT_NAME}": prod_name_val_final,
-            "{prod_name}": prod_name_val_final,
-            "{PROD_NAME}": prod_name_val_final,
-            "{item.version}": version_val,
-            "{ayon_task_name}": task_name_val,
-            "{ayon_task_type}": task_type_val,
-            "{ayon_task_assignee}": item.ayon_task_assignee or "",
-            "{label}": item.label or "",
-            "{variant}": variant_val,
-            "{variant_user}": variant_user_val or "",
-            "{filename}": filename_val,
-            "{filename_printf}": filename_printf_val,
-            "{file_name}": os.path.splitext(os.path.basename(item.file_path))[0],
-            "{extension}": os.path.splitext(item.file_path)[1].replace(".", "").lower(),
-            "{repre}": repre_expanded,
-            "{REPRE}": repre_expanded,
-            "{head}": str(p_data.get("Handle Start", "0")),
-            "{HEAD}": str(p_data.get("Handle Start", "0")),
-            "{tail}": str(p_data.get("Handle End", "0")),
-            "{TAIL}": str(p_data.get("Handle End", "0")),
-            "{slate_exists}": "True" if p_data.get("Slate Exists") else "False",
-            "{SLATE_EXISTS}": "True" if p_data.get("Slate Exists") else "False",
-            "{fps}": fps_str,
-            "{FPS}": fps_str,
-            "{fps_int}": fps_int_str,
-            "{FPS_INT}": fps_int_str,
-            "{repre_color}": p_data.get("Colorspace", ""),
-            "{REPRE_COLOR}": p_data.get("Colorspace", ""),
-            "{repre_tags}": p_data.get("Tags", ""),
-            "{REPRE_TAGS}": p_data.get("Tags", ""),
-            "{version}": str(item.effective_version),
-            "{VERSION}": str(item.effective_version),
-            "{version_user}": str(getattr(item, "version_user", "")),
-            "{VERSION_USER}": str(getattr(item, "version_user", "")),
-            "{frame_start}": str(item.frame_start) if item.frame_start is not None else "",
-            "{FRAME_START}": str(item.frame_start) if item.frame_start is not None else "",
-            "{frame_end}": str(item.frame_end) if item.frame_end is not None else "",
-            "{FRAME_END}": str(item.frame_end) if item.frame_end is not None else "",
-            "{comment}": item.comment or "",
-            "{COMMENT}": item.comment or "",
-            "{is_duplicate}": "True" if getattr(item, "is_duplicate", False) else "False",
-            "{IS_DUPLICATE}": "True" if getattr(item, "is_duplicate", False) else "False",
-            "{version_collision}": str(getattr(item, "version_collision", "None")),
-            "{VERSION_COLLISION}": str(getattr(item, "version_collision", "None")),
-            "{thumb_path}": filename_val if (item.category == "Still" and getattr(self, "stills_thumb_same", True)) else "",
-            "{THUMB_PATH}": filename_val if (item.category == "Still" and getattr(self, "stills_thumb_same", True)) else "",
-            "{prefs_highres_thumb_size}": str(getattr(self, "high_res_size", 512)),
-            "{prefs_thumb_path}": self._get_prefs_thumb_path(item),
-            "{prefs_review_path}": self._get_prefs_review_path(item),
-            "{review_repre}": p_data.get("Review Representation", "h264"),
-            "{REVIEW_REPRE}": p_data.get("Review Representation", "h264"),
-            "{review_colorspace}": p_data.get("Review Colorspace", "Output - sRGB"),
-            "{REVIEW_COLORSPACE}": p_data.get("Review Colorspace", "Output - sRGB"),
-            "{review_tags}": p_data.get("Review Tags", "passing;ftracreview;webreview"),
-            "{REVIEW_TAGS}": p_data.get("Review Tags", "passing;ftracreview;webreview"),
-            "{ffmpeg}": self.ffmpeg_path,
-            "{ffprobe}": self.ffprobe_path,
-            "{oiiotool}": self.oiiotool_path,
-            "{vfxtranscode}": os.path.abspath(self.vfxtranscode).replace("\\", "/") if self.vfxtranscode else "",
-            "{VFXTRANSCODE}": os.path.abspath(self.vfxtranscode).replace("\\", "/") if self.vfxtranscode else "",
-            "{ocio}": os.path.abspath(self.ocio_config).replace("\\", "/") if self.ocio_config else "",
-            "{OCIO}": os.path.abspath(self.ocio_config).replace("\\", "/") if self.ocio_config else "",
-            "{IngestDesktop}": app_dir.replace("\\", "/"),
-            "{INGESTDESKTOP}": app_dir.replace("\\", "/"),
-            "{ingest_status}": getattr(item, "ingest_status", "unknown"),
-            "{INGEST_STATUS}": getattr(item, "ingest_status", "unknown"),
-        }
-        return replacements
+        """{"{token}": value} for every known token (kept for older callers/tests)."""
+        vals = tokens.all_values(item, self)
+        for alias, canonical in tokens.ALIASES.items():
+            key = "{" + canonical + "}"
+            if key in vals:
+                vals["{" + alias + "}"] = vals[key]
+        return vals
 
     def _get_all_tokens_string(self, item):
         """Returns a string listing all key=value pairs for the item."""
-        replacements = self._get_replacements(item)
-        # Sort keys to be consistent, show only lowercase/primary tokens to avoid cluttering with CAPS duplicates
-        sorted_keys = sorted([k for k in replacements.keys() if k.islower()])
-        pairs = []
-        for k in sorted_keys:
-            val = replacements[k]
-            if val:
-                pairs.append(f"{k}={val}")
-        
-        # Add metadata tokens EXCEPT the ones we already show as primary tokens
+        vals = tokens.all_values(item, self)
+        pairs = [f"{k}={v}" for k, v in vals.items() if v]
         primary_names = ["folder_name", "task_name", "variant_parsed", "sequence", "episode"]
-        for mk, mv in item.metadata.items():
+        for mk, mv in (item.metadata or {}).items():
             if mk not in primary_names:
                 pairs.append(f"{{metadata.{mk}}}={mv}")
-            
         return "  ".join(pairs)
 
     def _expand_string(self, text, item, use_global_camel=False):
+        """Expand tokens. use_global_camel=True applies the product-name CamelCase rule;
+        otherwise no CamelCase is applied (commands, paths, CSV cells, tooltips)."""
         if not text:
             return ""
-            
-        replacements = self._get_replacements(item, text, use_global_camel)
-        
-        import re
-        # Sort keys by length (descending) to avoid partial matches (e.g., {repre} matching inside {repre_color})
-        sorted_keys = sorted(replacements.keys(), key=len, reverse=True)
-        pattern = "|".join(re.escape(k) for k in sorted_keys)
-        
-        def replacer(match):
-            key = match.group(0)
-            val = replacements.get(key)
-            if val is None:
-                # Try case-insensitive lookup
-                val = replacements.get(key.lower(), replacements.get(key.upper(), key))
-            # CamelCase logic
-            camel = self.product_name_camel if use_global_camel else item.camel_case
-            
-            if camel and match.start() > 0 and val:
-                val = val[0].upper() + val[1:]
-            return val
-
-        res = re.sub(pattern, replacer, text, flags=re.IGNORECASE)
-        
-        # Meta data tokens (e.g. {metadata.width})
-        def metadata_replacer(match):
-            key = match.group(1).lower()
-            val = item.metadata.get(key)
-            if val is not None:
-                return str(val)
-            return match.group(0) # Keep token if not found
-            
-        res = re.sub(r"\{metadata\.([^}]+)\}", metadata_replacer, res)
-            
-        return res
+        if text == self.product_name_template:
+            return self.product_name(item)
+        camel = bool(self.product_name_camel) if use_global_camel else False
+        return tokens.expand(text, item, self, camel=camel)
 
     def _get_prefs_thumb_path(self, item):
-        """Calculate the thumbnail path based on preferences."""
-        source_file = item.file_path.replace("\\", "/")
-        base_dir = os.path.dirname(source_file)
-        filename = os.path.basename(source_file)
-        name_no_ext, _ = os.path.splitext(filename)
-        
-        if item.is_sequence:
-            name_no_ext = strip_sequence_counter(name_no_ext)
-        
-        # Determine target directory
-        target_dir = base_dir
-        if self.thumb_location == "Relative to Source Folder":
-            if self.source_folder:
-                target_dir = os.path.join(self.source_folder, self.thumb_location_path).replace("\\", "/")
-        elif self.thumb_location == "Custom":
-            target_dir = self.thumb_location_path.replace("\\", "/")
-            
-        # Basename with suffix
-        target_filename = f"{name_no_ext}{self.thumb_suffix}{self.thumb_format}"
-        
-        return os.path.join(target_dir, target_filename).replace("\\", "/")
+        """Thumbnail path: an existing thumbnail paired during the scan, else the
+        path from preferences (rules shared with the scanner: logic/paths.py)."""
+        paired = (item.metadata or {}).get("paired_thumbnail")
+        if paired and os.path.isfile(paired):
+            return paired
+        return item_paths.thumb_path(item.file_path, item.is_sequence, self.source_folder,
+                                     self.thumb_location, self.thumb_location_path,
+                                     self.thumb_suffix, self.thumb_format)
 
     def _get_prefs_review_path(self, item):
-        """Calculate the review path based on preset preferences."""
+        """Review path: the paired/found review if it exists, else the preset's target path."""
         rev_fp = getattr(item, "review_file_path", None)
         if rev_fp and os.path.exists(rev_fp):
             return rev_fp
+        return item_paths.review_path(item.file_path, item.is_sequence, self.source_folder,
+                                      item.preset_data)
 
-        source_file = item.file_path.replace("\\", "/")
-        base_dir = os.path.dirname(source_file)
-        filename = os.path.basename(source_file)
-        name_no_ext, _ = os.path.splitext(filename)
-        
-        if item.is_sequence:
-            name_no_ext = strip_sequence_counter(name_no_ext)
-            
-        p_data = item.preset_data or {}
-        rev_loc = p_data.get("Review Location", "Relative to Source Folder")
-        rev_path = p_data.get("Review Path", "_reviews")
-        rev_suffix = p_data.get("Review Suffix", "_review")
-        rev_format = p_data.get("Review Format", ".mp4")
-        
-        # Determine target directory
-        target_dir = base_dir
-        if rev_loc == "Relative to Source Folder":
-            if self.source_folder:
-                target_dir = os.path.join(self.source_folder, rev_path).replace("\\", "/")
-            else:
-                target_dir = os.path.join(base_dir, rev_path).replace("\\", "/")
-        elif rev_loc == "Custom":
-            target_dir = rev_path.replace("\\", "/")
-            
-        # Basename with suffix and format
-        target_filename = f"{name_no_ext}{rev_suffix}{rev_format}"
-        
-        # Ensure the path is absolute
-        full_path = os.path.join(target_dir, target_filename)
-        return os.path.abspath(full_path).replace("\\", "/")
     def perform_rename_to_label(self, selected_paths, version_regex):
         """
         Renames files on disk based on their model label.
@@ -878,7 +707,6 @@ class ImageTableModel(QAbstractTableModel):
         """
         import os
         import re
-        from utils import strip_sequence_counter
         
         # 1. Map selected paths to items in our model
         abs_selected = {os.path.normpath(os.path.abspath(p)) for p in selected_paths}

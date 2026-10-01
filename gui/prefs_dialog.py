@@ -29,7 +29,6 @@ class PreferencesDialog(QDialog):
         
         # AYON Settings
         self.server_url = QLineEdit(self.secrets.get("ayon_server_url", ""))
-        self.ayon_project_name = QLineEdit(self.config.get("ayon_project_name", "IngestTest"))
         self.group_by = QLineEdit(self.config.get("group_by", "{folder_name}{task_name}{variant}{version}"))
         # Scanner Settings
         self.product_name = QLineEdit(self.config.get("product_name", "{label}"))
@@ -116,6 +115,11 @@ class PreferencesDialog(QDialog):
         self.form.addRow("Create Ingest Report:", self.create_ingest_report)
         self.form.addRow("Timezone Offset A:", self.timezone_offset_a)
         self.form.addRow("Timezone Offset B:", self.timezone_offset_b)
+
+        self.play_sounds = QCheckBox("Play notification sounds")
+        self.play_sounds.setToolTip("Play a system sound when confirmation dialogs appear (settings saved, preset saved, export, ingest finished).")
+        self.play_sounds.setChecked(self.config.get("play_sounds", False))
+        self.form.addRow("Sounds:", self.play_sounds)
         
         self.general_layout.addLayout(self.form)
         self.general_layout.addStretch()
@@ -136,7 +140,7 @@ class PreferencesDialog(QDialog):
         self.ayon_form.addRow("Duplicate Identity:", self.duplicate_identity)
 
         # New AYON settings
-        self.ayon_project_name = QLineEdit(self.config.get("ayon_project_name", ""))
+        self.ayon_project_name = QLineEdit(self.config.get("ayon_project", "") or self.config.get("ayon_project_name", ""))
         self.csv_ingest_folder = QLineEdit(self.config.get("ayon_csv_ingest_folder", "/edit/csvingest"))
         self.csv_ingest_task = QLineEdit(self.config.get("ayon_csv_ingest_task", "csvingest"))
         self.csv_preset = QLineEdit(self.config.get("ayon_csv_preset", "Default"))
@@ -161,8 +165,6 @@ class PreferencesDialog(QDialog):
         self.set_version_status_after_check = QCheckBox("Set version status after Ingest Check")
         self.set_version_status_after_check.setChecked(self.config.get("set_version_status_after_check", True))
         
-        self.play_sound_on_finish = QCheckBox("Play Sound on Finish")
-        self.play_sound_on_finish.setChecked(self.config.get("ayon_play_sound_on_finish", True))
 
         self.set_product_status_after_check = QCheckBox("Set Product Status after Ingest Check")
         self.set_product_status_after_check.setChecked(self.config.get("set_product_status_after_check", True))
@@ -176,7 +178,7 @@ class PreferencesDialog(QDialog):
         self.neighbour_task_name = QLineEdit(self.config.get("neighbour_task_name", "comp"))
         self.neighbour_task_status = QLineEdit(self.config.get("neighbour_task_status", "Ready to start"))
 
-        self.ayon_form.addRow("Project {ayon_project_name}:", self.ayon_project_name)
+        self.ayon_form.addRow("AYON Project:", self.ayon_project_name)
         self.ayon_form.addRow("CSV Ingest Folder:", self.csv_ingest_folder)
         self.ayon_form.addRow("CSV Ingest Task:", self.csv_ingest_task)
         self.ayon_form.addRow("CSV Preset:", self.csv_preset)
@@ -186,7 +188,6 @@ class PreferencesDialog(QDialog):
         self.ayon_form.addRow("AYON Thumbnails Cache:", self.cache_folder_layout)
         self.ayon_form.addRow("Ingested Version Status:", self.ayon_version_status)
         self.ayon_form.addRow(self.set_version_status_after_check)
-        self.ayon_form.addRow(self.play_sound_on_finish)
         self.ayon_form.addRow(self.set_product_status_after_check)
         self.ayon_form.addRow(self.set_task_status_after_check)
         self.ayon_form.addRow(self.set_neighbour_status_after_check)
@@ -462,6 +463,13 @@ class PreferencesDialog(QDialog):
         self.cmd_sequences = QPlainTextEdit(self.config.get("cmd_sequences", ""))
         self.cmd_sequences.setMaximumHeight(50)
 
+        self.pair_existing_media = QCheckBox("Pair existing thumbnails and reviews by name")
+        self.pair_existing_media.setToolTip(
+            "Same name in the same folder -> pair.\n"
+            "Same name in another folder -> pair only if its path contains 'thumb' (thumbnails) or 'review' (reviews).\n"
+            "Paired thumbnails are not listed as separate items.")
+        self.pair_existing_media.setChecked(self.config.get("pair_existing_media", True))
+        self.thumbs_form.addRow(self.pair_existing_media)
         self.thumbs_form.addRow(self.run_thumb_after_scan)
         self.thumbs_form.addRow(self.run_review_after_scan)
         self.thumbs_form.addRow(self.skip_existing_thumbs)
@@ -575,10 +583,6 @@ class PreferencesDialog(QDialog):
 
         self.label_regex = QLineEdit(self.config.get("label_allowed_chars", "^[a-zA-Z0-9_\\-\\.\\s]*$"))
         
-        self.low_res_size = QSpinBox()
-        self.low_res_size.setRange(64, 512)
-        self.low_res_size.setSuffix(" px")
-        self.low_res_size.setValue(self.config.get("low_res_size", 150))
 
         self.disable_inline_video = QCheckBox("Disable Inline Video Player (Always use default system player)")
         self.disable_inline_video.setChecked(self.config.get("disable_inline_video", False))
@@ -593,7 +597,6 @@ class PreferencesDialog(QDialog):
         self.gui_form.addRow("Default Text Size:", self.default_text_size)
         self.gui_form.addRow("Default Thumbnail Size:", self.default_thumb_size)
         self.gui_form.addRow("Allowed Label Characters:", self.label_regex)
-        self.gui_form.addRow("Low-Res Thumbnail Size:", self.low_res_size)
         self.gui_form.addRow("Inline Video Player:", self.disable_inline_video)
         self.gui_form.addRow("Drawing Cache Location:", self.drawing_cache_location)
         self.gui_form.addRow("Drawing Cache Path:", self.drawing_cache_path)
@@ -1088,8 +1091,6 @@ class PreferencesDialog(QDialog):
             "csv_delimiter": self.csv_delimiter.text(),
             "csv_quotechar": self.csv_quotechar.text(),
             "csv_columns": self.csv_columns.toPlainText(),
-            "low_res_size": self.low_res_size.value(),
-            "high_res_size": self.high_res_size.value(),
             "thumb_size": self.high_res_size.value(),
             "thumb_location": self.thumb_location.currentText(),
             "thumb_location_path": self.thumb_location_path.text(),
@@ -1102,6 +1103,7 @@ class PreferencesDialog(QDialog):
             "cmd_stills": self.cmd_stills.toPlainText(),
             "cmd_videos": self.cmd_videos.toPlainText(),
             "run_thumb_after_scan": self.run_thumb_after_scan.isChecked(),
+            "pair_existing_media": self.pair_existing_media.isChecked(),
             "run_review_after_scan": self.run_review_after_scan.isChecked(),
             "skip_existing_thumbs": self.skip_existing_thumbs.isChecked(),
             "skip_existing_reviews": self.skip_existing_reviews.isChecked(),
@@ -1140,7 +1142,7 @@ class PreferencesDialog(QDialog):
             "episode_regex": self.episode_regex.text(),
             "episode_repl": self.episode_repl.text(),
             "episode_capitalization": self.episode_capitalization.currentText(),
-            "ayon_project_name": self.ayon_project_name.text(),
+            "ayon_project": self.ayon_project_name.text(),
             "duplicate_identity": self.duplicate_identity.text(),
             "get_ayon_thumbnails": self.get_ayon_thumbnails.isChecked(),
             "ayon_csv_ingest_folder": self.csv_ingest_folder.text(),
@@ -1150,7 +1152,7 @@ class PreferencesDialog(QDialog):
             "ayon_ingest_check": self.ingest_check.isChecked(),
             "ayon_version_status": self.ayon_version_status.text(),
             "set_version_status_after_check": self.set_version_status_after_check.isChecked(),
-            "ayon_play_sound_on_finish": self.play_sound_on_finish.isChecked(),
+            "play_sounds": self.play_sounds.isChecked(),
             "set_product_status_after_check": self.set_product_status_after_check.isChecked(),
             "set_task_status_after_check": self.set_task_status_after_check.isChecked(),
             "set_neighbour_status_after_check": self.set_neighbour_status_after_check.isChecked(),

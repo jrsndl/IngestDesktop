@@ -34,9 +34,15 @@ class CSVPreviewModel(QAbstractTableModel):
         self.is_review_row = [False] * len(self.tagged_items)
         self.endResetModel()
 
-    def _refresh_data(self):
+    def _refresh_data(self, *args):
+        new_items = [item for item in self.source_model.items if item.is_tagged and not getattr(item, "is_ayon_item", False)]
+        if len(new_items) == len(self.tagged_items) and all(a is b for a, b in zip(new_items, self.tagged_items)):
+            # Same rows: only values changed -> repaint, keep selection and scroll position
+            if self.tagged_items and self.columnCount() > 0:
+                self.dataChanged.emit(self.index(0, 0), self.index(len(self.tagged_items) - 1, self.columnCount() - 1))
+            return
         self.beginResetModel()
-        self.tagged_items = [item for item in self.source_model.items if item.is_tagged and not getattr(item, "is_ayon_item", False)]
+        self.tagged_items = new_items
         self.is_review_row = [False] * len(self.tagged_items)
         self.endResetModel()
 
@@ -134,7 +140,7 @@ class CSVPreviewModel(QAbstractTableModel):
                         p_data = item.preset_data or {}
                         return p_data.get("Review Tags", "passing;ftrackreview;webreview")
                 
-                return self.source_model._expand_string(template, item, use_global_camel=True)
+                return self.source_model.expand_tokens(template, item)
         
         return None
 

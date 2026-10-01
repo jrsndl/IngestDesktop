@@ -18,29 +18,24 @@ class TestArrangeHotkey(unittest.TestCase):
         
         captured_actions = []
 
-        orig_addAction = QMenu.addAction
-        def mock_addAction(menu_self, *args, **kwargs):
-            res = orig_addAction(menu_self, *args, **kwargs)
-            if args and hasattr(args[0], 'text'):
-                captured_actions.append(args[0])
-            return res
+        def collect(menu):
+            for act in menu.actions():
+                captured_actions.append(act)
+                if act.menu():
+                    collect(act.menu())
 
-        QMenu.addAction = mock_addAction
-        orig_exec = QMenu.exec
-        QMenu.exec = lambda *a, **k: None
+        # Capture the menu instead of showing it (patching QMenu.exec does not
+        # stop the real popup with PySide6 6.10)
+        area._exec_context_menu = lambda menu, pos: collect(menu)
 
-        try:
-            cme = QContextMenuEvent(QContextMenuEvent.Mouse, QPoint(10, 10), QPoint(10, 10))
-            area.contextMenuEvent(cme)
-            
-            arrange_actions = [act for act in captured_actions if act.text() == "Arrange"]
-            self.assertEqual(len(arrange_actions), 1)
-            arrange_action = arrange_actions[0]
-            
-            self.assertEqual(arrange_action.shortcut().toString(), "Alt+A")
-        finally:
-            QMenu.addAction = orig_addAction
-            QMenu.exec = orig_exec
+        cme = QContextMenuEvent(QContextMenuEvent.Mouse, QPoint(10, 10), QPoint(10, 10))
+        area.contextMenuEvent(cme)
+
+        arrange_actions = [act for act in captured_actions if act.text() == "Arrange"]
+        self.assertEqual(len(arrange_actions), 1)
+        arrange_action = arrange_actions[0]
+
+        self.assertEqual(arrange_action.shortcut().toString(), "Alt+A")
 
     def test_arrange_hotkey_event(self):
         model = ImageTableModel()

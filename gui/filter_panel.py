@@ -124,6 +124,8 @@ class TagColorProxyModel(QSortFilterProxyModel):
         self._path_to_item = {} # abs_path -> ImageItem
         
         for item in self.main_model.items:
+            if getattr(item, "is_hidden_paired_review", False):
+                continue  # review linked to footage by name: not listed on its own
             abs_path = os.path.normpath(os.path.abspath(item.file_path))
             self._path_to_item[abs_path] = item
             self._path_info[abs_path] = (item.is_tagged, item.age_minutes, item.label, item.review_status, item.filename, getattr(item, "ingest_status", "unknown"))
@@ -417,12 +419,18 @@ class FilterPanel(QWidget):
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._on_context_menu)
         
+        # These shortcuts must only work while the tree has focus. Qt's default
+        # (WindowShortcut) made Delete/Backspace fire anywhere in the window - e.g.
+        # while typing in a text note, which then deleted the note being edited.
         self.shortcut_open = QShortcut(QKeySequence("Ctrl+O"), self.tree)
+        self.shortcut_open.setContext(Qt.WidgetWithChildrenShortcut)
         self.shortcut_open.activated.connect(self._on_shortcut_open)
         
         self.shortcut_delete = QShortcut(QKeySequence(Qt.Key_Delete), self.tree)
+        self.shortcut_delete.setContext(Qt.WidgetWithChildrenShortcut)
         self.shortcut_delete.activated.connect(self._on_shortcut_delete)
         self.shortcut_backspace = QShortcut(QKeySequence(Qt.Key_Backspace), self.tree)
+        self.shortcut_backspace.setContext(Qt.WidgetWithChildrenShortcut)
         self.shortcut_backspace.activated.connect(self._on_shortcut_delete)
         
         # Connect main model signals to automatically refresh views when items change
@@ -583,6 +591,8 @@ class FilterPanel(QWidget):
         
         # Populate from main_model.items
         for item in self.main_model.items:
+            if getattr(item, "is_hidden_paired_review", False):
+                continue
             std_item = QStandardItem(item.filename)
             std_item.setData(item.file_path, Qt.UserRole)
             std_item.setData(False, Qt.UserRole + 1)
@@ -613,16 +623,11 @@ class FilterPanel(QWidget):
         self._update_column_visibility()
 
     def _reconnect_selection_signal(self):
+        # The tree gets a new selection model whenever its model changes; connect each one once.
         sel_model = self.tree.selectionModel()
-        if sel_model:
-            try:
-                sel_model.selectionChanged.disconnect(self._on_tree_selection_changed)
-            except Exception:
-                pass
-            try:
-                sel_model.selectionChanged.connect(self._on_tree_selection_changed)
-            except Exception:
-                pass
+        if sel_model and sel_model is not getattr(self, "_connected_sel_model", None):
+            sel_model.selectionChanged.connect(self._on_tree_selection_changed)
+            self._connected_sel_model = sel_model
 
     def _on_tree_selection_changed(self, selected, deselected):
         self.selection_changed.emit(selected, deselected)

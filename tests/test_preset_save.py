@@ -12,6 +12,7 @@ if not app:
     app = QApplication(sys.argv)
 
 from gui.main_window import MainWindow
+from logic import settings
 
 class TestPresetSave(unittest.TestCase):
     def setUp(self):
@@ -74,7 +75,7 @@ class TestPresetSave(unittest.TestCase):
 
         # Verify file was updated with new setting
         with open(self.preset_a_path, "r") as f:
-            data = json.load(f)
+            data = settings.flatten(json.load(f))
         self.assertEqual(data.get("test_custom_setting"), "NewValue")
 
     @patch("PySide6.QtWidgets.QInputDialog.getText", return_value=("PresetNew", True))
@@ -97,7 +98,7 @@ class TestPresetSave(unittest.TestCase):
         new_preset_path = os.path.join(self.presets_dir, "PresetNew.json")
         self.assertTrue(os.path.exists(new_preset_path))
         with open(new_preset_path, "r") as f:
-            data = json.load(f)
+            data = settings.flatten(json.load(f))
         self.assertEqual(data.get("test_new_preset_setting"), "ValueX")
 
 if __name__ == "__main__":

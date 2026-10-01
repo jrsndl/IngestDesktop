@@ -18,7 +18,7 @@ def main():
     # Apply global style
     style_path = resource_path(os.path.join("gui", "style.qss"))
     if os.path.exists(style_path):
-        with open(style_path, "r") as f:
+        with open(style_path, "r", encoding="utf-8") as f:
             app.setStyleSheet(f.read())
 
     window = MainWindow()

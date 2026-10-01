@@ -86,6 +86,7 @@ class SpreadsheetPanel(QWidget):
     csv_mode_changed = Signal(bool)
     selectionChanged = Signal()
     show_grouped_toggled = Signal(bool)
+    show_reviews_toggled = Signal(bool)
     add_comment_requested = Signal(str)
     replace_value_requested = Signal(str, str)
 
@@ -115,6 +116,12 @@ class SpreadsheetPanel(QWidget):
         self.btn_show_grouped.setCheckable(True)
         self.btn_show_grouped.setChecked(True)
         self.btn_show_grouped.toggled.connect(self.show_grouped_toggled.emit)
+
+        # Review movies (incl. ones paired with footage by name) - on by default
+        self.btn_show_reviews = QPushButton("Show Reviews")
+        self.btn_show_reviews.setCheckable(True)
+        self.btn_show_reviews.setChecked(True)
+        self.btn_show_reviews.toggled.connect(self.show_reviews_toggled.emit)
         
         self.btn_check_ver_only = QPushButton("Version Check")
         self.btn_check_ver = QPushButton("Version Check Fix")
@@ -153,6 +160,7 @@ class SpreadsheetPanel(QWidget):
         controls_layout.addWidget(self.btn_tagged_only)
         controls_layout.addWidget(self.btn_assigned_only)
         controls_layout.addWidget(self.btn_show_grouped)
+        controls_layout.addWidget(self.btn_show_reviews)
         controls_layout.addWidget(self.btn_check_ver_only)
         controls_layout.addWidget(self.btn_check_ver)
         controls_layout.addWidget(self.btn_check_dup)
@@ -268,8 +276,10 @@ class SpreadsheetPanel(QWidget):
         self.table.resizeColumnToContents(9) # Version
         self.table.resizeColumnToContents(10) # Version User
         
-        # Connect model data change to auto-resize columns
-        self.table.model().dataChanged.connect(self._on_model_data_changed)
+        # Connect model data change to auto-resize columns (once per model, not per view switch)
+        if getattr(self, "_resize_hooked_model", None) is not self.standard_model:
+            self.standard_model.dataChanged.connect(self._on_model_data_changed)
+            self._resize_hooked_model = self.standard_model
 
     def _setup_csv_view(self):
         if not self.csv_model: return

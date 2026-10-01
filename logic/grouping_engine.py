@@ -1,25 +1,21 @@
 import logging
 
-def compute_group_key(item, template=None):
-    """Compute group key for an ImageItem based on template format string."""
+def repre_of(item):
+    """Representation with tokens filled in (a preset may use "{extension}"), lower-case, no dot."""
+    from logic import tokens
+    return tokens.expand("{representation}", item).lower().lstrip(".")
+
+
+def compute_group_key(item, template=None, settings=None):
+    """Compute the group key for an ImageItem from a token template.
+
+    Uses the shared token engine (logic/tokens.py), so {variant}, {version},
+    {folder_name}... mean exactly the same here as in the CSV and product names.
+    """
+    from logic import tokens
     if not template:
         template = "{folder_name}{task_name}{variant}{version}"
-        
-    replacements = {
-        "folder_name": item.metadata.get("folder_name", "") or "",
-        "task_name": getattr(item, "task_name", "") or item.metadata.get("task_name", "") or "",
-        "variant": getattr(item, "effective_variant", "") or getattr(item, "variant_user", "") or item.metadata.get("variant_parsed", "") or getattr(item, "variant", "") or "",
-        "version": str(item.version) if getattr(item, "version", None) is not None else "",
-        "episode": item.metadata.get("episode", "") or "",
-        "sequence": item.metadata.get("sequence", "") or "",
-        "label": getattr(item, "label", "") or "",
-        "product_name": getattr(item, "product_name", "") or ""
-    }
-    
-    key = template
-    for var_name, val in replacements.items():
-        key = key.replace("{" + var_name + "}", str(val))
-    return key
+    return tokens.expand(template, item, settings)
 
 def find_matching_group_def(group_items, group_defs):
     """Find the first matching enabled group definition for a list of items in a group."""
@@ -72,7 +68,7 @@ def validate_group_representations(group_items, group_def, config=None):
     # Collect direct representations
     direct_repres = set()
     for item in group_items:
-        repre = getattr(item, "representation", "") or ""
+        repre = repre_of(item)
         if repre:
             direct_repres.add(repre.lower().lstrip("."))
 
@@ -105,7 +101,7 @@ def get_item_priority(item, priority_list):
     """Get priority index for an item based on its representation in priority_list."""
     if not priority_list:
         return 999
-    repre = (getattr(item, "representation", "") or "").lower().lstrip(".")
+    repre = repre_of(item)
     if repre in priority_list:
         return priority_list.index(repre)
     return 999
@@ -192,7 +188,7 @@ def pair_group_reviews(group_items, config=None):
     for item in group_items:
         cat = getattr(item, "category", "") or ""
         fp = (getattr(item, "file_path", "") or "").lower()
-        repre = (getattr(item, "representation", "") or "").lower().lstrip(".")
+        repre = repre_of(item)
         
         is_video = (cat == "Video" or fp.endswith(MEDIA_EXTENSIONS) or repre in ("mp4", "mov", "webm", "mxf", "h264"))
         if target_review_repres and repre in target_review_repres:
@@ -210,7 +206,7 @@ def pair_group_reviews(group_items, config=None):
             for tr in target_review_repres:
                 found = False
                 for v in video_items:
-                    repre = (getattr(v, "representation", "") or "").lower().lstrip(".")
+                    repre = repre_of(v)
                     if repre == tr:
                         primary_video = v
                         found = True
@@ -219,7 +215,7 @@ def pair_group_reviews(group_items, config=None):
                     break
         else:
             for v in video_items:
-                repre = (getattr(v, "representation", "") or "").lower().lstrip(".")
+                repre = repre_of(v)
                 if repre in ("mp4", "h264", "mov"):
                     primary_video = v
                     break
@@ -227,17 +223,22 @@ def pair_group_reviews(group_items, config=None):
         video_path = primary_video.file_path.replace("\\", "/")
 
         for nv in non_video_items:
+            if (getattr(nv, "metadata", None) or {}).get("paired_review"):
+                continue  # already paired by name with its own review (logic/pairing.py)
             nv.review_file_path = video_path
             nv.review_status = "done"
 
         for v in video_items:
             v.review_file_path = video_path
             v.review_status = "done"
-            v_repre = (getattr(v, "representation", "") or "").lower().lstrip(".")
+            v_repre = repre_of(v)
             if (target_review_repres and v_repre in target_review_repres) or v == primary_video or getattr(v, "is_review_repre", False) or v_repre in ("mp4", "mov", "webm", "mxf", "h264"):
                 v.is_review_repre = True
     else:
         for nv in non_video_items:
+            if (getattr(nv, "metadata", None) or {}).get("paired_review"):
+                nv.review_status = "done"
+                continue
             rev_fp = getattr(nv, "review_file_path", None)
             if rev_fp and os.path.exists(rev_fp) and os.path.getsize(rev_fp) > 0:
                 nv.review_status = "done"
@@ -282,7 +283,7 @@ def apply_thumbnail_source_inheritance(group_items, g_def):
     source_item = None
     for tr in target_repres:
         for item in group_items:
-            repre = (getattr(item, "representation", "") or "").lower().lstrip(".")
+            repre = repre_of(item)
             if repre == tr:
                 source_item = item
                 break

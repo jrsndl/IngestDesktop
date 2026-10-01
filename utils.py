@@ -22,11 +22,8 @@ def get_version_from_name(filename, pattern=r"([._]v|v)(\d+)"):
     Extract version number from filename using regex.
     Default pattern handles: _v001, .v001, v001 (case insensitive)
     """
-    match = re.search(pattern, filename, re.IGNORECASE)
-    if match:
-        # The digits are in the last capturing group
-        return int(match.groups()[-1])
-    return 1
+    from logic.seqparse import parse_version
+    return parse_version(filename, pattern, default=1)
 
 def generate_thumbnail_image(image_path, size=150):
     """Generate a scaled QImage for the given image path."""
@@ -63,13 +60,15 @@ def generate_thumbnail(image_path, size=150):
     print(f"[Timer] Generating thumbnail pixmap for {os.path.basename(image_path)} took {elapsed:.4f} seconds.")
     return pixmap
 
-def generate_video_thumbnail(video_path, ffmpeg_path, frame_mode="Middle", duration=None, out_path=None):
+def generate_video_thumbnail(video_path, ffmpeg_path, frame_mode="Middle", duration=None, out_path=None, timeout=60):
     """Generate a PNG/JPG thumbnail for a video file at the source path."""
     import subprocess
     import time
     print(f"[Timer] Starting to generate video thumbnail for {os.path.basename(video_path)}...")
     start_time = time.perf_counter()
-    if not ffmpeg_path or not os.path.exists(ffmpeg_path):
+    from logic.proc import resolve_tool, run_tool
+    ffmpeg_path = resolve_tool(ffmpeg_path)
+    if not ffmpeg_path:
         return None
         
     if not out_path:
@@ -83,7 +82,8 @@ def generate_video_thumbnail(video_path, ffmpeg_path, frame_mode="Middle", durat
         try:
             mid = float(duration) / 2.0
             ss = str(mid)
-        except: pass
+        except (TypeError, ValueError):
+            pass
     
     args = [
         ffmpeg_path,
@@ -94,13 +94,8 @@ def generate_video_thumbnail(video_path, ffmpeg_path, frame_mode="Middle", durat
         "-y", out_path
     ]
     
-    # Hide window on Windows
-    creationflags = 0
-    if os.name == 'nt':
-        creationflags = 0x08000000 # subprocess.CREATE_NO_WINDOW
-
     try:
-        subprocess.run(args, capture_output=True, check=True, creationflags=creationflags)
+        run_tool(args, timeout=timeout, text=False)
         elapsed = time.perf_counter() - start_time
         print(f"[Timer] Generating video thumbnail for {os.path.basename(video_path)} took {elapsed:.4f} seconds.")
         if os.path.exists(out_path):
@@ -178,13 +173,13 @@ def calculate_thumbnail_time(nb_frames, framerate, mode="Middle", default_fps=24
     Calculate the time in seconds for thumbnail extraction.
     mode: First, Second, Middle
     """
+    # Parse independently: a bad frame rate must not also throw away a valid frame count
     try:
         nb_frames = int(nb_frames)
-        # Default to default_fps if missing or zero
-        fps = float(framerate) if (framerate and float(framerate) > 0) else default_fps
     except (ValueError, TypeError):
-        fps = default_fps
         nb_frames = 1
+    from logic.metadata import parse_rate
+    fps = parse_rate(framerate) or float(default_fps or 24.0)
 
     if mode == "First":
         target_frame = 0

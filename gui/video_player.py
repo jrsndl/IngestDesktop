@@ -13,16 +13,25 @@ except ImportError as e:
     logging.warning(f"QtMultimedia not available in PySide6: {e}")
     MULTIMEDIA_AVAILABLE = False
 
+_INLINE_VIDEO_DISABLED = None  # set by the main window from Preferences > GUI
+
+
+def set_inline_video_disabled(disabled):
+    global _INLINE_VIDEO_DISABLED
+    _INLINE_VIDEO_DISABLED = bool(disabled)
+
+
 def is_multimedia_available():
     if not MULTIMEDIA_AVAILABLE:
         return False
+    if _INLINE_VIDEO_DISABLED is not None:
+        return not _INLINE_VIDEO_DISABLED
     try:
-        import json
-        if os.path.exists("config.json"):
-            with open("config.json", "r") as f:
-                cfg = json.load(f)
-                if cfg.get("disable_inline_video", False):
-                    return False
+        from logic import settings
+        from utils import app_dir
+        cfg = settings.flatten(settings.read_json(os.path.join(app_dir, "config.json")) or {})
+        if cfg.get("disable_inline_video", False):
+            return False
     except Exception:
         pass
     return True
@@ -345,7 +354,9 @@ class VideoPlayerPanel(QWidget):
     def clear_video(self):
         """Clears current active video and returns to placeholder state."""
         self.video_path = None
-        if is_multimedia_available():
+        # Check for an existing player, not the preference: the user may have just
+        # disabled inline video while this player is still playing.
+        if getattr(self, "player", None) is not None:
             self.stop_video()
             self.player.setSource(QUrl())
             self.lbl_title.setText("No Video Loaded")
@@ -548,7 +559,7 @@ class VideoPlayerOverlay(QWidget):
 
     def clear_video(self):
         self.video_path = None
-        if is_multimedia_available() and hasattr(self, 'player'):
+        if getattr(self, 'player', None) is not None:
             self.player.stop()
             self.player.setSource(QUrl())
         self.is_playing = False
@@ -557,7 +568,7 @@ class VideoPlayerOverlay(QWidget):
     def mousePressEvent(self, event):
         # Toggle play/pause on click
         if event.button() == Qt.LeftButton:
-            if is_multimedia_available() and hasattr(self, 'player'):
+            if getattr(self, 'player', None) is not None:
                 if self.is_playing:
                     self.player.pause()
                     self.is_playing = False
@@ -580,7 +591,7 @@ class VideoPlayerOverlay(QWidget):
             if parent_widget:
                 parent_widget.frame_selection()
             
-            if is_multimedia_available() and hasattr(self, 'player'):
+            if getattr(self, 'player', None) is not None:
                 self.player.play()
                 self.is_playing = True
             event.accept()

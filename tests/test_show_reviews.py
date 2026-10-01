@@ -6,13 +6,13 @@ from PySide6.QtWidgets import QApplication
 if not QApplication.instance():
     app = QApplication(sys.argv)
 
-from gui.top_bar import TopBar
+from gui.spreadsheet_panel import SpreadsheetPanel
 from gui.thumbnail_area import ThumbnailArea
 from logic.image_model import ImageItem, ImageTableModel
 
 class TestShowReviews(unittest.TestCase):
-    def test_top_bar_show_reviews_button(self):
-        top_bar = TopBar()
+    def test_spreadsheet_show_reviews_button(self):
+        top_bar = SpreadsheetPanel()  # the toggle lives in the spreadsheet controls
         self.assertTrue(hasattr(top_bar, "btn_show_reviews"))
         self.assertEqual(top_bar.btn_show_reviews.text(), "Show Reviews")
         self.assertTrue(top_bar.btn_show_reviews.isCheckable())

@@ -1,5 +1,15 @@
 import os
 
+def _match(items, key, prio):
+    """Items whose `key` equals `prio` (case-insensitive); if none, those containing it.
+    Exact matches win, so "comp" picks "comp" before "precomp". None values are safe."""
+    vals = [((it.get(key) or "") if isinstance(it, dict) else "").lower() for it in items]
+    exact = [it for it, v in zip(items, vals) if v == prio]
+    if exact:
+        return exact
+    return [it for it, v in zip(items, vals) if prio in v]
+
+
 def autopick_task(tasks, task_type_priority_str="", task_name_priority_str=""):
     """
     Autopicks a task from a list of AYON task dicts.
@@ -17,7 +27,7 @@ def autopick_task(tasks, task_type_priority_str="", task_name_priority_str=""):
     # 1. Filter by Task Type Priority
     if type_prios:
         for t_prio in type_prios:
-            matched = [t for t in candidates if t.get("type", "").lower() == t_prio or t_prio in t.get("type", "").lower()]
+            matched = _match(candidates, "type", t_prio)
             if matched:
                 candidates = matched
                 break
@@ -25,7 +35,7 @@ def autopick_task(tasks, task_type_priority_str="", task_name_priority_str=""):
     # 2. Filter by Task Name Priority
     if name_prios:
         for n_prio in name_prios:
-            matched = [t for t in candidates if t.get("name", "").lower() == n_prio or n_prio in t.get("name", "").lower()]
+            matched = _match(candidates, "name", n_prio)
             if matched:
                 return matched[0]
 
@@ -48,7 +58,7 @@ def autopick_product(products, product_type_priority_str="", product_name_priori
     # 1. Filter by Product Type Priority
     if type_prios:
         for t_prio in type_prios:
-            matched = [p for p in candidates if t_prio in p.get("type", "").lower()]
+            matched = _match(candidates, "type", t_prio)
             if matched:
                 candidates = matched
                 break
@@ -56,7 +66,7 @@ def autopick_product(products, product_type_priority_str="", product_name_priori
     # 2. Filter by Product Name Priority
     if name_prios:
         for n_prio in name_prios:
-            matched = [p for p in candidates if n_prio in p.get("name", "").lower()]
+            matched = _match(candidates, "name", n_prio)
             if matched:
                 return matched[0]
 
@@ -110,7 +120,7 @@ def autopick_representation(repres, extension_priority_str=""):
     for ext in ext_prios:
         for r in repres:
             path = r.get("attrib", {}).get("path", "")
-            r_name = r.get("name", "").lower()
+            r_name = (r.get("name") or "").lower()
             file_ext = os.path.splitext(path)[1].lower().lstrip(".") if path else ""
 
             if file_ext == ext or r_name == ext:
