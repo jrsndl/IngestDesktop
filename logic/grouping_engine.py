@@ -222,14 +222,19 @@ def pair_group_reviews(group_items, config=None):
 
         video_path = primary_video.file_path.replace("\\", "/")
 
+        from logic.pairing import key_matches, unpaired_set
+        unpaired = unpaired_set(config.get("unpaired_reviews")) if isinstance(config, dict) else set()
         for nv in non_video_items:
             if (getattr(nv, "metadata", None) or {}).get("paired_review"):
                 continue  # already paired by name with its own review (logic/pairing.py)
+            if unpaired and any(key_matches(k, nv.file_path, primary_video.file_path) for k in unpaired):
+                continue  # the user unpaired this review from this footage
             nv.review_file_path = video_path
             nv.review_status = "done"
 
         for v in video_items:
-            v.review_file_path = video_path
+            # a review paired by name keeps playing / publishing its own movie
+            v.review_file_path = (v.file_path or "").replace("\\", "/") if getattr(v, "pair_main", None) is not None else video_path
             v.review_status = "done"
             v_repre = repre_of(v)
             if (target_review_repres and v_repre in target_review_repres) or v == primary_video or getattr(v, "is_review_repre", False) or v_repre in ("mp4", "mov", "webm", "mxf", "h264"):

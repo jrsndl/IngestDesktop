@@ -30,6 +30,8 @@ class ThumbnailArea(CanvasLayoutMixin, CanvasAnnotationsMixin, CanvasVideoMixin,
     paste_requested = Signal()
     queue_requested = Signal()
     scene_items_changed = Signal()
+    unpair_requested = Signal(object)  # list of (main item, review item)
+    pair_requested = Signal(object)  # list of (main item, review item) to pair again
     change_version_requested = Signal(object, int)
 
     def __init__(self, parent=None):
@@ -70,7 +72,7 @@ class ThumbnailArea(CanvasLayoutMixin, CanvasAnnotationsMixin, CanvasVideoMixin,
         self.item_sizes = {}
         
         self.player_mode = "stop" # "stop", "selected", "all"
-        self.show_reviews = True
+        self.show_reviews = False  # "Show Reviews" in the canvas controls (off by default)
         self.active_players = {} # mapping: ThumbnailItem -> VideoPlayerOverlay
         
         self.layout = QVBoxLayout(self)
@@ -91,16 +93,18 @@ class ThumbnailArea(CanvasLayoutMixin, CanvasAnnotationsMixin, CanvasVideoMixin,
         
         
 
-        self.slider_text_size = QSlider(Qt.Horizontal)
-        self.slider_text_size.setRange(4, 64)
-        self.slider_text_size.setValue(default_text_size)
+        # Spring-loaded: drag left = smaller, right = bigger, the knob snaps back to
+        # the middle on release (gui/spring_slider.py). value() is the current size.
+        from gui.spring_slider import SpringSlider
+        from gui.canvas.thumbnail_item import MAX_ITEM_SIZE
+        self.slider_text_size = SpringSlider(4, 200, default_text_size, strength=3.0, auto_apply=True)
         self.slider_text_size.setFixedWidth(100)
-        self.slider_text_size.valueChanged.connect(self.update_font_size)
-        self.slider_thumb_size = QSlider(Qt.Horizontal)
-        self.slider_thumb_size.setRange(20, 2048)
-        self.slider_thumb_size.setValue(default_thumb_size)
+        self.slider_text_size.sizeChanged.connect(self.update_font_size)
+        self.slider_thumb_size = SpringSlider(20, MAX_ITEM_SIZE, default_thumb_size, strength=4.0, auto_apply=False)
         self.slider_thumb_size.setFixedWidth(100)
-        self.slider_thumb_size.valueChanged.connect(self.update_thumb_size)
+        self.slider_thumb_size.dragStarted.connect(self._begin_thumb_scale)
+        self.slider_thumb_size.scaleChanged.connect(self._on_thumb_scale)
+        self.slider_thumb_size.dragFinished.connect(self._end_thumb_scale)
 
         self.btn_tag_filter = QPushButton("Filter: All")
         self.btn_tag_filter.clicked.connect(self._cycle_tag_filter)
@@ -133,6 +137,19 @@ class ThumbnailArea(CanvasLayoutMixin, CanvasAnnotationsMixin, CanvasVideoMixin,
         add_v_line(self.controls_layout)
         
         self.controls_layout.addWidget(self.btn_show_text)
+        # Frames around items; off = only selected items get their frame
+        self.btn_show_frames = QPushButton("Show Frames")
+        self.btn_show_frames.setCheckable(True)
+        self.btn_show_frames.setChecked(True)
+        self.btn_show_frames.toggled.connect(self._on_show_frames_toggled)
+        self.controls_layout.addWidget(self.btn_show_frames)
+        # Review movies (incl. ones paired with footage by name); off by default
+        self.btn_show_reviews = QPushButton("Show Reviews")
+        self.btn_show_reviews.setCheckable(True)
+        self.btn_show_reviews.setChecked(False)
+        self.btn_show_reviews.setToolTip("Show review movies as items (also those paired with footage by name)")
+        self.btn_show_reviews.toggled.connect(self._on_canvas_show_reviews_toggled)
+        self.controls_layout.addWidget(self.btn_show_reviews)
         add_v_line(self.controls_layout)
         self.controls_layout.addWidget(QLabel("Text:"))
         self.controls_layout.addWidget(self.slider_text_size)
@@ -188,6 +205,7 @@ class ThumbnailArea(CanvasLayoutMixin, CanvasAnnotationsMixin, CanvasVideoMixin,
         self.scene.setSceneRect(-50000, -50000, 100000, 100000)
         self.view.setScene(self.scene)
         self.scene.show_labels = True
+        self.scene.show_frames = True
         self.scene.selectionChanged.connect(self._on_scene_selection_changed)
         self.scene.changed.connect(lambda rects: self.update_video_overlay_geometry())
         self.view.setBackgroundBrush(QColor("#1e1e1e"))
@@ -230,12 +248,23 @@ class ThumbnailArea(CanvasLayoutMixin, CanvasAnnotationsMixin, CanvasVideoMixin,
         self.inline_editor.installEventFilter(self)
         self._editing_item = None
 
-        self.lbl_zoom = QLabel("100%", self.view) # Parent to view, not viewport
+        # Statistics overlay, top right (it replaced the zoom-level overlay; the
+        # name lbl_zoom / update_zoom_indicator() is kept for existing callers)
+        self.lbl_zoom = QLabel("", self.view) # Parent to view, not viewport
         self.lbl_zoom.setAttribute(Qt.WA_TransparentForMouseEvents)
-        self.lbl_zoom.setFixedWidth(60)
-        self.lbl_zoom.setAlignment(Qt.AlignCenter)
+        self.lbl_zoom.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        self.lbl_zoom.setTextFormat(Qt.RichText)
+        self.lbl_zoom.setStyleSheet("color: #dddddd; background: transparent; border: none;")
+        # constant width (labels left, numbers right) so it never jumps
+        fm = self.lbl_zoom.fontMetrics()
+        self.lbl_zoom.setFixedWidth(fm.horizontalAdvance("Selected:") + fm.horizontalAdvance("0000000") + 16)
+        self._session_ingest = {}  # id(item) -> True (ingested OK) / False (failed), this session only
+        self._stats_timer = QTimer(self)
+        self._stats_timer.setSingleShot(True)
+        self._stats_timer.setInterval(100)
+        self._stats_timer.timeout.connect(self.update_stats)
         self.lbl_zoom.raise_()
-        self.update_zoom_indicator()
+        self.update_stats()
         
         self.grabGesture(Qt.PinchGesture)
         self.view.viewport().grabGesture(Qt.PinchGesture)
@@ -304,7 +333,58 @@ class ThumbnailArea(CanvasLayoutMixin, CanvasAnnotationsMixin, CanvasVideoMixin,
             if tip:
                 QToolTip.showText(self._last_tooltip_pos, tip, self.view)
 
+    def _select_pair_partners(self):
+        """With "Show Reviews" on, selecting a main file also selects its paired
+        reviews and selecting a review also selects its main file (and the other
+        reviews); deselecting one deselects its partners. Reviews draw their
+        selection dimmer (ThumbnailItem.paint)."""
+        if getattr(self, "_pair_sel_busy", False):
+            return
+        cur = {t for t in self.scene.selectedItems() if isinstance(t, ThumbnailItem)}
+        prev = getattr(self, "_pair_prev_sel", set())
+        self._pair_prev_sel = cur
+        if not getattr(self, "show_reviews", False) or cur == prev:
+            return
+
+        def partners(thumb):
+            data = getattr(thumb, "data", None)
+            if callable(data) or data is None or not hasattr(data, "pair_members"):
+                return []
+            members = data.pair_members()
+            if len(members) < 2:
+                return []
+            out = []
+            for d in members:
+                t = self.item_to_thumb.get(d)
+                if t is not None and t is not thumb and t.isVisible():
+                    out.append(t)
+            return out
+
+        from PySide6.QtWidgets import QApplication
+        toggling = bool(QApplication.keyboardModifiers() & Qt.ControlModifier)
+        if toggling:
+            # Ctrl+click toggles the whole pair
+            to_deselect = {p for t in prev - cur if t.scene() is self.scene for p in partners(t)} & cur
+            to_select = {p for t in cur - prev for p in partners(t)} - cur - to_deselect
+        else:
+            # plain click / rubber band: whatever is selected brings its partners
+            to_deselect = set()
+            to_select = {p for t in cur for p in partners(t)} - cur
+        if not to_select and not to_deselect:
+            return
+        self._pair_sel_busy = True
+        try:
+            for t in to_deselect:
+                t.setSelected(False)
+            for t in to_select:
+                t.setSelected(True)
+        finally:
+            self._pair_sel_busy = False
+        self._pair_prev_sel = {t for t in self.scene.selectedItems() if isinstance(t, ThumbnailItem)}
+
     def _on_scene_selection_changed(self):
+        self._select_pair_partners()
+        self.schedule_stats_update()
         self._has_selection = bool(self.scene.selectedItems())
         # Note: Qt automatically schedules repaints for selection changes;
         # calling scene.update() here would cause a race with in-progress
@@ -318,6 +398,10 @@ class ThumbnailArea(CanvasLayoutMixin, CanvasAnnotationsMixin, CanvasVideoMixin,
         self.model.rowsAboutToBeRemoved.connect(self._on_rows_removed)
         self.model.modelReset.connect(self.add_items)
         self.model.dataChanged.connect(self._on_data_changed)
+        # statistics overlay follows the model
+        for sig in (model.rowsInserted, model.rowsRemoved, model.modelReset, model.layoutChanged, model.dataChanged):
+            sig.connect(self.schedule_stats_update)
+        self.schedule_stats_update()
 
     def update_label_validator(self, regex_str):
         # Temporarily disabled per user request
@@ -334,6 +418,15 @@ class ThumbnailArea(CanvasLayoutMixin, CanvasAnnotationsMixin, CanvasVideoMixin,
         else:
             self.btn_paste.setStyleSheet("color: #666666;")
             self.btn_paste.setEnabled(False)
+
+    def _item_at(self, view_pos):
+        """Topmost item under the mouse, ignoring the fading click marker (it would turn
+        the second click of a double-click on empty space into a click on an item)."""
+        for it in self.view.items(view_pos):
+            if getattr(it, "_is_placement_marker", False):
+                continue
+            return it
+        return None
 
     def eventFilter(self, source, event):
         if self._draw_mode_active:
@@ -391,6 +484,7 @@ class ThumbnailArea(CanvasLayoutMixin, CanvasAnnotationsMixin, CanvasVideoMixin,
                 angle = event.angleDelta().y()
                 factor = 1.15 if angle > 0 else 1 / 1.15
                 self.view.scale(factor, factor)
+                self._grow_scene_rect(False)
                 self.update_zoom_indicator()
                 self.update_video_overlay_geometry()
                 return True # Prevent default scrolling/panning
@@ -407,6 +501,7 @@ class ThumbnailArea(CanvasLayoutMixin, CanvasAnnotationsMixin, CanvasVideoMixin,
                     delta = event.pos() - self._last_pan_pos
                     self._last_pan_pos = event.pos()
                     
+                    self._grow_scene_rect(False)  # no invisible wall while panning
                     self.view.setTransformationAnchor(QGraphicsView.NoAnchor)
                     factor = self.view.transform().m11()
                     self.view.translate(delta.x() / factor, delta.y() / factor)
@@ -433,7 +528,12 @@ class ThumbnailArea(CanvasLayoutMixin, CanvasAnnotationsMixin, CanvasVideoMixin,
                     return True
                     
                 # Decide "empty canvas" before the placement marker is added under the mouse
-                clicked_empty = self.view.itemAt(event.pos()) is None
+                clicked_empty = self._item_at(event.pos()) is None
+                # Selection as it was before this click: a double-click on empty space
+                # frames it (the first click of the double-click clears the selection)
+                if clicked_empty and event.button() == Qt.LeftButton:
+                    self._selection_before_empty_click = [
+                        it for it in self.scene.selectedItems() if it.isVisible()]
                 if event.button() == Qt.LeftButton:
                     if clicked_empty:
                         self._marked_placement_pos = self.view.mapToScene(event.pos())
@@ -442,7 +542,7 @@ class ThumbnailArea(CanvasLayoutMixin, CanvasAnnotationsMixin, CanvasVideoMixin,
                 if event.button() == Qt.RightButton:
                     # Select the item under the mouse if it's not already selected,
                     # but do not clear selection if right-clicking empty space or a selected item.
-                    item = self.view.itemAt(event.pos())
+                    item = self._item_at(event.pos())
                     selectable_item = None
                     temp = item
                     while temp:
@@ -472,7 +572,7 @@ class ThumbnailArea(CanvasLayoutMixin, CanvasAnnotationsMixin, CanvasVideoMixin,
         
         if event.type() == QEvent.MouseButtonDblClick:
             if source is self.view.viewport():
-                item = self.view.itemAt(event.pos())
+                item = self._item_at(event.pos())
                 if item:
                     # Ignore double-clicks on text notes and backdrops
                     temp = item
@@ -497,7 +597,16 @@ class ThumbnailArea(CanvasLayoutMixin, CanvasAnnotationsMixin, CanvasVideoMixin,
                     else:
                         return True
                 else:
-                    self.frame_all()
+                    # Empty space: frame the selection if there was one, else everything
+                    previous = [it for it in getattr(self, "_selection_before_empty_click", [])
+                                if it.scene() is self.scene and it.isVisible()]
+                    self._selection_before_empty_click = []
+                    if previous:
+                        for it in previous:
+                            it.setSelected(True)
+                        self.frame_selection()
+                    else:
+                        self.frame_all()
                     return True
         elif event.type() == QEvent.KeyPress:
             if source is self.inline_editor:
@@ -587,12 +696,14 @@ class ThumbnailArea(CanvasLayoutMixin, CanvasAnnotationsMixin, CanvasVideoMixin,
                 if self.view.underMouse():
                     self.view.setTransformationAnchor(QGraphicsView.AnchorViewCenter)
                     self.view.scale(1.15, 1.15)
+                    self._grow_scene_rect(False)
                     self.update_zoom_indicator()
                     return True
             elif event.key() == Qt.Key_Minus:
                 if self.view.underMouse():
                     self.view.setTransformationAnchor(QGraphicsView.AnchorViewCenter)
                     self.view.scale(1/1.15, 1/1.15)
+                    self._grow_scene_rect(False)
                     self.update_zoom_indicator()
                     return True
             elif event.key() == Qt.Key_Z:
@@ -710,18 +821,39 @@ class ThumbnailArea(CanvasLayoutMixin, CanvasAnnotationsMixin, CanvasVideoMixin,
         self.view.setFocus()
 
     def update_zoom_indicator(self):
-        lod = self.view.transform().m11()
-        percent = int(lod * 100)
-        self.lbl_zoom.setText(f"{percent}%")
-        
-        if lod > 0.6:
-            self.lbl_zoom.setStyleSheet("color: #4CAF50; font-family: monospace; font-weight: bold; background: rgba(30,30,30,180); padding: 2px; border: 1px solid #4CAF50; border-radius: 3px;")
-        else:
-            self.lbl_zoom.setStyleSheet("color: #F44336; font-family: monospace; font-weight: bold; background: rgba(30,30,30,180); padding: 2px; border: 1px solid #F44336; border-radius: 3px;")
-            
+        """Keep the statistics overlay in the top right corner (called on zoom/resize)."""
+        self.lbl_zoom.setFixedHeight(self.lbl_zoom.sizeHint().height())
         v_width = self.view.width()
         self.lbl_zoom.move(v_width - self.lbl_zoom.width() - 25, 15)
         self.lbl_zoom.raise_()
+
+    def schedule_stats_update(self, *args):
+        self._stats_timer.start()
+
+    def note_ingest_result(self, item, ok):
+        """Record an ingest result of this session (statistics overlay)."""
+        self._session_ingest[id(item)] = bool(ok)
+        self.schedule_stats_update()
+
+    def update_stats(self):
+        """Items / Selected / Disabled / Ingested / Failed in the top right corner."""
+        items = list(getattr(self.model, "all_items", getattr(self.model, "items", [])) or []) if self.model else []
+        live = {id(it) for it in items}
+        rows = [("Items:", len(items))]
+        selected = sum(1 for t in self.scene.selectedItems() if isinstance(t, ThumbnailItem))
+        if selected:
+            rows.append(("Selected:", selected))
+        disabled = sum(1 for it in items if not getattr(it, "is_tagged", True))
+        if disabled:
+            rows.append(("Disabled:", disabled))
+        results = [ok for key, ok in self._session_ingest.items() if key in live]
+        if results:  # an ingest ran in this session
+            rows.append(("Ingested:", sum(1 for ok in results if ok)))
+            rows.append(("Failed:", sum(1 for ok in results if not ok)))
+        html = "".join(f"<tr><td align='left'>{label}</td><td align='right'>{value}</td></tr>"
+                       for label, value in rows)
+        self.lbl_zoom.setText(f"<table width='100%' cellspacing='0' cellpadding='0'>{html}</table>")
+        self.update_zoom_indicator()
 
     def gestureEvent(self, event):
         pinch = event.gesture(Qt.PinchGesture)
@@ -729,9 +861,14 @@ class ThumbnailArea(CanvasLayoutMixin, CanvasAnnotationsMixin, CanvasVideoMixin,
             factor = pinch.scaleFactor()
             if factor != 1.0:
                 self.view.scale(factor, factor)
+                self._grow_scene_rect(False)
                 self.update_zoom_indicator()
             return True
         return False
+
+    def _on_show_frames_toggled(self, checked):
+        self.scene.show_frames = checked
+        self.scene.update()
 
     def _on_show_text_toggled(self, checked):
         self.scene.show_labels = checked
@@ -772,6 +909,13 @@ class ThumbnailArea(CanvasLayoutMixin, CanvasAnnotationsMixin, CanvasVideoMixin,
 
         menu.addSeparator()
         
+        # Unpair reviews of the selected items (gui/pair_menu.py)
+        from gui.pair_menu import add_pairing_actions
+        sel_data = [getattr(t, "data", None) for t in self.scene.selectedItems() if isinstance(t, ThumbnailItem)]
+        if add_pairing_actions(menu, [d for d in sel_data if not callable(d)], self.model,
+                               self.unpair_requested.emit, self.pair_requested.emit, self):
+            menu.addSeparator()
+
         # Draw precedence (only when thumbnails are selected)
         selected_thumbs = [it for it in self.scene.selectedItems() if isinstance(it, ThumbnailItem)]
         if selected_thumbs:

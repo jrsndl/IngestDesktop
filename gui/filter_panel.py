@@ -86,6 +86,7 @@ class TagColorProxyModel(QSortFilterProxyModel):
         # Extra filters
         self.files_only = True
         self.v_stack = False
+        self.show_reviews = False  # "Reviews" toggle at the bottom of the panel (off by default)
         
         # Fast lookup: normalized_abs_path -> (is_tagged, age_minutes, label)
         self._path_info = {}
@@ -111,11 +112,17 @@ class TagColorProxyModel(QSortFilterProxyModel):
         self._age_enabled = age_enabled
         self.invalidateFilter() # Triggers data redraw
 
-    def set_extra_filters(self, files_only=True, v_stack=False, sequences=True):
+    def set_extra_filters(self, files_only=True, v_stack=False, sequences=True, show_reviews=None):
         self.files_only = files_only
         self.v_stack = v_stack
         self.detect_sequences = sequences
+        if show_reviews is not None:
+            self.show_reviews = show_reviews
         self._rebuild_cache()
+
+    def hides_item(self, item):
+        """Review movies are listed only while the Reviews toggle is on."""
+        return not self.show_reviews and getattr(item, "is_review", False)
 
     def _rebuild_cache(self):
         self._path_info = {}
@@ -124,8 +131,8 @@ class TagColorProxyModel(QSortFilterProxyModel):
         self._path_to_item = {} # abs_path -> ImageItem
         
         for item in self.main_model.items:
-            if getattr(item, "is_hidden_paired_review", False):
-                continue  # review linked to footage by name: not listed on its own
+            if self.hides_item(item):
+                continue  # review movie (incl. ones paired with footage) while Reviews is off
             abs_path = os.path.normpath(os.path.abspath(item.file_path))
             self._path_to_item[abs_path] = item
             self._path_info[abs_path] = (item.is_tagged, item.age_minutes, item.label, item.review_status, item.filename, getattr(item, "ingest_status", "unknown"))
@@ -305,6 +312,8 @@ class TagColorProxyModel(QSortFilterProxyModel):
                 item = self._path_to_item.get(abs_path)
                 if item and getattr(item, "is_ayon_item", False):
                     return QColor("#00bcd4") # Cyan for AYON items
+                if item and getattr(item, "pair_main", None) is not None and item.is_tagged:
+                    return QColor("#ff00ff") # Magenta for paired reviews
 
                 info = self._path_info[abs_path]
                 is_tagged, age_min, label, review_status, filename = info[0], info[1], info[2], info[3], info[4]
@@ -313,7 +322,10 @@ class TagColorProxyModel(QSortFilterProxyModel):
                 matches_search = (not self._search_text or 
                                   self._search_text in label.lower() or 
                                   self._search_text in filename.lower())
-                matches_age = not self._age_enabled or (age_min <= self._age_limit)
+                # live age from the item (the cache is built before ages are refreshed)
+                if item is not None:
+                    age_min = item.age_minutes
+                matches_age = not self._age_enabled or (age_min < self._age_limit)
                 matches_filters = matches_search and matches_age
                 
                 if matches_filters:
@@ -347,6 +359,8 @@ class FilterPanel(QWidget):
     edit_scene_item_requested = Signal(str) # UUID
     move_front_back_requested = Signal(str, list) # direction ("front"/"back"), list of paths
     change_version_requested = Signal(object, int) # item, new_version
+    unpair_requested = Signal(object)  # list of (main item, review item)
+    pair_requested = Signal(object)  # list of (main item, review item) to pair again
 
     def __init__(self, main_model, parent=None):
         super().__init__(parent)
@@ -389,7 +403,7 @@ class FilterPanel(QWidget):
         age_layout.addWidget(self.chk_age)
         
         self.spin_age = QSpinBox()
-        self.spin_age.setRange(0, 1000)
+        self.spin_age.setRange(1, 100000)
         self.spin_age.valueChanged.connect(self._on_age_change)
         self.combo_units = QComboBox()
         self.combo_units.addItems(["minutes", "hours", "days"])
@@ -467,12 +481,20 @@ class FilterPanel(QWidget):
         self.btn_sequences.setCheckable(True)
         self.btn_sequences.setChecked(True)
         self.btn_sequences.toggled.connect(self._on_toggles_changed)
+
+        # Review movies (incl. ones paired with footage by name); off by default
+        self.btn_show_reviews = QPushButton("Reviews")
+        self.btn_show_reviews.setCheckable(True)
+        self.btn_show_reviews.setChecked(False)
+        self.btn_show_reviews.setToolTip("Show review movies (also those paired with footage by name)")
+        self.btn_show_reviews.toggled.connect(self._on_toggles_changed)
         
         toggles_layout.addWidget(self.btn_files_only)
         toggles_layout.addWidget(self.btn_flat)
         toggles_layout.addWidget(self.btn_unfold)
         toggles_layout.addWidget(self.btn_v_stack)
         toggles_layout.addWidget(self.btn_sequences)
+        toggles_layout.addWidget(self.btn_show_reviews)
         self.layout.addLayout(toggles_layout)
 
         self._update_unfold_state()
@@ -542,7 +564,8 @@ class FilterPanel(QWidget):
         self.proxy.set_extra_filters(
             files_only=self.btn_files_only.isChecked(),
             v_stack=self.btn_v_stack.isChecked(),
-            sequences=new_seq
+            sequences=new_seq,
+            show_reviews=self.btn_show_reviews.isChecked(),
         )
         if self.btn_flat.isChecked():
             self._enable_flat_view()
@@ -591,7 +614,7 @@ class FilterPanel(QWidget):
         
         # Populate from main_model.items
         for item in self.main_model.items:
-            if getattr(item, "is_hidden_paired_review", False):
+            if self.proxy.hides_item(item):
                 continue
             std_item = QStandardItem(item.filename)
             std_item.setData(item.file_path, Qt.UserRole)
@@ -630,7 +653,63 @@ class FilterPanel(QWidget):
             self._connected_sel_model = sel_model
 
     def _on_tree_selection_changed(self, selected, deselected):
+        if getattr(self, "_pair_sel_busy", False):
+            return  # select_paths() below is extending the selection; emit once at the end
+        if self._select_pair_partners():
+            from PySide6.QtCore import QItemSelection
+            self.selection_changed.emit(QItemSelection(), QItemSelection())
+            return
         self.selection_changed.emit(selected, deselected)
+
+    def _selected_paths(self):
+        out = []
+        sel = self.tree.selectionModel()
+        if not sel:
+            return out
+        model = self.proxy.sourceModel()
+        for idx in sel.selectedIndexes():
+            if idx.column() != 0:
+                continue
+            src = self.proxy.mapToSource(idx)
+            if hasattr(model, "filePath"):
+                p = model.filePath(src)
+            else:
+                if src.data(Qt.UserRole + 1):
+                    continue  # note / backdrop
+                p = src.data(Qt.UserRole)
+            if p and isinstance(p, str):
+                out.append(p)
+        return out
+
+    def _select_pair_partners(self):
+        """With "Reviews" on, selecting a main file also selects its paired reviews,
+        and selecting a review selects its main file. Returns True if it changed
+        the selection."""
+        if not self.proxy.show_reviews:
+            return False
+        paths = self._selected_paths()
+        if not paths:
+            return False
+        norm = lambda p: os.path.normpath(os.path.abspath(p))
+        have = {norm(p) for p in paths}
+        extra = []
+        for p in paths:
+            item = self.proxy._path_to_item.get(norm(p))
+            if item is None or not hasattr(item, "pair_members"):
+                continue
+            for m in item.pair_members():
+                mp = norm(m.file_path) if m.file_path else ""
+                if mp and mp not in have and mp in self.proxy._path_to_item:
+                    have.add(mp)
+                    extra.append(m.file_path)
+        if not extra:
+            return False
+        self._pair_sel_busy = True
+        try:
+            self.select_paths(paths + extra)
+        finally:
+            self._pair_sel_busy = False
+        return True
 
     def _update_column_visibility(self):
         """Ensure only the first column is visible and reconnect selection signal."""
@@ -917,9 +996,8 @@ class FilterPanel(QWidget):
         units = self.combo_units.currentText()
         enabled = self.chk_age.isChecked()
         
-        minutes = (val + 1)
-        if units == "hours": minutes *= 60
-        elif units == "days": minutes *= 1440
+        from logic.image_model import age_limit_minutes
+        minutes = age_limit_minutes(val, units)
         
         self.proxy.set_ignore_filter(self.ignore_bar.text(), self.chk_ignore.isChecked())
         self.proxy.set_filters(search_text, minutes, enabled)
@@ -984,6 +1062,20 @@ class FilterPanel(QWidget):
         if not paths: return
         
         menu = QMenu(self.window())
+
+        # Unpair reviews of the selected files (gui/pair_menu.py)
+        from gui.pair_menu import add_pairing_actions
+        sel_items = []
+        for p in paths:
+            it = self.proxy._path_to_item.get(os.path.normpath(os.path.abspath(p)))
+            if it is None:
+                it = next((x for x in self.main_model.items
+                           if os.path.normpath(os.path.abspath(x.file_path)) == os.path.normpath(os.path.abspath(p))), None)
+            if it is not None and it not in sel_items:
+                sel_items.append(it)
+        if add_pairing_actions(menu, sel_items, self.main_model,
+                               self.unpair_requested.emit, self.pair_requested.emit, self):
+            menu.addSeparator()
         
         act_reveal = QAction("Reveal in Filesystem", self)
         act_reveal.triggered.connect(lambda: self._on_action_reveal(paths))

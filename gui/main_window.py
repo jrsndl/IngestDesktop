@@ -66,6 +66,8 @@ class MainWindow(ProjectMixin, SettingsMixin, ScanMixin, ConversionMixin, Publis
 
         # Logic
         self.model = ImageTableModel()
+        # remembered unpairs ("Pair" context menu, gui/pair_menu.py)
+        self.model.get_unpaired = lambda: self.config.get("unpaired_reviews", []) or []
         self.model.product_name_template = self.config.get("product_name", "{label}")
         self.model.product_name_camel = self.config.get("product_name_camel", True)
         self.model.stills_thumb_same = self.config.get("stills_thumb_same", True)
@@ -177,6 +179,8 @@ class MainWindow(ProjectMixin, SettingsMixin, ScanMixin, ConversionMixin, Publis
         self.thumb_area.queue_requested.connect(self.show_queue_dialog)
         self.thumb_area.scene_items_changed.connect(self._sync_scene_items_to_filter)
         self.thumb_area.change_version_requested.connect(self.change_version_stack_picked_version)
+        self.thumb_area.unpair_requested.connect(self._on_unpair_requested)
+        self.thumb_area.pair_requested.connect(self._on_pair_requested)
         self.v_splitter.addWidget(self.thumb_area)
         
         self.spreadsheet = SpreadsheetPanel(self)
@@ -192,6 +196,8 @@ class MainWindow(ProjectMixin, SettingsMixin, ScanMixin, ConversionMixin, Publis
         self.spreadsheet.check_duplicates_clicked.connect(self.perform_duplicate_check)
         self.spreadsheet.show_grouped_toggled.connect(self._on_show_grouped_toggled)
         self.spreadsheet.show_reviews_toggled.connect(self._on_show_reviews_toggled)
+        self.spreadsheet.unpair_requested.connect(self._on_unpair_requested)
+        self.spreadsheet.pair_requested.connect(self._on_pair_requested)
         self.v_splitter.addWidget(self.spreadsheet)
         
         # Connect selection after model is set
@@ -222,6 +228,8 @@ class MainWindow(ProjectMixin, SettingsMixin, ScanMixin, ConversionMixin, Publis
         self.filter_panel.edit_scene_item_requested.connect(self._on_filter_edit_scene_item)
         self.filter_panel.move_front_back_requested.connect(self._on_filter_move_front_back)
         self.filter_panel.change_version_requested.connect(self.change_version_stack_picked_version)
+        self.filter_panel.unpair_requested.connect(self._on_unpair_requested)
+        self.filter_panel.pair_requested.connect(self._on_pair_requested)
         self.h_splitter.addWidget(self.filter_panel)
 
         self.main_layout.addWidget(self.h_splitter, 1)
@@ -278,11 +286,13 @@ class MainWindow(ProjectMixin, SettingsMixin, ScanMixin, ConversionMixin, Publis
         
         self.main_layout.addLayout(ingest_row_layout)
         
-        # 6. Log Console (expandable)
-        self.log_console = QPlainTextEdit()
-        self.log_console.setReadOnly(True)
-        self.log_console.setMaximumHeight(300)
-        self.log_console.setStyleSheet("""
+        # 6. Log panel: resizable by its top grip, context menu with Clear / Verbosity
+        from gui.log_panel import LogPanel
+        self.log_console = LogPanel(self, height=self.config.get("log_height", 200),
+                                    verbosity=self.config.get("log_verbosity", "verbose"))
+        self.log_console.height_changed.connect(lambda h: (self.config.__setitem__("log_height", h), self.save_config()))
+        self.log_console.verbosity_changed.connect(lambda v: (self.config.__setitem__("log_verbosity", v), self.save_config()))
+        self.log_console.console.setStyleSheet("""
             QPlainTextEdit {
                 background-color: #0c0c0c; 
                 color: #cccccc; 
@@ -329,6 +339,13 @@ class MainWindow(ProjectMixin, SettingsMixin, ScanMixin, ConversionMixin, Publis
         self.v_splitter.setStretchFactor(0, 2) # Thumbnails get more space
         
         self.load_initial_data()
+
+        # Swipe the mouse quickly out over the left / right / bottom window edge to
+        # hide or show the AYON / file / spreadsheet panel (gui/edge_swipe.py)
+        from gui.edge_swipe import EdgeSwipe
+        self.edge_swipe = EdgeSwipe(self)
+        self.edge_swipe.enabled = bool(self.config.get("edge_swipe_panels", True))
+        self.edge_swipe.swiped.connect(self.toggle_edge_panel)
         
         # 6. Periodic Age Update
         self.age_timer = QTimer(self)
@@ -481,6 +498,13 @@ class MainWindow(ProjectMixin, SettingsMixin, ScanMixin, ConversionMixin, Publis
         
         self.save_config_now()
 
+        # Save this session as the project 'last' in the Sessions Folder (Preferences > General)
+        if not os.environ.get("INGESTDESKTOP_NO_SAVE"):
+            try:
+                self.save_last_session()
+            except Exception as e:
+                print(f"[Session] Saving the last session failed: {e}")
+
         # Stop background work so no scan or ffmpeg/oiiotool process outlives the app
         for attr in ("scanner", "_conv_worker", "_review_worker"):
             worker = getattr(self, attr, None)
@@ -580,14 +604,25 @@ class MainWindow(ProjectMixin, SettingsMixin, ScanMixin, ConversionMixin, Publis
         }
         color = color_map.get(level, "#aaaaaa")
         
-        # Append to console with HTML color
-        self.log_console.appendHtml(f'<span style="color: {color};">{prefix}{message}</span>')
+        # Append to the log panel (it filters by its verbosity and auto-scrolls)
+        self.log_console.append(prefix, level, message)
         
         # Show in status bar
         self.statusBar().showMessage(message, 5000)
-        
-        # Auto-scroll console
-        self.log_console.verticalScrollBar().setValue(self.log_console.verticalScrollBar().maximum())
+
+    def toggle_edge_panel(self, edge):
+        """Hide / show the panel at a window edge (edge swipe)."""
+        panel, name = {"left": (self.ayon_panel, "AYON panel"),
+                       "right": (self.filter_panel, "File panel"),
+                       "bottom": (self.spreadsheet, "Spreadsheet")}.get(edge, (None, ""))
+        if panel is None:
+            return
+        if edge == "bottom" and not self.thumb_area.isVisible():
+            return  # spreadsheet is maximized: hiding it would leave nothing
+        show = not panel.isVisible()
+        panel.setVisible(show)
+        self.statusBar().showMessage(f"{name} {'shown' if show else 'hidden'} - swipe over the "
+                                     f"{edge} window edge again to {'hide' if show else 'show'} it", 4000)
 
     def _toggle_log(self, checked):
         if checked:

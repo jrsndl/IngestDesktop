@@ -27,7 +27,15 @@ from gui.canvas.drawing import draw_arrow, get_non_transparent_rect, DrawingCanv
 class CanvasVideoMixin:
     def set_show_reviews(self, show):
         self.show_reviews = bool(show)
+        if hasattr(self, "btn_show_reviews") and self.btn_show_reviews.isChecked() != self.show_reviews:
+            self.btn_show_reviews.blockSignals(True)
+            self.btn_show_reviews.setChecked(self.show_reviews)
+            self.btn_show_reviews.blockSignals(False)
         self.update_video_overlay_geometry()
+
+    def _on_canvas_show_reviews_toggled(self, checked):
+        self.set_show_reviews(checked)
+        self.rearrange_items()
 
     def find_media_path(self, item_data):
         """Finds any playable review video or media file for the given item."""
@@ -35,6 +43,18 @@ class CanvasVideoMixin:
             return None
             
         MEDIA_EXTENSIONS = (".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".mpg", ".mpeg", ".wmv", ".ogg", ".ogv", ".mxf")
+
+        # A paired review plays itself (not its group's primary movie)
+        own = getattr(item_data, "file_path", "") or ""
+        if getattr(item_data, "pair_main", None) is not None and own.lower().endswith(MEDIA_EXTENSIONS) \
+                and os.path.exists(own):
+            return own
+
+        # A main file plays its own paired review (logic/pairing.py)
+        for review in (getattr(item_data, "paired_reviews", None) or []):
+            rp = getattr(review, "file_path", "") or ""
+            if rp.lower().endswith(MEDIA_EXTENSIONS) and os.path.exists(rp):
+                return rp
         
         # 0. Check attached review_file_path if available
         rev_fp = getattr(item_data, "review_file_path", None)
@@ -210,6 +230,7 @@ class CanvasVideoMixin:
                 else:
                     from gui.video_player import VideoPlayerOverlay
                     player = VideoPlayerOverlay(self.view.viewport())
+                    player.set_pass_through(True)  # items under it stay selectable / movable
                     player.setGeometry(viewport_rect)
                     player.load_video(video_path, thumb_item.data.filename)
                     new_active_players[thumb_item] = player

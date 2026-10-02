@@ -174,6 +174,7 @@ class PublishMixin:
             self.model.items.sort(key=lambda it: (getattr(it, "group_index", 0), getattr(it, "representation", "") or ""))
 
         self.model.layoutChanged.emit()
+        self.model.order_pairs()  # paired reviews right below their main file, whatever the sort
         if hasattr(self, "spreadsheet"):
             self.spreadsheet.update_filtering()
         if hasattr(self, "thumb_area"):
@@ -766,6 +767,8 @@ class PublishMixin:
                 else:
                     matched_item.ingest_status = "OK"
                 self.model.update_item(matched_item)
+                if hasattr(self, "thumb_area"):
+                    self.thumb_area.note_ingest_result(matched_item, matched_item.ingest_status == "OK")
             
         checked_headers = list(headers)
         checked_headers.append("Check")
@@ -1146,7 +1149,7 @@ class PublishMixin:
                 age_min = item.age_minutes
                 label = item.label
                 matches_search = not self._search_filter_text or self._search_filter_text in label.lower()
-                matches_age = not self._age_filter_enabled or (age_min <= self._age_filter_value)
+                matches_age = not self._age_filter_enabled or (age_min < self._age_filter_value)
                 
                 if not (matches_search and matches_age):
                     continue
@@ -1208,7 +1211,7 @@ class PublishMixin:
                 age_min = item.age_minutes
                 label = item.label
                 matches_search = not self._search_filter_text or self._search_filter_text in label.lower()
-                matches_age = not self._age_filter_enabled or (age_min <= self._age_filter_value)
+                matches_age = not self._age_filter_enabled or (age_min < self._age_filter_value)
                 
                 if not (matches_search and matches_age):
                     continue

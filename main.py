@@ -14,6 +14,12 @@ def resource_path(relative_path):
 
 def main():
     app = QApplication(sys.argv)
+
+    # Tooltips on every control, shown after a 2 s rest so they don't get in the way
+    # (set before the style sheet, which wraps the app style)
+    from gui import tooltips
+    app.setStyle(tooltips.TooltipDelayStyle())
+    tooltips.install_all()
     
     # Apply global style
     style_path = resource_path(os.path.join("gui", "style.qss"))

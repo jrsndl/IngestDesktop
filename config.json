@@ -2,7 +2,7 @@
     "format": 2,
     "General": {
         "default_scan_folder": "C:/Users/jirka/Downloads",
-        "age_source": "Modification Date",
+        "age_source": "Creation Date",
         "detect_sequences": true,
         "version_collision": "lowest",
         "create_ingest_report": true,
@@ -91,8 +91,14 @@
         "cmd_stills": "{ffmpeg} -i \"{filename}\" -vf \"scale=if(gte(iw\\,ih)\\,min({prefs_highres_thumb_size}\\,iw)\\,-4):if(lt(iw\\,ih)\\,min({prefs_highres_thumb_size}\\,ih)\\,-4)\" -y \"{prefs_thumb_path}\"",
         "cmd_videos": "{ffmpeg} -ss {metadata.thumbnail_time} -i \"{filename}\" -vframes 1 -vf \"scale=if(gte(iw\\,ih)\\,min({prefs_highres_thumb_size}\\,iw)\\,-4):if(lt(iw\\,ih)\\,min({prefs_highres_thumb_size}\\,ih)\\,-4)\" -y \"{prefs_thumb_path}\"",
         "cmd_sequences": "{ffmpeg} -i \"{metadata.seq_thumbnail_path}\" -vf \"scale=if(gte(iw\\,ih)\\,min({prefs_highres_thumb_size}\\,iw)\\,-4):if(lt(iw\\,ih)\\,min({prefs_highres_thumb_size}\\,ih)\\,-4)\" -y \"{prefs_thumb_path}\"",
-        "timeout_seconds": 6,
-        "pair_existing_media": true
+        "timeout_seconds": 6
+    },
+    "Pairing": {
+        "pair_existing_media": true,
+        "pair_name_mode": "same",
+        "pair_review_folder": "_review",
+        "pair_thumb_folder": "_thumb",
+        "pair_max_reviews": 3
     },
     "Clipboard": {
         "clip_temp_root": "C:\\Users\\${USERNAME}\\Downloads",
@@ -102,10 +108,11 @@
     },
     "GUI": {
         "default_columns": 8,
-        "default_text_size": 14,
-        "default_thumb_size": 1729,
+        "default_text_size": 35,
+        "default_thumb_size": 9539,
         "label_allowed_chars": "^[a-zA-Z_-0-9]$",
         "disable_inline_video": false,
+        "edge_swipe_panels": true,
         "drawing_cache_location": "relative to source folder",
         "drawing_cache_path": "_drawcache",
         "item_info_generic": ""
@@ -141,6 +148,7 @@
                     "Review Representation": "h264",
                     "Review Colorspace": "Output - sRGB",
                     "Review Tags": "passing;ftrackreview;webreview",
+                    "Enabled": true,
                     "Active": false
                 },
                 {
@@ -171,6 +179,7 @@
                     "Review Representation": "h264",
                     "Review Colorspace": "Output - sRGB",
                     "Review Tags": "passing;ftrackreview;webreview",
+                    "Enabled": true,
                     "Active": false
                 },
                 {
@@ -201,6 +210,7 @@
                     "Review Representation": "h264",
                     "Review Colorspace": "Output - sRGB",
                     "Review Tags": "passing;ftrackreview;webreview",
+                    "Enabled": true,
                     "Active": true
                 }
             ],
@@ -233,6 +243,7 @@
                     "Review Representation": "h264",
                     "Review Colorspace": "Output - sRGB",
                     "Review Tags": "passing;ftrackreview;webreview",
+                    "Enabled": true,
                     "Active": false
                 },
                 {
@@ -263,6 +274,7 @@
                     "Review Representation": "h264",
                     "Review Colorspace": "Output - sRGB",
                     "Review Tags": "passing;ftrackreview;webreview",
+                    "Enabled": true,
                     "Active": true
                 }
             ],
@@ -295,6 +307,7 @@
                     "Review Representation": "h264",
                     "Review Colorspace": "Output - sRGB",
                     "Review Tags": "passing;ftrackreview;webreview",
+                    "Enabled": true,
                     "Active": true
                 }
             ],
@@ -327,6 +340,7 @@
                     "Review Representation": "h264",
                     "Review Colorspace": "Output - sRGB",
                     "Review Tags": "passing;ftrackreview;webreview",
+                    "Enabled": true,
                     "Active": true
                 }
             ]

@@ -17,6 +17,10 @@ from PySide6.QtCore import QPoint
 from utils import generate_thumbnail_image
 
 
+# Largest item size reachable by dragging the resize corner (was 1500)
+MAX_ITEM_SIZE = 20000
+
+
 class ThumbnailItem(QGraphicsObject):
     def __init__(self, item_data):
         super().__init__()
@@ -193,14 +197,17 @@ class ThumbnailItem(QGraphicsObject):
         else:
             painter.drawPixmap(thumb_rect, pixmap, QRectF(pixmap.rect()))
 
-        # 3. Draw Borders (always)
+        # 3. Draw Borders (Show Frames off: only around selected items)
+        frames_on = getattr(self.scene(), "show_frames", True) or self.isSelected()
         base_w = 2
         if lod < 0.3:
             base_w = 6
         elif lod < 0.6:
             base_w = 4
             
-        if getattr(self.data, "is_ayon_item", False):
+        if not frames_on:
+            pass
+        elif getattr(self.data, "is_ayon_item", False):
             if self.isSelected():
                 sel_width = base_w + 2
                 pen = QPen(QColor("#00e5ff"), sel_width)
@@ -212,7 +219,9 @@ class ThumbnailItem(QGraphicsObject):
         else:
             if self.isSelected():
                 sel_width = base_w + 2
-                pen = QPen(QColor("#ffffff"), sel_width)
+                # a paired review shows its selection dimmer than its main file
+                is_paired_review = getattr(self.data, "pair_main", None) is not None
+                pen = QPen(QColor("#6e6e6e") if is_paired_review else QColor("#ffffff"), sel_width)
                 pen.setCosmetic(True)
                 painter.setPen(pen)
             else:
@@ -231,8 +240,8 @@ class ThumbnailItem(QGraphicsObject):
             painter.setPen(tag_pen)
             painter.drawRect(thumb_rect.adjusted(-2, -2, 2, 2))
         
-        # 4. Label - Only if zoomed in and NOT editing
-        if lod > 0.05 and not self.is_editing and getattr(self.scene(), "show_labels", True):
+        # 4. Label - at every zoom level (only the Show Text toggle hides it), not while editing
+        if not self.is_editing and getattr(self.scene(), "show_labels", True):
             painter.setPen(QColor("#e0e0e0"))
             font = painter.font()
             
@@ -289,8 +298,9 @@ class ThumbnailItem(QGraphicsObject):
             painter.drawPolygon(triangle)
             painter.restore()
 
-        # 5. Draw resize handle grip in bottom-right corner
-        if lod > 0.4:
+        # 5. Draw resize handle grip in bottom-right corner (scaled with the hotspot);
+        # with Show Frames off only on selected items, or while hovered
+        if frames_on or getattr(self, "_hovered_handle", False):
             painter.save()
             painter.setRenderHint(QPainter.Antialiasing)
             is_hovered_handle = getattr(self, "_hovered_handle", False)
@@ -309,9 +319,12 @@ class ThumbnailItem(QGraphicsObject):
             r = border_rect.right()
             b = border_rect.bottom()
             
-            painter.drawLine(QPointF(r - 12, b - 4), QPointF(r - 4, b - 12))
-            painter.drawLine(QPointF(r - 8, b - 4), QPointF(r - 4, b - 8))
-            painter.drawLine(QPointF(r - 4, b - 4), QPointF(r - 4, b - 4))
+            k = self._handle_size() / 15.0  # grip drawn at the size of the hotspot
+            pen.setWidthF(1.5 * k)
+            painter.setPen(pen)
+            painter.drawLine(QPointF(r - 12 * k, b - 4 * k), QPointF(r - 4 * k, b - 12 * k))
+            painter.drawLine(QPointF(r - 8 * k, b - 4 * k), QPointF(r - 4 * k, b - 8 * k))
+            painter.drawLine(QPointF(r - 4 * k, b - 4 * k), QPointF(r - 4 * k, b - 4 * k))
             painter.restore()
         
         painter.restore()
@@ -391,12 +404,32 @@ class ThumbnailItem(QGraphicsObject):
 
         return super().itemChange(change, value)
 
+    # Resize corner: about this many screen pixels at any zoom (capped to a part of
+    # the item, so small items keep most of their area for moving)
+    HANDLE_SCREEN_PX = 18
+
+    def _view_scale(self):
+        sc = self.scene()
+        if sc is not None and sc.views():
+            s = sc.views()[0].transform().m11()
+            if s > 0:
+                return s
+        return 1.0
+
+    def _handle_size(self):
+        """Size of the resize corner in item units: constant on screen, max 40% of the image."""
+        img_rect = self.get_image_rect()
+        size = self.HANDLE_SCREEN_PX / self._view_scale()
+        cap = 0.4 * max(1.0, min(img_rect.width(), img_rect.height()))
+        return max(15.0, min(size, cap))
+
     def _is_in_resize_handle(self, local_pos):
         img_rect = self.get_image_rect()
         border_rect = img_rect.adjusted(-4, -4, 4, 4)
-        handle_size = 15
-        in_x = border_rect.right() - handle_size <= local_pos.x() <= border_rect.right() + 4
-        in_y = border_rect.bottom() - handle_size <= local_pos.y() <= border_rect.bottom() + 4
+        handle_size = self._handle_size()
+        slack = 4 / self._view_scale()  # a few pixels outside the corner count too
+        in_x = border_rect.right() - handle_size <= local_pos.x() <= border_rect.right() + slack
+        in_y = border_rect.bottom() - handle_size <= local_pos.y() <= border_rect.bottom() + slack
         return in_x and in_y
 
     def hoverMoveEvent(self, event):
@@ -447,7 +480,7 @@ class ThumbnailItem(QGraphicsObject):
     def mouseMoveEvent(self, event):
         if getattr(self, "_resizing", False):
             delta = event.scenePos() - self._drag_start_pos
-            new_size = max(50, min(1500, self._drag_start_size + delta.x()))
+            new_size = max(50, min(MAX_ITEM_SIZE, self._drag_start_size + delta.x()))
             
             self.prepareGeometryChange()
             self.size = new_size
@@ -457,7 +490,7 @@ class ThumbnailItem(QGraphicsObject):
             
             for it, start_size in getattr(self, "_selected_resizers", []):
                 it.prepareGeometryChange()
-                it_new_size = max(50, min(1500, start_size + delta.x()))
+                it_new_size = max(50, min(MAX_ITEM_SIZE, start_size + delta.x()))
                 it.size = it_new_size
                 it.data.size = it_new_size
                 it.cached_label = ""

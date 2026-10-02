@@ -733,6 +733,13 @@ class ArrangeDialog(QDialog):
         self.chk_reverse.toggled.connect(self._emit_changed)
         sort_layout.addWidget(self.chk_reverse)
         layout.addLayout(sort_layout)
+
+        # Paired reviews are not arranged on their own: they go right below their main file
+        self.chk_paired_follow = QCheckBox("Paired Follow")
+        self.chk_paired_follow.setToolTip("Arrange only main items; paired reviews are placed directly below their main item.")
+        self.chk_paired_follow.setChecked(initial_values.get("paired_follow", True) if initial_values else True)
+        self.chk_paired_follow.toggled.connect(self._emit_changed)
+        layout.addWidget(self.chk_paired_follow)
         
         layout.addSpacing(5)
 
@@ -740,7 +747,7 @@ class ArrangeDialog(QDialog):
         size_layout = QHBoxLayout()
         size_layout.addWidget(QLabel("Thumb Size:"))
         self.slider_thumb_size = QSlider(Qt.Horizontal)
-        self.slider_thumb_size.setRange(20, 2048)
+        self.slider_thumb_size.setRange(20, 8192)
         self.slider_thumb_size.setValue(init_thumb_size)
         self.lbl_thumb_size = QLabel(str(init_thumb_size))
         self.slider_thumb_size.valueChanged.connect(lambda v: self.lbl_thumb_size.setText(str(v)))
@@ -823,6 +830,7 @@ class ArrangeDialog(QDialog):
             "cols": self.slider_cols.value() if self.slider_cols else 1,
             "sort_by": self.combo_sort.currentText(),
             "reverse": self.chk_reverse.isChecked(),
-            "group_cols": self.chk_group_cols.isChecked() if hasattr(self, "chk_group_cols") else False
+            "group_cols": self.chk_group_cols.isChecked() if hasattr(self, "chk_group_cols") else False,
+            "paired_follow": self.chk_paired_follow.isChecked(),
         }
         return vals

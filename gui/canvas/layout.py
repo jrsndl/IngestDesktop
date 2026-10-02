@@ -192,13 +192,8 @@ class CanvasLayoutMixin:
 
         v_stack_enabled = getattr(self.model, "v_stack_enabled", False)
 
-        show_reviews = getattr(self, "show_reviews", True)
-        if hasattr(self, "window") and callable(self.window):
-            win = self.window()
-            if win and hasattr(win, "show_reviews"):
-                show_reviews = win.show_reviews
-            elif win and hasattr(win, "config"):
-                show_reviews = win.config.get("show_reviews", True)
+        # Canvas has its own "Show Reviews" toggle (the spreadsheet one is separate)
+        show_reviews = getattr(self, "show_reviews", False)
 
         visible_items = []
         all_items = getattr(self.model, "all_items", self.model.items)
@@ -216,7 +211,7 @@ class CanvasLayoutMixin:
             if self._tag_filter_state == "enabled": show_by_tag = is_tagged
             elif self._tag_filter_state == "disabled": show_by_tag = not is_tagged
             
-            is_young_enough = not age_enabled or (item_data.age_minutes <= age_val)
+            is_young_enough = not age_enabled or (item_data.age_minutes < age_val)
             matches_search = (not search_term or 
                               search_term in item_data.label.lower() or 
                               search_term in item_data.filename.lower())
@@ -233,8 +228,8 @@ class CanvasLayoutMixin:
             is_visible_ver = not v_stack_enabled or self.model.is_item_visible_by_v_stack(item_data, True)
             is_rev = getattr(item_data, "is_review_repre", False)
             
-            is_paired_rev = getattr(item_data, "is_hidden_paired_review", False)
-            if show_by_tag and in_path and is_young_enough and matches_search and not is_ignored and is_visible_ver and (show_reviews or not is_rev) and not is_paired_rev:
+            is_rev = is_rev or getattr(item_data, "is_review", False)
+            if show_by_tag and in_path and is_young_enough and matches_search and not is_ignored and is_visible_ver and (show_reviews or not is_rev):
                 item.show()
                 visible_items.append(item)
             else:
@@ -396,39 +391,186 @@ class CanvasLayoutMixin:
         self.view.viewport().update()
         self.update_video_overlay_geometry()
 
-    def update_thumb_size(self):
-        new_size = self.slider_thumb_size.value()
-        for item in self.item_to_thumb.values():
-            if getattr(item, "is_custom_size", False):
-                continue  # keep sizes the user set by hand / via Arrange
-            item.prepareGeometryChange()
-            item.size = new_size
-            item.data.size = new_size
-            item.update()
-        self.rearrange_items()
+    # ---- Thumb slider (spring-loaded, relative) ------------------------------
+    # Dragging scales the selected items (or all visible ones when nothing is
+    # selected) relative to their own size at the start of the drag. The layout is
+    # kept: positions are scaled around the top-left corner of the items, like
+    # zooming the arrangement. Only the image part of an item scales - its frame
+    # padding and label area keep their size - so each row/column of items moves
+    # by that fixed part too, and items neither overlap nor drift apart.
+
+    def _begin_thumb_scale(self):
+        sel = [it for it in self.scene.selectedItems() if isinstance(it, ThumbnailItem) and it.isVisible()]
+        targets = sel or [it for it in self.item_to_thumb.values() if it.isVisible()]
+        if not targets:
+            self._thumb_scale = None
+            return
+        default = self.slider_thumb_size.value()
+        moved = list(targets)
+        for t in targets:  # paired reviews follow their main item (also hidden ones)
+            for r in (getattr(t.data, "paired_reviews", None) or []):
+                rt = self.item_to_thumb.get(r)
+                if rt is not None and rt not in moved:
+                    moved.append(rt)
+        ax = min(t.pos().x() for t in moved)
+        ay = min(t.pos().y() for t in moved)
+
+        def ranks(values):
+            """value -> number of distinct rows/columns (1 px tolerance) before it"""
+            uniq = []
+            for v in sorted(values):
+                if not uniq or v - uniq[-1] > 1.0:
+                    uniq.append(v)
+            return lambda v: sum(1 for u in uniq if u < v - 1.0)
+
+        col_rank = ranks([t.pos().x() for t in moved])
+        row_rank = ranks([t.pos().y() for t in moved])
+        show_text = self.btn_show_text.isChecked()
+        fs = self.slider_text_size.value()
+        label_area = (fs * 1.5 * 3.5 + 10) if show_text else 0
+        self._thumb_scale = {
+            "sizes": {it: float(getattr(it, "size", None) or default) for it in moved},
+            "pos": {it: (it.pos().x(), it.pos().y(), col_rank(it.pos().x()), row_rank(it.pos().y()))
+                    for it in moved},
+            "anchor": (ax, ay),
+            "fixed_w": 20.0,               # frame padding (does not scale)
+            "fixed_h": 20.0 + label_area,  # padding + label area
+            "all": not sel,
+            "default": default,
+        }
+
+    def _on_thumb_scale(self, factor):
+        st = getattr(self, "_thumb_scale", None)
+        if st is None:
+            self._begin_thumb_scale()
+            st = self._thumb_scale
+            if st is None:
+                return
+        from gui.canvas.thumbnail_item import MAX_ITEM_SIZE
+        for it, s0 in st["sizes"].items():
+            new = int(max(20, min(MAX_ITEM_SIZE, round(s0 * factor))))
+            if getattr(it, "size", None) != new:
+                it.prepareGeometryChange()
+                it.size = new
+                it.data.size = new
+                it.is_custom_size = True
+                it.data.is_custom_size = True
+                it.update()
+        ax, ay = st["anchor"]
+        k = 1.0 - factor
+        for it, (x0, y0, col, row) in st["pos"].items():
+            x = ax + (x0 - ax) * factor + st["fixed_w"] * k * col
+            y = ay + (y0 - ay) * factor + st["fixed_h"] * k * row
+            it.setPos(x, y)
+            it.data.position = (x, y)
+            it.data.has_placed_position = True
+            it._placed = True
+            it.is_manually_moved = True
+            it.data.is_manually_moved = True
+            key = self._get_item_key(it.data)
+            if key:
+                self.item_positions[key] = (x, y)
+        if st["all"]:
+            # the size new items get follows when everything was scaled
+            self.slider_thumb_size.setValue(st["default"] * factor)
+        self._grow_scene_rect()
         self.scene.update()
         self.view.viewport().update()
         self.update_video_overlay_geometry()
 
-    
+    def _end_thumb_scale(self):
+        self._thumb_scale = None
+
+    def update_thumb_size(self):
+        """Kept for old callers: the thumb slider now scales through _on_thumb_scale."""
+        return
+
+    def _visible_content_rect(self, items=None):
+        """Scene rect of what is actually shown: visible top-level items only.
+
+        QGraphicsScene.itemsBoundingRect() counts hidden items too (filtered-out files,
+        paired reviews while Show Reviews is off), which left big empty areas in Frame All.
+        Fading click markers and the temporary drawing canvas are skipped as well."""
+        from PySide6.QtCore import QRectF
+        from gui.canvas.drawing import DrawingCanvasItem
+        rect = QRectF()
+        for it in (items if items is not None else self.scene.items()):
+            if it.parentItem() is not None or not it.isVisible():
+                continue
+            if getattr(it, "_is_placement_marker", False) or isinstance(it, DrawingCanvasItem):
+                continue
+            rect = rect.united(it.sceneBoundingRect()) if not rect.isNull() else it.sceneBoundingRect()
+        return rect
+
+    def _fit_rect(self, rect):
+        """Zoom and pan so `rect` (scene coords) fills the view.
+
+        Done by hand instead of QGraphicsView.fitInView: centring is limited to the
+        scene rect, and content beyond it (big thumbnails reach far) or wider than
+        it ended up off-centre. The scene rect is grown so the target can always be
+        centred. Uses the viewport size of this moment, so it is right after panels
+        were shown / hidden."""
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QTransform
+        if rect.isNull() or rect.isEmpty():
+            return
+        win = self.window()
+        if win is not None and win.layout() is not None:
+            win.layout().activate()  # apply a pending resize (panel just shown / hidden)
+        vp = self.view.viewport().rect()
+        if vp.width() < 4 or vp.height() < 4:
+            return
+        m = max(10.0, 0.03 * max(rect.width(), rect.height()))
+        target = rect.adjusted(-m, -m, m, m)
+        s = min(vp.width() / target.width(), vp.height() / target.height())
+        if s <= 0:
+            return
+        # room around the target so it can be centred (and panned a bit) at this zoom
+        half_w = vp.width() / s
+        half_h = vp.height() / s
+        need = QRectF(target.center().x() - half_w, target.center().y() - half_h, 2 * half_w, 2 * half_h)
+        sr = self.scene.sceneRect()
+        if not sr.contains(need):
+            self.scene.setSceneRect(sr.united(need))
+        self.view.setTransform(QTransform.fromScale(s, s))
+        self.view.centerOn(target.center())
+        self.update_zoom_indicator()
+
+    def _grow_scene_rect(self, include_content=True):
+        """Keep room to pan: the scene rect (the area QGraphicsView lets you scroll over)
+        always reaches several view-widths beyond what is on screen and beyond all
+        content. Called after layout changes, on pan and on zoom. A fixed rect made an
+        invisible wall - close on screen when zoomed far out (big thumbnails)."""
+        from PySide6.QtCore import QRectF
+        vp = self.view.viewport().rect()
+        vis = self.view.mapToScene(vp).boundingRect()
+        need = vis.adjusted(-4 * vis.width(), -4 * vis.height(), 4 * vis.width(), 4 * vis.height())
+        if include_content:  # skipped on pan / zoom (every mouse move): only the view matters there
+            r = self._visible_content_rect()
+            if not (r.isNull() or r.isEmpty()):
+                pad = max(r.width(), r.height())
+                need = need.united(r.adjusted(-pad, -pad, pad, pad))
+        sr = self.scene.sceneRect()
+        if sr.contains(need):
+            return
+        new = sr.united(need)
+        # Qt scrolls in int pixels: a rect that is too big at this zoom would overflow,
+        # so start again from what is needed now
+        scale = abs(self.view.transform().m11()) or 1.0
+        if max(new.width(), new.height()) * scale > 1.0e9:
+            new = need
+        center = vis.center()
+        self.scene.setSceneRect(new)
+        self.view.centerOn(center)  # changing the rect must not move the view
 
     def frame_all(self):
-        rect = self.scene.itemsBoundingRect()
-        if not rect.isEmpty():
-            self.view.fitInView(rect.adjusted(-50, -50, 50, 50), Qt.KeepAspectRatio)
-            self.update_zoom_indicator()
+        self._fit_rect(self._visible_content_rect())
 
     def frame_selection(self):
         items = self.scene.selectedItems()
         if not items: return
         
-        rect = items[0].sceneBoundingRect()
-        for item in items[1:]:
-            rect = rect.united(item.sceneBoundingRect())
-            
-        if not rect.isEmpty():
-            self.view.fitInView(rect.adjusted(-50, -50, 50, 50), Qt.KeepAspectRatio)
-            self.update_zoom_indicator()
+        self._fit_rect(self._visible_content_rect(items))
 
     def _show_placement_marker(self, pos):
         from PySide6.QtWidgets import QGraphicsEllipseItem
@@ -438,17 +580,24 @@ class CanvasLayoutMixin:
         if not hasattr(self, "_active_marker_anims"):
             self._active_marker_anims = []
             
-        r = 60
-        marker = QGraphicsEllipseItem(pos.x() - r, pos.y() - r, r * 2, r * 2)
-        marker.setPen(QPen(QColor(0, 255, 255), 4))
+        # Same size on screen at any zoom: drawn in pixels around the click point
+        r = 8
+        marker = QGraphicsEllipseItem(-r, -r, r * 2, r * 2)
+        marker.setPos(pos)
+        marker.setFlag(QGraphicsItem.ItemIgnoresTransformations, True)
+        pen = QPen(QColor(0, 255, 255), 2)
+        pen.setCosmetic(True)
+        marker.setPen(pen)
         marker.setBrush(QBrush(QColor(0, 255, 255, 80)))
         marker.setZValue(9999)
+        marker._is_placement_marker = True  # ignored by clicks (ThumbnailArea._item_at)
+        marker.setAcceptedMouseButtons(Qt.NoButton)
         self.scene.addItem(marker)
         
         anim = QVariantAnimation()
-        anim.setStartValue(1.0)
+        anim.setStartValue(0.5)  # starts half transparent
         anim.setEndValue(0.0)
-        anim.setDuration(400)
+        anim.setDuration(267)  # fades 1.5x faster than the original 400 ms
         
         self._active_marker_anims.append(anim)
         
@@ -565,17 +714,23 @@ class CanvasLayoutMixin:
                     
         if not target_items: return
         
-        # Store initial positions and sizes for revert
-        initial_pos = {item: item.pos() for item in target_items}
-        initial_sizes = {item: (getattr(item, "size", self.slider_thumb_size.value()), getattr(item, "is_custom_size", False)) for item in target_items}
+        # Store initial positions and sizes for revert (paired reviews may move too: Paired Follow)
+        snap_items = list(target_items)
+        for t in target_items:
+            for r in (getattr(t.data, "paired_reviews", None) or []):
+                rt = self.item_to_thumb.get(r)
+                if rt is not None and rt not in snap_items:
+                    snap_items.append(rt)
+        initial_pos = {item: item.pos() for item in snap_items}
+        initial_sizes = {item: (getattr(item, "size", self.slider_thumb_size.value()), getattr(item, "is_custom_size", False)) for item in snap_items}
         
         if "thumb_size" not in self._last_arrange_vals:
             first_size = initial_sizes[target_items[0]][0] if target_items else self.slider_thumb_size.value()
             self._last_arrange_vals["thumb_size"] = int(first_size)
 
         # Calculate top-left anchor point once
-        anchor_x = min(p.x() for p in initial_pos.values())
-        anchor_y = min(p.y() for p in initial_pos.values())
+        anchor_x = min(initial_pos[t].x() for t in target_items)
+        anchor_y = min(initial_pos[t].y() for t in target_items)
         anchor = (anchor_x, anchor_y)
         
         # 2. Show dialog
@@ -640,6 +795,34 @@ class CanvasLayoutMixin:
                     item.data.is_custom_size = True
                     item.update()
 
+        # "Paired Follow": arrange only main items; their paired reviews (also hidden
+        # ones) are placed directly below them afterwards (place_followers)
+        followers = {}
+        if vals.get("paired_follow", True):
+            in_set = set(items)
+            mains = []
+            for t in items:
+                main = getattr(t.data, "pair_main", None)
+                mt = self.item_to_thumb.get(main) if main is not None else None
+                if mt is None or mt not in in_set:
+                    mains.append(t)
+            for mt in mains:
+                revs = [self.item_to_thumb.get(r) for r in (getattr(mt.data, "paired_reviews", None) or [])]
+                revs = [r for r in revs if r is not None]
+                if revs:
+                    followers[mt] = revs
+                    for r in revs:
+                        if arr_thumb_size is not None and getattr(r, "size", None) != arr_thumb_size:
+                            r.prepareGeometryChange()
+                            r.size = arr_thumb_size
+                            r.data.size = arr_thumb_size
+                            r.is_custom_size = True
+                            r.data.is_custom_size = True
+                            r.update()
+            items = mains
+            if not items:
+                return
+
         sort_by = vals.get("sort_by", "File Name")
         reverse = vals.get("reverse", False)
         
@@ -685,7 +868,28 @@ class CanvasLayoutMixin:
             t_size = getattr(thumb, "size", self.slider_thumb_size.value())
             return t_size + 20
 
+        follow_gap = 10  # space between a main item and its paired review(s)
+
         def get_item_h(thumb):
+            # a main item's cell also holds its paired reviews below it
+            return base_item_h(thumb) + sum(base_item_h(r) + follow_gap for r in followers.get(thumb, []))
+
+        def place_followers():
+            for main_t, revs in followers.items():
+                y = main_t.pos().y() + base_item_h(main_t) + follow_gap
+                for r in revs:
+                    r.setPos(main_t.pos().x(), y)
+                    r.data.position = (main_t.pos().x(), y)
+                    r.data.has_placed_position = True
+                    r._placed = True
+                    key = self._get_item_key(r.data)
+                    if key: self.item_positions[key] = (main_t.pos().x(), y)
+                    if mark_manual:
+                        r.is_manually_moved = True
+                        r.data.is_manually_moved = True
+                    y += base_item_h(r) + follow_gap
+
+        def base_item_h(thumb):
             w = thumb.data.metadata.get("width", 1)
             h = thumb.data.metadata.get("height", 1)
             try:
@@ -747,9 +951,17 @@ class CanvasLayoutMixin:
                         item.data.is_manually_moved = True
                     current_y_offset += h + gap_v
             
+            place_followers()
+            self._grow_scene_rect()
             self.scene.update()
             return
             
+        col_widths = []
+        if mode == "grid":
+            col_widths = [0] * max(1, min(cols, len(items)))
+            for i, item in enumerate(items):
+                c = i % cols
+                col_widths[c] = max(col_widths[c], get_item_w(item))
         current_y_offset = 0
         for i, item in enumerate(items):
             h = get_item_h(item)
@@ -762,10 +974,10 @@ class CanvasLayoutMixin:
                 new_x = start_x
                 new_y = start_y + current_y_offset
                 current_y_offset += h + gap_v
-            else: # grid
+            else: # grid (column width = widest item in the column)
                 row = i // cols
                 col = i % cols
-                new_x = start_x + col * (w + gap_h)
+                new_x = start_x + sum(col_widths[:col]) + col * gap_h
                 y_pos = sum(row_heights[:row]) + (row * gap_v)
                 new_y = start_y + y_pos
             
@@ -779,4 +991,6 @@ class CanvasLayoutMixin:
                 item.is_manually_moved = True
                 item.data.is_manually_moved = True
             
+        place_followers()
+        self._grow_scene_rect()
         self.scene.update()

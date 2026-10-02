@@ -149,6 +149,8 @@ def evaluate_preset(file_path, presets, p_type, label=None):
     """Evaluate which preset name matches the given file path."""
     p_list = presets.get(p_type, [])
     for p in p_list:
+        if not p.get("Enabled", True):
+            continue  # preset switched off in Preferences
         f_by = p.get("Filter By", "Extension").lower()
         f_str = p.get("Filter", "").lower()
         if not f_str: continue

@@ -89,6 +89,8 @@ class SpreadsheetPanel(QWidget):
     show_reviews_toggled = Signal(bool)
     add_comment_requested = Signal(str)
     replace_value_requested = Signal(str, str)
+    unpair_requested = Signal(object)  # list of (main item, review item)
+    pair_requested = Signal(object)  # list of (main item, review item) to pair again
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -265,21 +267,8 @@ class SpreadsheetPanel(QWidget):
         
         # Initial fit
         self.table.setColumnWidth(0, 40)
-        self.table.resizeColumnToContents(1) # Thumbnail
-        self.table.resizeColumnToContents(2) # Label
-        self.table.resizeColumnToContents(3) # Variant
-        self.table.resizeColumnToContents(4) # Variant User
-        self.table.resizeColumnToContents(5) # Product Name
-        self.table.resizeColumnToContents(6) # Group By
-        self.table.resizeColumnToContents(7) # Category
-        self.table.resizeColumnToContents(8) # Preset
-        self.table.resizeColumnToContents(9) # Version
-        self.table.resizeColumnToContents(10) # Version User
-        
-        # Connect model data change to auto-resize columns (once per model, not per view switch)
-        if getattr(self, "_resize_hooked_model", None) is not self.standard_model:
-            self.standard_model.dataChanged.connect(self._on_model_data_changed)
-            self._resize_hooked_model = self.standard_model
+        self._hook_auto_fit(self.standard_model)
+        self._auto_fit_columns()
 
     def _setup_csv_view(self):
         if not self.csv_model: return
@@ -297,10 +286,42 @@ class SpreadsheetPanel(QWidget):
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.Interactive)
         
-        # Initial fit
-        self.table.resizeColumnToContents(1)
-        # Auto resize all CSV columns
-        for col in range(1, self.csv_model.columnCount()):
+        # Initial fit (and again whenever the shown text changes)
+        self._hook_auto_fit(self.csv_model)
+        self._auto_fit_columns()
+
+    # -- column widths follow the longest text ---------------------------------
+    # Columns whose text is usually very long keep the width the user gives them.
+    FIXED_WIDTH_COLUMNS = {"ayonpath", "versionthumbnail", "filepath", "keyvaluepairs", "alltokens"}
+
+    def _hook_auto_fit(self, model):
+        """Re-fit column widths (debounced) whenever the model's text may have changed."""
+        hooked = getattr(self, "_auto_fit_models", None)
+        if hooked is None:
+            hooked = self._auto_fit_models = []
+            from PySide6.QtCore import QTimer
+            self._auto_fit_timer = QTimer(self)
+            self._auto_fit_timer.setSingleShot(True)
+            self._auto_fit_timer.setInterval(150)
+            self._auto_fit_timer.timeout.connect(self._auto_fit_columns)
+        if any(m is model for m in hooked):
+            return
+        hooked.append(model)
+        schedule = lambda *a: self._auto_fit_timer.start()
+        model.dataChanged.connect(schedule)
+        model.layoutChanged.connect(schedule)
+        model.modelReset.connect(schedule)
+        model.rowsInserted.connect(schedule)
+        model.rowsRemoved.connect(schedule)
+
+    def _auto_fit_columns(self):
+        model = self.table.model()
+        if model is None:
+            return
+        for col in range(1, model.columnCount()):
+            name = str(model.headerData(col, Qt.Horizontal) or "")
+            if "".join(name.split()).lower() in self.FIXED_WIDTH_COLUMNS:
+                continue
             self.table.resizeColumnToContents(col)
 
     def _on_csv_toggled(self, checked):
@@ -323,21 +344,6 @@ class SpreadsheetPanel(QWidget):
         self.update_filtering()
         
         self.csv_mode_changed.emit(checked)
-
-    def _on_model_data_changed(self, top_left, bottom_right):
-        # Skip auto-resizing during bulk updates (e.g. metadata scanner updates) to prevent GUI lag
-        if bottom_right.column() - top_left.column() > 5:
-            return
-            
-        # If Label, Variant/User Variant or Version/User Version column was changed, auto-resize them
-        if top_left.column() <= 10 <= bottom_right.column() or top_left.column() <= 4 <= bottom_right.column():
-            self.table.resizeColumnToContents(2)
-            self.table.resizeColumnToContents(3) # Variant
-            self.table.resizeColumnToContents(4) # Variant User
-            self.table.resizeColumnToContents(5) # Product Name
-            self.table.resizeColumnToContents(6) # Group By
-            self.table.resizeColumnToContents(9) # Version
-            self.table.resizeColumnToContents(10) # Version User
 
     def _on_row_height_change(self, value):
         # Non-linear mapping (quadratic)
@@ -412,7 +418,7 @@ class SpreadsheetPanel(QWidget):
             is_selected = selection_model.isRowSelected(row, QModelIndex())
             is_tagged = item.is_tagged
             is_assigned = bool(item.ayon_path)
-            is_young_enough = not age_enabled or (item.age_minutes <= age_val)
+            is_young_enough = not age_enabled or (item.age_minutes < age_val)
             matches_search = (not search_term or 
                               search_term in item.label.lower() or 
                               search_term in item.filename.lower())
@@ -517,6 +523,20 @@ class SpreadsheetPanel(QWidget):
                         menu.addAction(select_action)
                         menu.addSeparator()
         
+        # Unpair reviews of the selected rows (gui/pair_menu.py)
+        from gui.pair_menu import add_pairing_actions
+        if model is not None:
+            rows_items = getattr(model, "items", None)
+            if rows_items is None:
+                rows_items = getattr(model, "tagged_items", [])
+            sel_items = [rows_items[ix.row()] for ix in self.table.selectionModel().selectedRows()
+                         if 0 <= ix.row() < len(rows_items)]
+            added = add_pairing_actions(menu, sel_items, model,
+                                        self.unpair_requested.emit, self.pair_requested.emit, self)
+            from gui.pair_menu import add_pair_as_main_actions
+            if add_pair_as_main_actions(menu, sel_items, self.pair_requested.emit, self) or added:
+                menu.addSeparator()
+
         tag_action = QAction("Enable/Disable Selected", self)
         tag_action.triggered.connect(lambda: self.label_action_requested.emit("tag", None))
         menu.addAction(tag_action)

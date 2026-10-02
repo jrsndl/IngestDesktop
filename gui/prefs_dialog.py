@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineE
 from PySide6.QtCore import Qt, Signal
 from gui.preset_widget import PresetWidget
 from gui.group_widget import GroupWidget
+from gui.tooltips import tip, CATEGORY_TIPS
 
 class PreferencesDialog(QDialog):
     applied = Signal(object)
@@ -78,10 +79,25 @@ class PreferencesDialog(QDialog):
         self.per_project_logging = QCheckBox("Per Project Logging")
         self.per_project_logging.setChecked(self.secrets.get("per_project_logging", True))
 
+        # Each user's last session ("last" project) is saved here on exit, e.g.
+        # //server/ingest/sessions/${USERNAME}
+        self.sessions_folder = QLineEdit(self.secrets.get("sessions_folder", ""))
+        self.sessions_folder.setToolTip("The project 'last' is saved here every time the app exits.\n"
+                                        "${ENVIRONMENT_VARIABLE} is expanded, e.g. //server/ingest/sessions/${USERNAME}")
+        self.btn_browse_sessions = QPushButton("Browse...")
+        self.btn_browse_sessions.clicked.connect(self._on_browse_sessions_folder)
+        self.sessions_folder_layout = QHBoxLayout()
+        self.sessions_folder_layout.addWidget(self.sessions_folder)
+        self.sessions_folder_layout.addWidget(self.btn_browse_sessions)
+        self.load_last_session = QCheckBox("Load Last Session on Open")
+        self.load_last_session.setChecked(self.secrets.get("load_last_session", True))
+
         self.form.addRow("Default Scan Folder:", self.scan_folder_layout)
         self.form.addRow("Presets Folder:", self.presets_folder_layout)
         self.form.addRow("Ingest Log Folder:", self.log_folder_layout)
         self.form.addRow("", self.per_project_logging)
+        self.form.addRow("Sessions Folder:", self.sessions_folder_layout)
+        self.form.addRow("", self.load_last_session)
         self.form.addRow("Age Calculation Source:", self.age_source)
         self.form.addRow("Sequence Detection:", self.detect_sequences)
         
@@ -463,13 +479,6 @@ class PreferencesDialog(QDialog):
         self.cmd_sequences = QPlainTextEdit(self.config.get("cmd_sequences", ""))
         self.cmd_sequences.setMaximumHeight(50)
 
-        self.pair_existing_media = QCheckBox("Pair existing thumbnails and reviews by name")
-        self.pair_existing_media.setToolTip(
-            "Same name in the same folder -> pair.\n"
-            "Same name in another folder -> pair only if its path contains 'thumb' (thumbnails) or 'review' (reviews).\n"
-            "Paired thumbnails are not listed as separate items.")
-        self.pair_existing_media.setChecked(self.config.get("pair_existing_media", True))
-        self.thumbs_form.addRow(self.pair_existing_media)
         self.thumbs_form.addRow(self.run_thumb_after_scan)
         self.thumbs_form.addRow(self.run_review_after_scan)
         self.thumbs_form.addRow(self.skip_existing_thumbs)
@@ -540,6 +549,52 @@ class PreferencesDialog(QDialog):
         self.tabs.addTab(self.thumbs_tab, "Conversions")
         self._on_thumb_location_changed(self.thumb_location.currentText())
 
+        # 1.65 Pairing Tab (existing thumbnails / reviews linked to footage, logic/pairing.py)
+        self.pairing_tab = QWidget()
+        self.pairing_layout = QVBoxLayout(self.pairing_tab)
+        self.pairing_form = QFormLayout()
+
+        self.pair_existing_media = QCheckBox("Pair existing thumbnails and reviews by name")
+        self.pair_existing_media.setToolTip(
+            "Same name in the same folder -> pair.\n"
+            "Same name in another folder -> pair only if its path contains the folder text below.\n"
+            "Paired thumbnails are not listed as separate items. Paired reviews take the AYON path,\n"
+            "variant(s), version(s), last version and comment from their main file.")
+        self.pair_existing_media.setChecked(self.config.get("pair_existing_media", True))
+
+        self.pair_mode_same = QRadioButton("Pair same name")
+        self.pair_mode_suffix = QRadioButton("Allow suffix after same name match")
+        self.pair_mode_suffix.setToolTip("shot_v001.exr also pairs shot_v001_h264.mp4 (suffix starts with _ - or .).\n"
+                                         "An equal name always wins over a suffixed one.")
+        self._pair_mode_group = QButtonGroup(self.pairing_tab)
+        self._pair_mode_group.addButton(self.pair_mode_same)
+        self._pair_mode_group.addButton(self.pair_mode_suffix)
+        if self.config.get("pair_name_mode", "same") == "suffix":
+            self.pair_mode_suffix.setChecked(True)
+        else:
+            self.pair_mode_same.setChecked(True)
+        mode_box = QVBoxLayout()
+        mode_box.addWidget(self.pair_mode_same)
+        mode_box.addWidget(self.pair_mode_suffix)
+
+        self.pair_review_folder = QLineEdit(self.config.get("pair_review_folder", "_review"))
+        self.pair_review_folder.setToolTip("A review in another folder pairs only if its path contains this text (case ignored).")
+        self.pair_thumb_folder = QLineEdit(self.config.get("pair_thumb_folder", "_thumb"))
+        self.pair_thumb_folder.setToolTip("A thumbnail in another folder pairs only if its path contains this text (case ignored).")
+        self.pair_max_reviews = QSpinBox()
+        self.pair_max_reviews.setRange(1, 99)
+        self.pair_max_reviews.setValue(int(self.config.get("pair_max_reviews", 1) or 1))
+        self.pair_max_reviews.setToolTip("When more reviews match, the closest win: equal name, same folder, shortest path.")
+
+        self.pairing_form.addRow(self.pair_existing_media)
+        self.pairing_form.addRow("Name match:", mode_box)
+        self.pairing_form.addRow("Reviews folder:", self.pair_review_folder)
+        self.pairing_form.addRow("Thumbnails folder:", self.pair_thumb_folder)
+        self.pairing_form.addRow("Maximum allowed paired reviews:", self.pair_max_reviews)
+        self.pairing_layout.addLayout(self.pairing_form)
+        self.pairing_layout.addStretch()
+        self.tabs.addTab(self.pairing_tab, "Pairing")
+
         # 1.7 Clipboard Tab
         self.clipboard_tab = QWidget()
         self.clipboard_layout = QVBoxLayout(self.clipboard_tab)
@@ -587,6 +642,9 @@ class PreferencesDialog(QDialog):
         self.disable_inline_video = QCheckBox("Disable Inline Video Player (Always use default system player)")
         self.disable_inline_video.setChecked(self.config.get("disable_inline_video", False))
 
+        self.edge_swipe_panels = QCheckBox("Swipe over a window edge to hide / show panels")
+        self.edge_swipe_panels.setChecked(self.config.get("edge_swipe_panels", True))
+
         self.drawing_cache_location = QComboBox()
         self.drawing_cache_location.addItems(["relative to source folder", "custom"])
         self.drawing_cache_location.setCurrentText(self.config.get("drawing_cache_location", "relative to source folder"))
@@ -598,6 +656,7 @@ class PreferencesDialog(QDialog):
         self.gui_form.addRow("Default Thumbnail Size:", self.default_thumb_size)
         self.gui_form.addRow("Allowed Label Characters:", self.label_regex)
         self.gui_form.addRow("Inline Video Player:", self.disable_inline_video)
+        self.gui_form.addRow("Edge Swipe:", self.edge_swipe_panels)
         self.gui_form.addRow("Drawing Cache Location:", self.drawing_cache_location)
         self.gui_form.addRow("Drawing Cache Path:", self.drawing_cache_path)
 
@@ -628,6 +687,7 @@ class PreferencesDialog(QDialog):
             ext_layout = QHBoxLayout()
             ext_label = QLabel("File Extensions (space separated):")
             ext_field = QLineEdit()
+            ext_field.setToolTip(tip(CATEGORY_TIPS["ext_field"]))
             
             # Default extensions if not in config
             default_exts = {
@@ -645,6 +705,7 @@ class PreferencesDialog(QDialog):
 
             # Item Info field
             item_info = QPlainTextEdit()
+            item_info.setToolTip(tip(CATEGORY_TIPS["item_info"]))
             item_info.setMaximumHeight(80)
             item_info.setMinimumHeight(80)
             item_info.setPlainText(self.config.get(f"item_info_{p_type}", ""))
@@ -663,6 +724,7 @@ class PreferencesDialog(QDialog):
             stills_thumb_cb = None
             if p_type == "stills":
                 stills_thumb_cb = QCheckBox("Thumbnail same as the file")
+                stills_thumb_cb.setToolTip(tip(CATEGORY_TIPS["stills_thumb_cb"]))
                 stills_thumb_cb.setChecked(self.config.get("stills_thumb_same", True))
                 layout.addWidget(stills_thumb_cb)
 
@@ -674,12 +736,14 @@ class PreferencesDialog(QDialog):
                 frame_layout = QHBoxLayout()
                 frame_layout.addWidget(QLabel("Default Start Frame:"))
                 start_f = QSpinBox()
+                start_f.setToolTip(tip(CATEGORY_TIPS["start_f"]))
                 start_f.setRange(0, 999999)
                 start_f.setValue(self.config.get("stills_start_frame", 1001))
                 frame_layout.addWidget(start_f)
                 
                 frame_layout.addWidget(QLabel("Default End Frame:"))
                 end_f = QSpinBox()
+                end_f.setToolTip(tip(CATEGORY_TIPS["end_f"]))
                 end_f.setRange(0, 999999)
                 end_f.setValue(self.config.get("stills_end_frame", 1001))
                 frame_layout.addWidget(end_f)
@@ -689,11 +753,13 @@ class PreferencesDialog(QDialog):
             elif p_type == "videos":
                 frame_layout = QHBoxLayout()
                 video_tc_cb = QCheckBox("Start Frame from TC")
+                video_tc_cb.setToolTip(tip(CATEGORY_TIPS["video_tc_cb"]))
                 video_tc_cb.setChecked(self.config.get("video_start_from_tc", False))
                 frame_layout.addWidget(video_tc_cb)
                 
                 frame_layout.addWidget(QLabel("Default Start Frame:"))
                 start_f = QSpinBox()
+                start_f.setToolTip(tip(CATEGORY_TIPS["start_f"]))
                 start_f.setRange(0, 999999)
                 start_f.setValue(self.config.get("video_start_frame", 1001))
                 frame_layout.addWidget(start_f)
@@ -709,14 +775,21 @@ class PreferencesDialog(QDialog):
             scroll.setWidget(scroll_content)
             
             btn_add = QPushButton(f"Add {label} Preset")
+            btn_add.setToolTip(tip(CATEGORY_TIPS["btn_add"]))
             btn_add.clicked.connect(lambda checked, t=p_type: self.add_preset(t))
             
             btn_delete = QPushButton(f"Delete Selected")
+            btn_delete.setToolTip(tip(CATEGORY_TIPS["btn_delete"]))
             btn_delete.clicked.connect(lambda checked, t=p_type: self.delete_selected_preset(t))
+
+            btn_duplicate = QPushButton("Duplicate Selected")
+            btn_duplicate.setToolTip(tip(CATEGORY_TIPS["btn_duplicate"]))
+            btn_duplicate.clicked.connect(lambda checked, t=p_type: self.duplicate_selected_preset(t))
             
             btn_row = QHBoxLayout()
             btn_row.addWidget(btn_add)
             btn_row.addWidget(btn_delete)
+            btn_row.addWidget(btn_duplicate)
             
             layout.addWidget(scroll, 1)
             layout.addLayout(btn_row)
@@ -754,9 +827,11 @@ class PreferencesDialog(QDialog):
         self.group_scroll.setWidget(self.group_scroll_content)
 
         btn_group_add = QPushButton("Add Group")
+        btn_group_add.setToolTip(tip(CATEGORY_TIPS["btn_group_add"]))
         btn_group_add.clicked.connect(lambda: self.add_group_definition())
 
         btn_group_delete = QPushButton("Delete Selected Group")
+        btn_group_delete.setToolTip(tip(CATEGORY_TIPS["btn_group_delete"]))
         btn_group_delete.clicked.connect(self.delete_selected_group)
 
         btn_group_row = QHBoxLayout()
@@ -934,6 +1009,20 @@ class PreferencesDialog(QDialog):
             if widgets:
                 self.select_preset(widgets[0])
 
+    def duplicate_selected_preset(self, p_type):
+        """Copy the selected preset right below it (named '<name> copy'), selected and unfolded."""
+        scroll_layout, widgets, selected, *_rest = self.preset_containers[p_type]
+        if not selected or selected not in widgets:
+            return
+        data = selected.get_data()
+        data["Name"] = f"{data.get('Name', '') or 'Preset'} copy"
+        self.add_preset(p_type, data)
+        new_pw = widgets.pop()  # add_preset appended it at the end
+        widgets.insert(widgets.index(selected) + 1, new_pw)
+        self._rebuild_preset_layout(p_type)
+        if new_pw.is_collapsed:
+            new_pw.toggle_collapsed()
+
     def remove_preset(self, pw):
         # This method is no longer used by individual widgets, 
         # but kept for compatibility if needed.
@@ -1023,6 +1112,13 @@ class PreferencesDialog(QDialog):
         if dir_path:
             self.ingest_log_folder.setText(os.path.normpath(dir_path))
 
+    def _on_browse_sessions_folder(self):
+        from utils import expand_env_vars
+        init_dir = expand_env_vars(self.sessions_folder.text())
+        dir_path = QFileDialog.getExistingDirectory(self, "Select Sessions Folder", init_dir)
+        if dir_path:
+            self.sessions_folder.setText(os.path.normpath(dir_path))
+
     def _on_browse_cache_folder(self):
         from utils import expand_env_vars
         init_dir = expand_env_vars(self.ayon_thumbnails_cache.text())
@@ -1074,6 +1170,7 @@ class PreferencesDialog(QDialog):
             "version_regex": self.version_regex.text(),
             "version_repl": self.version_repl.text(),
             "disable_inline_video": self.disable_inline_video.isChecked(),
+            "edge_swipe_panels": self.edge_swipe_panels.isChecked(),
             "default_columns": self.default_cols.value(),
             "default_text_size": self.default_text_size.value(),
             "default_thumb_size": self.default_thumb_size.value(),
@@ -1104,6 +1201,10 @@ class PreferencesDialog(QDialog):
             "cmd_videos": self.cmd_videos.toPlainText(),
             "run_thumb_after_scan": self.run_thumb_after_scan.isChecked(),
             "pair_existing_media": self.pair_existing_media.isChecked(),
+            "pair_name_mode": "suffix" if self.pair_mode_suffix.isChecked() else "same",
+            "pair_review_folder": self.pair_review_folder.text().strip() or "_review",
+            "pair_thumb_folder": self.pair_thumb_folder.text().strip() or "_thumb",
+            "pair_max_reviews": self.pair_max_reviews.value(),
             "run_review_after_scan": self.run_review_after_scan.isChecked(),
             "skip_existing_thumbs": self.skip_existing_thumbs.isChecked(),
             "skip_existing_reviews": self.skip_existing_reviews.isChecked(),
@@ -1191,6 +1292,8 @@ class PreferencesDialog(QDialog):
             "ocio_config": self.ocio_config.text(),
             "ingest_log_folder": self.ingest_log_folder.text(),
             "per_project_logging": self.per_project_logging.isChecked(),
+            "sessions_folder": self.sessions_folder.text(),
+            "load_last_session": self.load_last_session.isChecked(),
             "deadline_job_name": self.deadline_job_name.text(),
             "deadline_department": self.deadline_department.text(),
             "deadline_pool": self.deadline_pool.text(),

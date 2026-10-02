@@ -86,5 +86,14 @@ class TestTokenEngine(unittest.TestCase):
         self.assertEqual(tokens.expand("{label}_{fps_int}", it), "plate_bg_25")
 
 
+class TestEnvTokens(unittest.TestCase):
+    def test_environment_variables(self):
+        import os
+        from logic import tokens
+        os.environ["INGESTDESKTOP_TEST_USER"] = "jiri"
+        self.assertEqual(tokens.expand_env("//srv/sessions/${INGESTDESKTOP_TEST_USER}"), "//srv/sessions/jiri")
+        self.assertEqual(tokens.expand_env("${INGESTDESKTOP_NOT_SET_X}/a"), "${INGESTDESKTOP_NOT_SET_X}/a")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -19,8 +19,15 @@ class TestArrangeDialog(unittest.TestCase):
         self.assertIsNotNone(dialog.slider_thumb_size)
         self.assertEqual(dialog.slider_thumb_size.value(), 250)
         self.assertEqual(dialog.slider_thumb_size.minimum(), 20)
-        self.assertEqual(dialog.slider_thumb_size.maximum(), 2048)
+        self.assertEqual(dialog.slider_thumb_size.maximum(), 8192)
         self.assertEqual(dialog.get_values()["thumb_size"], 250)
+
+    def test_paired_follow_default_on(self):
+        dialog = ArrangeDialog(mode="grid", initial_values={})
+        self.assertTrue(dialog.chk_paired_follow.isChecked())
+        self.assertTrue(dialog.get_values()["paired_follow"])
+        dialog.chk_paired_follow.setChecked(False)
+        self.assertFalse(ArrangeDialog(mode="grid", initial_values=dialog.get_values()).chk_paired_follow.isChecked())
 
 if __name__ == "__main__":
     unittest.main()

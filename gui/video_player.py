@@ -480,6 +480,9 @@ class VideoPlayerOverlay(QWidget):
         super().__init__(parent)
         self.video_path = None
         self.is_playing = False
+        # "Player: All": the overlays must not block the canvas - every mouse event is
+        # passed to the view underneath, so items can be selected and moved
+        self.pass_through = False
         
         # Transparent overlay styling, hidden cursor or minimal controls
         self.setStyleSheet("""
@@ -565,6 +568,41 @@ class VideoPlayerOverlay(QWidget):
         self.is_playing = False
         self.hide()
 
+    # -- pass-through to the canvas ("Player: All") ---------------------------
+    _FORWARDED = (QEvent.MouseButtonPress, QEvent.MouseButtonRelease, QEvent.MouseButtonDblClick,
+                  QEvent.MouseMove, QEvent.Wheel)
+
+    def set_pass_through(self, on):
+        self.pass_through = bool(on)
+        for w in (self, getattr(self, "video_widget", None), getattr(self, "lbl_fallback", None)):
+            if w is not None:
+                w.setAttribute(Qt.WA_TransparentForMouseEvents, self.pass_through)
+                w.setMouseTracking(self.pass_through)
+
+    def _forward_to_view(self, event):
+        """Re-send a mouse / wheel event to the canvas viewport under this overlay."""
+        from PySide6.QtWidgets import QApplication
+        from PySide6.QtGui import QMouseEvent, QWheelEvent
+        from PySide6.QtCore import QPointF
+        vp = self.parentWidget()
+        if vp is None:
+            return False
+        gp = event.globalPosition()
+        local = QPointF(vp.mapFromGlobal(gp.toPoint()))
+        if event.type() == QEvent.Wheel:
+            ev = QWheelEvent(local, gp, event.pixelDelta(), event.angleDelta(), event.buttons(),
+                             event.modifiers(), event.phase(), event.inverted())
+        else:
+            ev = QMouseEvent(event.type(), local, gp, event.button(), event.buttons(), event.modifiers())
+        QApplication.sendEvent(vp, ev)
+        return True
+
+    def event(self, event):
+        if self.pass_through and event.type() in self._FORWARDED:
+            self._forward_to_view(event)
+            return True
+        return super().event(event)
+
     def mousePressEvent(self, event):
         # Toggle play/pause on click
         if event.button() == Qt.LeftButton:
@@ -599,6 +637,9 @@ class VideoPlayerOverlay(QWidget):
             super().mouseDoubleClickEvent(event)
 
     def eventFilter(self, source, event):
+        if self.pass_through and source is getattr(self, 'video_widget', None) and event.type() in self._FORWARDED:
+            self._forward_to_view(event)
+            return True
         if source is getattr(self, 'video_widget', None):
             if event.type() == QEvent.MouseButtonPress:
                 self.mousePressEvent(event)

@@ -21,6 +21,39 @@ def parse_version_folder(directory, version_regex):
             return os.path.dirname(directory), ver
     return None, None
 
+# Fields a paired review takes from its main file (logic/pairing.py). While the
+# review is paired they are read live from the main file, so any change there -
+# cell edit, Replace, AYON assignment, version check, project load - shows on the
+# review at once. Writes to a paired review are ignored (the fields are read-only
+# on the review); on unpair the review shows its own values again.
+INHERITED_FIELDS = ("ayon_path", "variant", "variant_user", "version", "version_user",
+                    "last_ayon_version", "comment", "is_tagged")
+# Inherited fields whose writes on a paired review go to the main file instead of
+# being ignored: enabling/disabling a review enables/disables the whole pair.
+FORWARDED_FIELDS = ("is_tagged",)
+
+
+def _inherited_field(name):
+    own = "_own_" + name
+    forward = name in FORWARDED_FIELDS
+
+    def fget(self):
+        main = self.__dict__.get("pair_main")
+        if main is not None:
+            return getattr(main, name)
+        return self.__dict__.get(own)
+
+    def fset(self, value):
+        main = self.__dict__.get("pair_main")
+        if main is not None:
+            if forward:
+                setattr(main, name, value)
+            return  # read-only while paired: edit the main file instead
+        self.__dict__[own] = value
+
+    return property(fget, fset, doc=f"{name} (inherited from the main file while paired)")
+
+
 class ImageItem:
     def __init__(self, file_path, label=None, version=1, category="Other", 
                  preset_name=None, variant=None, product_type=None, camel_case=True,
@@ -79,6 +112,75 @@ class ImageItem:
         self.ayon_context = {}
         self.parsed_tags = {}
 
+    # -- pairing (review movie <-> main file) ------------------------------
+    pair_main = None  # main ImageItem this review is paired to
+
+    @property
+    def paired_reviews(self):
+        """Review items paired to this main file."""
+        return self.__dict__.setdefault("_paired_reviews", [])
+
+    def pair_review(self, review):
+        """Pair `review` to this item: it inherits INHERITED_FIELDS live."""
+        if review is self or review is None:
+            return
+        if review.pair_main is not None:
+            review.pair_main.unpair_review(review)
+        review.pair_main = self
+        review.is_review_repre = True
+        md = review.metadata
+        md["paired_review_of"] = (self.file_path or "").replace("\\", "/")
+        md["is_paired_review"] = True
+        if review not in self.paired_reviews:
+            self.paired_reviews.append(review)
+        rp = (review.file_path or "").replace("\\", "/")
+        self.metadata["paired_reviews"] = [(r.file_path or "").replace("\\", "/") for r in self.paired_reviews]
+        if len(self.paired_reviews) == 1:
+            self.review_file_path = rp
+            self.metadata["paired_review"] = rp
+
+    def unpair_review(self, review):
+        """Undo pair_review: the review shows its own values again."""
+        if review in self.paired_reviews:
+            self.paired_reviews.remove(review)
+        if review.pair_main is self:
+            review.pair_main = None
+            review.metadata.pop("paired_review_of", None)
+            review.metadata.pop("is_paired_review", None)
+        rp = (review.file_path or "").replace("\\", "/")
+        self.metadata["paired_reviews"] = [(r.file_path or "").replace("\\", "/") for r in self.paired_reviews]
+        if not self.metadata["paired_reviews"]:
+            self.metadata.pop("paired_reviews", None)
+        if (getattr(self, "review_file_path", "") or "").replace("\\", "/") == rp:
+            nxt = self.paired_reviews[0].file_path.replace("\\", "/") if self.paired_reviews else ""
+            self.review_file_path = nxt
+            if nxt:
+                self.metadata["paired_review"] = nxt
+            else:
+                self.metadata.pop("paired_review", None)
+
+    def pair_members(self):
+        """The main file and all its paired reviews (just [self] when not paired)."""
+        main = self.pair_main if self.pair_main is not None else self
+        return [main] + list(main.paired_reviews)
+
+    def own_fields(self):
+        """The item's own values of INHERITED_FIELDS (what it shows when not paired)."""
+        return {n: self.__dict__.get("_own_" + n) for n in INHERITED_FIELDS}
+
+    def unpair_all(self):
+        """Unpair every review of this item, or this review from its main file."""
+        if self.pair_main is not None:
+            self.pair_main.unpair_review(self)
+        for r in list(self.paired_reviews):
+            self.unpair_review(r)
+
+    @property
+    def is_review(self):
+        """A review movie: marked as a review representation, or paired with footage by name."""
+        return bool(getattr(self, "is_review_repre", False) or (self.metadata or {}).get("is_paired_review")
+                    or (self.metadata or {}).get("paired_review_of"))
+
     @property
     def is_hidden_paired_review(self):
         """A review movie that was paired by name with footage (logic/pairing.py).
@@ -122,6 +224,8 @@ class ImageItem:
 
     @property
     def effective_variant(self):
+        if self.pair_main is not None:
+            return self.pair_main.effective_variant
         v_user = getattr(self, "variant_user", "") or ""
         if v_user.strip():
             return v_user.strip()
@@ -140,6 +244,36 @@ class ImageItem:
 
         return parsed_v
 
+for _name in INHERITED_FIELDS:
+    setattr(ImageItem, _name, _inherited_field(_name))
+del _name
+
+
+def _norm_fp(p):
+    return os.path.normcase(os.path.normpath(os.path.abspath(p))) if p else ""
+
+
+def link_pairs_from_metadata(items):
+    """Re-link reviews to their main files from metadata["paired_review_of"]
+    (after loading a project or adding rescanned items). Returns the number linked."""
+    by_path = {}
+    ids = {id(it) for it in items}
+    for it in items:
+        by_path.setdefault(_norm_fp(getattr(it, "file_path", "")), it)
+    n = 0
+    for it in items:
+        md = getattr(it, "metadata", None) or {}
+        target = md.get("paired_review_of")
+        if not target or (it.pair_main is not None and id(it.pair_main) in ids):
+            continue  # not a review, or already linked to an item of this list
+        main = by_path.get(_norm_fp(target))
+        if main is None or main is it or main.pair_main is not None:
+            continue
+        main.pair_review(it)
+        n += 1
+    return n
+
+
 class ImageTableModel(QAbstractTableModel):
     data_changed = Signal()
 
@@ -147,6 +281,10 @@ class ImageTableModel(QAbstractTableModel):
         "Enable", "Thumbnail", "Label", "Variant", "Variant User", "Product Name", "Group By", "Category", "Preset", "Version", 
         "Version User", "Last Version", "Age", "Review", "AYON Path", "Key Value Pairs", "Ingest Status"
     ]
+
+    # Columns a paired review inherits: Variant, Variant User, Version, Version User,
+    # Last Version, AYON Path (comment has no column)
+    INHERITED_COLUMNS = (3, 4, 9, 10, 11, 14)
 
     @property
     def all_items(self):
@@ -164,6 +302,8 @@ class ImageTableModel(QAbstractTableModel):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._items = []
+        # A paired review shows its main file's values: repaint it when the main row changes
+        self.dataChanged.connect(self._refresh_paired_reviews)
         self.v_stack_enabled = False
         self.version_regex = r"([._]v|v)(\d+)"
         self.version_stacks = {}
@@ -196,6 +336,18 @@ class ImageTableModel(QAbstractTableModel):
         """Public wrapper for token expansion."""
         return self._expand_string(text, item)
 
+    def _refresh_paired_reviews(self, top_left, bottom_right, roles=None):
+        if not self._items:
+            return
+        last_col = self.columnCount() - 1
+        for row in range(max(0, top_left.row()), min(bottom_right.row(), len(self._items) - 1) + 1):
+            for review in getattr(self._items[row], "paired_reviews", ()) or ():
+                try:
+                    r = self._items.index(review)
+                except ValueError:
+                    continue
+                self.dataChanged.emit(self.index(r, 0), self.index(r, last_col))
+
     def update_item(self, item):
         """Notify the model that an item has been updated (e.g. metadata fetched)."""
         if hasattr(item, "thumbnail_image") and item.thumbnail_image:
@@ -227,6 +379,8 @@ class ImageTableModel(QAbstractTableModel):
         if role == Qt.ForegroundRole:
             if not item.is_tagged:
                 return QColor("#ff4444")
+            if col == 2 and item.pair_main is not None:
+                return QColor("#ff00ff")  # paired review: magenta label
             
             # Version conflict handling:
             last_v = item.last_ayon_version
@@ -259,7 +413,9 @@ class ImageTableModel(QAbstractTableModel):
                 elif item.ingest_status == "Failed":
                     return QColor("#f44336")
 
-            # Dim non-editable text columns
+            # Dim non-editable text columns (a paired review takes these from its main file)
+            if item.pair_main is not None and col in self.INHERITED_COLUMNS:
+                return QColor("#888888")
             if col in [3, 5, 6, 7, 8, 11, 12, 13, 14, 15, 16]:
                 return QColor("#888888")
             return None
@@ -356,9 +512,14 @@ class ImageTableModel(QAbstractTableModel):
         col = index.column()
 
         if role == Qt.CheckStateRole and col == 0:
-            item.is_tagged = (value == Qt.Checked)
-            # Emit for the entire row to refresh ForegroundRole color
-            self.dataChanged.emit(self.index(index.row(), 0), self.index(index.row(), self.columnCount()-1))
+            item.is_tagged = (value == Qt.Checked)  # on a paired review: the whole pair
+            # Emit for every row of the pair to refresh ForegroundRole color
+            for member in item.pair_members():
+                try:
+                    r = self._items.index(member)
+                except ValueError:
+                    continue
+                self.dataChanged.emit(self.index(r, 0), self.index(r, self.columnCount()-1))
             return True
         
         if role == Qt.EditRole:
@@ -399,7 +560,9 @@ class ImageTableModel(QAbstractTableModel):
         if index.column() == 0:
             flags |= Qt.ItemIsUserCheckable
         if index.column() in [2, 4, 9, 10]: # Label, Variant User, Version, Version User
-            flags |= Qt.ItemIsEditable
+            item = self.items[index.row()] if 0 <= index.row() < len(self.items) else None
+            if not (item is not None and item.pair_main is not None and index.column() in self.INHERITED_COLUMNS):
+                flags |= Qt.ItemIsEditable  # paired review: edit the main file instead
             
         return flags
 
@@ -429,6 +592,41 @@ class ImageTableModel(QAbstractTableModel):
         self._items.extend(new_items)
         self.rebuild_version_stacks()
         self.endInsertRows()
+        self.order_pairs()
+
+    def order_pairs(self):
+        """Keep every paired review row directly below its main file (whatever the sort)."""
+        ids = {id(it) for it in self._items}
+        new, placed = [], set()
+        for it in self._items:
+            if id(it) in placed:
+                continue
+            main = getattr(it, "pair_main", None)
+            if main is not None and id(main) in ids:
+                continue  # placed right after its main file
+            new.append(it)
+            placed.add(id(it))
+            for r in getattr(it, "paired_reviews", None) or []:
+                if id(r) in ids and id(r) not in placed:
+                    new.append(r)
+                    placed.add(id(r))
+        for it in self._items:  # safety: never lose a row
+            if id(it) not in placed:
+                new.append(it)
+                placed.add(id(it))
+        if all(a is b for a, b in zip(new, self._items)):
+            return
+        self.layoutAboutToBeChanged.emit()
+        old_items = list(self._items)
+        persistent = self.persistentIndexList()
+        self._items[:] = new
+        new_row = {id(it): r for r, it in enumerate(self._items)}
+        for idx in persistent:
+            if 0 <= idx.row() < len(old_items):
+                r = new_row.get(id(old_items[idx.row()]))
+                if r is not None:
+                    self.changePersistentIndex(idx, self.index(r, idx.column()))
+        self.layoutChanged.emit()
 
     def remove_items(self, items_to_remove):
         if not items_to_remove:
@@ -440,6 +638,10 @@ class ImageTableModel(QAbstractTableModel):
         )
         if not indices_to_remove:
             return
+        # A removed main file releases its reviews; a removed review leaves its main file
+        for item in items_to_remove:
+            if hasattr(item, "unpair_all"):
+                item.unpair_all()
 
         for idx in indices_to_remove:
             self.beginRemoveRows(QModelIndex(), idx, idx)
@@ -521,13 +723,18 @@ class ImageTableModel(QAbstractTableModel):
     def toggle_tag_selection(self, selection_model):
         """Toggle ingest tag for all selected rows."""
         rows = set(index.row() for index in selection_model.selectedRows())
+        done = set()
         for row in rows:
             item = self.items[row]
-            item.is_tagged = not item.is_tagged
+            root = item.pair_main if item.pair_main is not None else item
+            if id(root) in done:
+                continue  # a main file and its reviews are toggled together, once
+            done.add(id(root))
+            root.is_tagged = not root.is_tagged
         
         # Notify views
         if rows:
-            self.dataChanged.emit(self.index(min(rows), 0), self.index(max(rows), 0))
+            self.dataChanged.emit(self.index(0, 0), self.index(len(self.items) - 1, self.columnCount() - 1))
 
     def modify_labels(self, selection_model, action, data=None):
         """Apply bulk modifications to labels of selected items."""
@@ -628,6 +835,7 @@ class ImageTableModel(QAbstractTableModel):
                 if r is not None:
                     self.changePersistentIndex(idx, self.index(r, idx.column()))
         self.layoutChanged.emit()
+        self.order_pairs()  # paired reviews stay right below their main file
 
     # ------------------------------------------------------------------
     # Token expansion: all logic lives in logic/tokens.py (pure Python).
@@ -807,3 +1015,14 @@ class ImageTableModel(QAbstractTableModel):
             self.layoutChanged.emit()
             
         return renamed_count
+
+
+AGE_UNIT_MINUTES = {"minutes": 1, "hours": 60, "days": 1440}
+
+
+def age_limit_minutes(value, units):
+    """Age filter limit: a file passes when its age (whole minutes) is below this.
+
+    "2 hours" = younger than 120 minutes. (It used to add one unit, so "1 day" let
+    through files up to 2 days old.)"""
+    return max(0, int(value)) * AGE_UNIT_MINUTES.get(units, 1)

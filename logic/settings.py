@@ -125,7 +125,14 @@ PREFERENCES = {
         "cmd_videos": DEFAULT_CMD_VIDEOS,
         "cmd_sequences": DEFAULT_CMD_SEQUENCES,
         "timeout_seconds": 6,
+    },
+    "Pairing": {
+        # existing thumbnails / review movies linked to footage by name (logic/pairing.py)
         "pair_existing_media": True,
+        "pair_name_mode": "same",          # "same" | "suffix" (allow a suffix after the same name)
+        "pair_review_folder": "_review",   # other-folder reviews need this text in their path
+        "pair_thumb_folder": "_thumb",     # other-folder thumbnails need this text in their path
+        "pair_max_reviews": 1,
     },
     "Clipboard": {
         "clip_temp_root": "",
@@ -139,6 +146,7 @@ PREFERENCES = {
         "default_thumb_size": 150,
         "label_allowed_chars": "^[a-zA-Z0-9_\\-\\.\\s]*$",
         "disable_inline_video": False,
+        "edge_swipe_panels": True,
         "drawing_cache_location": "relative to source folder",
         "drawing_cache_path": "_drawcache",
         "item_info_generic": "",
@@ -179,7 +187,7 @@ SESSION = {
     "ayon_selected_task": "",
     "ayon_show_thumbs": True,
     "filter_age_enabled": False,
-    "filter_age_value": 0,
+    "filter_age_value": 1,
     "filter_age_units": "days",
     "filter_files_only": False,
     "filter_flat": False,
@@ -194,7 +202,14 @@ SESSION = {
     "check_versions": True,
     "player_mode": "stop",
     "thumbnails_show_text": True,
+    "thumbnails_show_frames": True,
     "show_reviews": True,
+    "log_height": 200,          # log panel height (drag its top edge)
+    "log_verbosity": "verbose",  # minimal | normal | verbose (log context menu)
+    # "footage|review" pairs the user unpaired (a rescan does not pair them again)
+    "unpaired_reviews": [],
+    # "main|review" pairs made by hand ("Pair" / "Pair as main"); a rescan keeps them
+    "manual_pairs": [],
 }
 
 # Keys that belong to install.json (per machine). Listed so they are never
@@ -205,7 +220,7 @@ INSTALL_KEYS = {
     "per_project_logging", "ayon_thumbnails_cache", "ftrack_server", "ftrack_api_user",
     "ftrack_api_key", "deadline_job_name", "deadline_department", "deadline_pool",
     "deadline_secondary_pool", "deadline_group", "deadline_priority", "deadline_machine_limit",
-    "deadline_concurrent_tasks",
+    "deadline_concurrent_tasks", "sessions_folder", "load_last_session",
 }
 
 # Old key -> new key (values are moved on load)

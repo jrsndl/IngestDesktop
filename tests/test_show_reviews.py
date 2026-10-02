@@ -60,6 +60,8 @@ class TestShowReviews(unittest.TestCase):
         item_mp4.is_review_repre = True
 
         win.model.add_items([item_exr, item_mp4])
+        # Canvas reviews are off by default (own toggle); show them so the thumb can be selected
+        win.thumb_area._on_canvas_show_reviews_toggled(True)
 
         # When show_reviews is True
         win._on_show_reviews_toggled(True)
@@ -153,6 +155,20 @@ class TestShowReviews(unittest.TestCase):
             if os.path.exists(tmp_rev_path):
                 os.remove(tmp_rev_path)
 
+        win.close()
+
+class TestReviewToggleDefaults(unittest.TestCase):
+    def test_canvas_and_file_panel_hide_reviews_by_default(self):
+        from gui.main_window import MainWindow
+        win = MainWindow()
+        self.assertFalse(win.thumb_area.btn_show_reviews.isChecked())
+        self.assertFalse(win.filter_panel.btn_show_reviews.isChecked())
+        self.assertTrue(win.spreadsheet.btn_show_reviews.isChecked())
+        rev = ImageItem(file_path="C:/test/shot_v001.mp4", representation="mp4")
+        rev.is_review_repre = True
+        self.assertTrue(win.filter_panel.proxy.hides_item(rev))
+        win.filter_panel.btn_show_reviews.setChecked(True)
+        self.assertFalse(win.filter_panel.proxy.hides_item(rev))
         win.close()
 
 if __name__ == "__main__":

@@ -13,7 +13,7 @@ from logic.metadata import get_image_info_metadata
 from logic import paths as item_paths
 from logic.seqparse import split_name, frame_range_info, format_frame
 from logic.tag_parser import parse_item_tags
-from logic.pairing import PairIndex
+from logic.pairing import PairIndex, footage_stem, footage_id, strip_suffixes, unpair_key, unpaired_set, VIDEO_EXTS
 
 
 def sequence_key(file_path, base, ext, version):
@@ -98,7 +98,7 @@ class ImageScanner(QThread):
         # Link footage to thumbnails / review movies that already exist (logic/pairing.py)
         self.pair_existing_media = pair_existing_media
         self._pairs = None
-        self._paired = {}  # footage path (normcase) -> (thumb_path, review_path)
+        self._paired = {}  # footage path (normcase, every file of a sequence) -> (thumb_path, [review paths])
         self._paired_reviews = {}  # review movie path (normcase) -> footage path
         self._is_canceled = False
 
@@ -149,11 +149,16 @@ class ImageScanner(QThread):
         current = 0
         final_items = []
 
+        footage_items = {}  # normcase path of every footage file -> its item (for review links)
+
         # 1. Image groups (stills and sequences)
         for key, entries in groups.items():
             if self._canceled():
                 return
-            final_items.append(self._make_image_item(entries))
+            img_item = self._make_image_item(entries)
+            final_items.append(img_item)
+            for e in entries:
+                footage_items[os.path.normcase(os.path.abspath(e[2]))] = img_item
             current += 1
             self.progress.emit(current, total_units)
 
@@ -168,14 +173,9 @@ class ImageScanner(QThread):
             item._video_start_from_tc = self.video_start_from_tc
             item._video_default_start = self.video_start_frame
             item.seq_key = sequence_key(f, os.path.basename(f), "", None)
-            footage = self._paired_reviews.get(os.path.normcase(os.path.abspath(f)))
-            if footage:
-                # review of other footage: kept for publishing, hidden in canvas / right panel
-                item.metadata["paired_review_of"] = footage.replace("\\", "/")
-                item.metadata["is_paired_review"] = True
-                item.is_review_repre = True
             self._finish_item(item, "videos", f)
             final_items.append(item)
+            footage_items[os.path.normcase(os.path.abspath(f))] = item
             current += 1
             self.progress.emit(current, total_units)
 
@@ -190,6 +190,8 @@ class ImageScanner(QThread):
             current += 1
             self.progress.emit(current, total_units)
 
+        self._link_paired_reviews(footage_items)
+
         elapsed = time.perf_counter() - start_time
         self.status_text.emit(f"Scan files took {elapsed:.2f} seconds.")
         self.log.emit(f"[Timer] Scan files took {elapsed:.4f} seconds.")
@@ -199,25 +201,107 @@ class ImageScanner(QThread):
         self.metadata_done.emit()
 
     # ------------------------------------------------------------------
+    def _link_paired_reviews(self, footage_items):
+        """Link every paired review item to its footage item (inherits its fields)."""
+        n = 0
+        review_items = {id(footage_items.get(r)) for r in self._paired_reviews}
+        for review_norm, footage_path in self._paired_reviews.items():
+            review = footage_items.get(review_norm)
+            main = footage_items.get(os.path.normcase(os.path.abspath(footage_path)))
+            if review is None or main is None or review is main or id(main) in review_items:
+                continue  # (a movie that is itself someone's review is not a main file)
+            main.pair_review(review)
+            n += 1
+        if n:
+            self.log.emit(f"Paired {n} existing review movie(s) with their footage.")
+        self._apply_manual_pairs(footage_items)
+
+    def _apply_manual_pairs(self, footage_items):
+        """Pairs made by hand ("Pair" / "Pair as main", config "manual_pairs") win
+        over the automatic ones."""
+        keys = unpaired_set((self.config or {}).get("manual_pairs"))
+        if not keys:
+            return
+        by_id = {}
+        for it in footage_items.values():
+            by_id.setdefault(footage_id(it.file_path), it)
+        n = 0
+        for k in keys:
+            f_key, r_key = k.split("|", 1)
+            main, review = by_id.get(footage_id(f_key)), by_id.get(footage_id(r_key))
+            if main is None or review is None or main is review or review.pair_main is main:
+                continue
+            if main.pair_main is not None:
+                main.pair_main.unpair_review(main)
+            for r in list(review.paired_reviews):
+                review.unpair_review(r)
+            main.pair_review(review)
+            n += 1
+        if n:
+            self.log.emit(f"Applied {n} pairing(s) made by hand.")
+
     def _pair_existing_media(self, all_files, groups, videos):
         """Find existing thumbnails/reviews for every footage item; files used as
         thumbnails are removed from the item list."""
         review_suffixes = {p.get("Review Suffix") for plist in self.presets.values()
                            for p in plist if isinstance(p, dict) and p.get("Review Suffix")}
-        self._pairs = PairIndex(all_files, self.directory, (self.thumb_suffix, *review_suffixes))
+        cfg = self.config or {}
+        self._pairs = PairIndex(all_files, self.directory, (self.thumb_suffix, *review_suffixes),
+                                name_mode=cfg.get("pair_name_mode", "same"),
+                                review_word=cfg.get("pair_review_folder", "_review"),
+                                thumb_word=cfg.get("pair_thumb_folder", "_thumb"),
+                                max_reviews=cfg.get("pair_max_reviews", 1))
+        # remembered unpairs: review -> footage files it must not pair with. A sequence
+        # is remembered by whichever frame its item showed, so every frame counts.
+        unpaired_by_review = {}
+        for k in unpaired_set(cfg.get("unpaired_reviews")):
+            f_key, r_key = k.split("|", 1)
+            unpaired_by_review.setdefault(r_key, set()).add(footage_id(f_key))
+        norm = lambda p: os.path.normcase(os.path.abspath(p))
+        key_path = lambda p: unpair_key(p, p).split("|", 1)[0]
         consumed = set()
         footage = [(sorted(e[2] for e in entries), len(entries) > 1) for entries in groups.values()]
         footage += [([v], False) for v in videos]
+        thumbs = {}
+        offers = []  # (footage is a movie, inexact name, rank, footage first path, review path)
         for paths, is_seq in footage:
             first = paths[0]
             thumb = self._pairs.thumbnail_for(first, is_seq)
-            review = self._pairs.review_for(first, is_seq)
-            if thumb or review:
-                self._paired[os.path.normcase(os.path.abspath(first))] = (thumb, review)
             if thumb:
-                consumed.add(os.path.normcase(os.path.abspath(thumb)))
-            if review:
-                self._paired_reviews.setdefault(os.path.normcase(os.path.abspath(review)), first)
+                thumbs[first] = thumb
+                consumed.add(norm(thumb))
+        for paths, is_seq in footage:
+            first = paths[0]
+            if len(paths) == 1 and norm(first) in consumed:
+                continue  # this file is a thumbnail of other footage, not footage
+            fstem = footage_stem(first, is_seq)
+            is_movie = not is_seq and os.path.splitext(first)[1].lower() in VIDEO_EXTS
+            for rank, review in enumerate(self._pairs.reviews_for(first, is_seq)):
+                blocked = unpaired_by_review.get(key_path(review))
+                if blocked and footage_id(first) in blocked:
+                    continue  # the user unpaired these two
+                rstem = strip_suffixes(os.path.splitext(os.path.basename(review))[0], self._pairs.suffixes).lower()
+                offers.append((is_movie, rstem != fstem, rank, first, review))
+        # A review goes to one footage only. Image footage (sequences, stills) picks
+        # first, so a movie that is itself a review of a sequence cannot take that
+        # sequence's other reviews; then equal names, then the closest match.
+        reviews_of = {}
+        for _movie, _inexact, _rank, first, review in sorted(offers, key=lambda o: (o[0], o[1], o[2])):
+            if norm(review) in self._paired_reviews:
+                continue
+            if norm(first) in self._paired_reviews:
+                continue  # this movie is already a review of other footage, not a main file
+            got = reviews_of.setdefault(first, [])
+            if len(got) >= self._pairs.max_reviews:
+                continue
+            got.append(review)
+            self._paired_reviews[norm(review)] = first
+        for paths, _is_seq in footage:
+            first = paths[0]
+            entry = (thumbs.get(first), reviews_of.get(first, []))
+            if entry[0] or entry[1]:
+                for p in paths:
+                    self._paired[norm(p)] = entry
         if consumed:
             kept = {}
             for key, entries in groups.items():
@@ -351,12 +435,13 @@ class ImageScanner(QThread):
         item.rep_tags = matched_p.get("Tags", "passing") if matched_p else "passing"
 
         # 5. existing thumbnail / review found by pairing (same name, see logic/pairing.py)
-        paired_thumb, paired_review = self._paired.get(os.path.normcase(os.path.abspath(first_path)), (None, None))
+        paired_thumb, paired_reviews = self._paired.get(os.path.normcase(os.path.abspath(first_path)), (None, []))
         if paired_thumb:
             item.conversion_thumb_path = paired_thumb.replace("\\", "/")
             item.metadata["paired_thumbnail"] = item.conversion_thumb_path
-        if paired_review:
-            item.review_file_path = paired_review.replace("\\", "/")
+        if paired_reviews:
+            # the review items are linked at the end of the scan (_link_paired_reviews)
+            item.review_file_path = paired_reviews[0].replace("\\", "/")
             item.metadata["paired_review"] = item.review_file_path
             item.review_status = "done"
         # 6. otherwise review status from the preset's expected location

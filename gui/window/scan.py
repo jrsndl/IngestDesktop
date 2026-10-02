@@ -228,21 +228,31 @@ class ScanMixin:
         self.scanner = self._make_scanner(directory)
         scanner = self.scanner
         self.scanner.finished.connect(lambda items, scanner=scanner: self._on_rescan_finished(items) if scanner is self.scanner else None)
-        self.scanner.metadata_done.connect(
-            lambda scanner=scanner: self._start_post_scan_work(list(getattr(self, "_last_scan_items", [])))
-            if scanner is self.scanner else None)
+        self.scanner.metadata_done.connect(lambda scanner=scanner: self._on_rescan_metadata_done()
+                                           if scanner is self.scanner else None)
         self.scanner.item_updated.connect(self.model.update_item)
         self.scanner.log.connect(self.log_message)
         self.scanner.start()
 
+    def _on_rescan_metadata_done(self):
+        # file dates are read in the metadata phase: copy them to the existing items now
+        self._refresh_file_facts(getattr(self, "_last_rescan_all", []))
+        self._start_post_scan_work(list(getattr(self, "_last_scan_items", [])))
+
     def _on_rescan_finished(self, items):
         """Filter for new items and add them to the model."""
-        # A sequence is identified by folder + name + version, not by the frame that
-        # represents it (that frame changes when frames are added).
+        # An item is identified by folder + name without the frame counter, not by the
+        # frame that represents it (that frame changes when frames are added, and items
+        # loaded from a project file carry no scanner sequence key).
+        from logic.pairing import footage_id
+
         def ident(it):
-            key = getattr(it, "seq_key", None)
-            return key if key else os.path.normcase(os.path.normpath(it.file_path))
+            if not getattr(it, "file_path", None):
+                return id(it)
+            return (footage_id(it.file_path), bool(getattr(it, "is_sequence", False)))
         existing = {ident(item) for item in self.model.items}
+        self._last_rescan_all = list(items)
+        self._refresh_file_facts(items)
         new_items = [it for it in items if ident(it) not in existing]
         self._last_scan_items = list(new_items)
         
@@ -251,10 +261,41 @@ class ScanMixin:
                 if not getattr(item, "_tags_parsed", False):
                     self._parse_item_tags(item)
             self.model.add_items(new_items)
+            # new reviews of existing footage (and the other way round) were linked to
+            # the scanner's copies; link them to the items in the model
+            from logic.image_model import link_pairs_from_metadata
+            link_pairs_from_metadata(self.model.items)
+            self.model.order_pairs()
             self._update_grouping_and_inheritance()
             self.log_message(f"Rescan complete. Added {len(new_items)} new items.", "success")
         else:
             self.log_message("Rescan complete. No new items found.")
+
+    def _refresh_file_facts(self, scanned):
+        """Items already in the model (e.g. loaded from a project / the last session) get
+        the facts that come from the disk from the fresh scan: a sequence's frame range
+        (frames may have been added; older projects didn't store it at all - the file
+        panel showed [None-None]) and the file dates the Age filter uses."""
+        from logic.pairing import footage_id
+
+        def ident(it):
+            if not getattr(it, "file_path", None):
+                return id(it)
+            return (footage_id(it.file_path), bool(getattr(it, "is_sequence", False)))
+        by_id = {ident(it): it for it in scanned}
+        for item in self.model.items:
+            fresh = by_id.get(ident(item))
+            if fresh is None or fresh is item:
+                continue
+            if item.is_sequence and fresh.frame_start is not None:
+                item.frame_start, item.frame_end = fresh.frame_start, fresh.frame_end
+            elif item.frame_start is None and fresh.frame_start is not None:
+                item.frame_start, item.frame_end = fresh.frame_start, fresh.frame_end
+            for attr in ("modification_time", "creation_time", "age_minutes"):
+                if getattr(fresh, attr, 0):
+                    setattr(item, attr, getattr(fresh, attr))
+        if self.model.items:
+            self.model.layoutChanged.emit()  # file panel cache + labels pick up the values
 
     def reveal_source_folder(self):
         """Open the current source folder in the OS file manager."""
@@ -274,12 +315,9 @@ class ScanMixin:
         self._age_filter_enabled = enabled
         self._age_filter_units = units
         
-        # Convert to minutes for internal comparison
-        # We add 1 to the value to include the full period (e.g. 0 days = < 1 day)
-        minutes = (value + 1)
-        if units == "hours": minutes *= 60
-        elif units == "days": minutes *= 1440
-        self._age_filter_value = minutes
+        # Limit in minutes; a file passes when it is younger (age < limit)
+        from logic.image_model import age_limit_minutes
+        self._age_filter_value = age_limit_minutes(value, units)
         
         self.model.set_age_unit(units)
         

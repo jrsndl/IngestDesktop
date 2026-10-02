@@ -583,7 +583,31 @@ class BackdropItem(QGraphicsObject):
         self._is_dragging_top_bar = False
         self.setFlag(QGraphicsItem.ItemIsMovable, True) # Restore for selection/other uses
         super().mouseReleaseEvent(event)
+        self._commit_content_positions()
         self._content_offsets = {}
+
+    def _commit_content_positions(self):
+        """Thumbnails carried along by a backdrop drag keep their new place: store it
+        like a hand move (item data, remembered layout), so projects save it."""
+        area = None
+        if self.scene() is not None and self.scene().views():
+            area = self.scene().views()[0].parent()
+        for item in list(self._content_offsets):
+            if not isinstance(item, ThumbnailItem):
+                continue
+            p = item.pos()
+            item.is_manually_moved = True
+            item._placed = True
+            data = getattr(item, "data", None)
+            if data is None or callable(data):
+                continue
+            data.position = (p.x(), p.y())
+            data.has_placed_position = True
+            data.is_manually_moved = True
+            if area is not None and hasattr(area, "item_positions") and hasattr(area, "_get_item_key"):
+                key = area._get_item_key(data)
+                if key:
+                    area.item_positions[key] = (p.x(), p.y())
 
     def itemChange(self, change, value):
         return super().itemChange(change, value)

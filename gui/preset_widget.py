@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, 
                              QComboBox, QDoubleSpinBox, QSpinBox, QCheckBox, QPushButton, QFrame, QLayout,
-                             QPlainTextEdit, QGridLayout)
+                             QPlainTextEdit, QGridLayout, QSizePolicy)
 from PySide6.QtGui import QMouseEvent
 from PySide6.QtCore import Signal, Qt
 
@@ -20,18 +20,34 @@ class PresetWidget(QFrame):
         self.main_layout = QVBoxLayout(self)
         self.main_layout.setContentsMargins(0, 0, 0, 0)
         self.main_layout.setSpacing(0)
+        # Keep its natural height: a taller Preferences dialog shows more presets,
+        # it does not stretch them
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
+        # Compact inputs inside presets
+        self.setStyleSheet(
+            "#PresetWidget QLineEdit, #PresetWidget QComboBox, #PresetWidget QSpinBox, "
+            "#PresetWidget QDoubleSpinBox, #PresetWidget QPlainTextEdit { padding: 1px 3px; }"
+            "#PresetWidget QCheckBox { spacing: 4px; }")
 
-        # Header
+        # Header: [on/off] [fold arrow] title ............ [up] [down]
+        # Clicking the orange square switches the preset on/off; clicking anywhere
+        # else on the header folds / unfolds it.
         self.header = QFrame()
         self.header.setObjectName("PresetHeader")
         self.header_layout = QHBoxLayout(self.header)
-        self.header_layout.setContentsMargins(10, 5, 10, 5)
+        self.header_layout.setContentsMargins(6, 2, 6, 2)
+        self.header_layout.setSpacing(6)
         
-        self.btn_toggle = QPushButton("▶")
-        self.btn_toggle.setFixedSize(20, 20)
+        self.btn_toggle = QPushButton("")
+        self.btn_toggle.setFixedSize(16, 16)
         self.btn_toggle.setCheckable(True)
         self.btn_toggle.setChecked(True)
-        self.btn_toggle.clicked.connect(self.toggle_collapsed)
+        self.btn_toggle.setToolTip("Preset on / off (an off preset is never used to match files)")
+        self.btn_toggle.setStyleSheet("QPushButton { min-height: 0px; padding: 0px; }")
+        self.btn_toggle.toggled.connect(self._on_enabled_toggled)
+
+        self.lbl_fold = QLabel("▶")
+        self.lbl_fold.setFixedWidth(12)
         
         self.lbl_title = QLabel("Preset")
         self.lbl_title.setStyleSheet("font-weight: bold; font-size: 13px;")
@@ -49,6 +65,7 @@ class PresetWidget(QFrame):
         self.btn_down.clicked.connect(lambda: self.move_down.emit(self))
 
         self.header_layout.addWidget(self.btn_toggle)
+        self.header_layout.addWidget(self.lbl_fold)
         self.header_layout.addWidget(self.lbl_title)
         self.header_layout.addStretch()
         self.header_layout.addWidget(self.btn_up)
@@ -59,9 +76,10 @@ class PresetWidget(QFrame):
         # Content Container
         self.content_widget = QWidget()
         self.content_layout = QGridLayout(self.content_widget)
-        self.content_layout.setContentsMargins(15, 10, 15, 15)
-        self.content_layout.setHorizontalSpacing(10)
-        self.content_layout.setVerticalSpacing(6)
+        self.content_layout.setContentsMargins(8, 4, 8, 6)
+        self.content_layout.setHorizontalSpacing(8)
+        self.content_layout.setVerticalSpacing(3)
+        self.content_widget.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         self.content_layout.setColumnStretch(1, 1)
         self.content_layout.setColumnStretch(3, 1)
         self.content_layout.setColumnStretch(5, 1)
@@ -149,7 +167,7 @@ class PresetWidget(QFrame):
 
         # Row 7: Thumb Cmd (Full width)
         self.convert_thumb_cmd = QPlainTextEdit()
-        self.convert_thumb_cmd.setMaximumHeight(50)
+        self.convert_thumb_cmd.setFixedHeight(40)
         self.add_to_grid(7, 0, "Thumb Cmd:", self.convert_thumb_cmd, span=3)
 
         # Row 8: Divider
@@ -185,7 +203,7 @@ class PresetWidget(QFrame):
 
         # Row 12: Review Cmd (Full width)
         self.convert_review_cmd = QPlainTextEdit()
-        self.convert_review_cmd.setMaximumHeight(50)
+        self.convert_review_cmd.setFixedHeight(40)
         self.add_to_grid(12, 0, "Review Cmd:", self.convert_review_cmd, span=3)
 
         self.main_layout.addWidget(self.content_widget)
@@ -198,7 +216,7 @@ class PresetWidget(QFrame):
         col_idx = col * 2
         if label_text:
             lbl = QLabel(label_text)
-            lbl.setFixedWidth(75)
+            lbl.setFixedWidth(70)
             self.grid_layout.addWidget(lbl, row, col_idx)
             
         if isinstance(widget, QLayout):
@@ -218,7 +236,15 @@ class PresetWidget(QFrame):
     def toggle_collapsed(self):
         self.is_collapsed = not self.is_collapsed
         self.content_widget.setVisible(not self.is_collapsed)
-        self.btn_toggle.setText("▶" if self.is_collapsed else "▼")
+        self.lbl_fold.setText("▶" if self.is_collapsed else "▼")
+
+    def is_enabled(self):
+        return self.btn_toggle.isChecked()
+
+    def _on_enabled_toggled(self, on):
+        # an off preset: dimmed title, marked "(off)"
+        self.lbl_title.setStyleSheet("font-weight: bold; font-size: 13px;" + ("" if on else " color: #777777;"))
+        self._update_title(self.name.text() if hasattr(self, "name") else "")
 
     def set_selected(self, selected):
         self.is_selected = selected
@@ -232,16 +258,17 @@ class PresetWidget(QFrame):
 
     def mousePressEvent(self, event: QMouseEvent):
         self.clicked.emit(self)
+        # a click on the header (not on its buttons, which handle their own clicks)
+        # folds / unfolds the preset
+        if event.button() == Qt.LeftButton and self.header.geometry().contains(event.pos()):
+            self.toggle_collapsed()
         super().mousePressEvent(event)
 
-    def mouseDoubleClickEvent(self, event: QMouseEvent):
-        # Toggle collapsed state if double-clicked on the header
-        if self.header.geometry().contains(event.pos()):
-            self.toggle_collapsed()
-        super().mouseDoubleClickEvent(event)
-
     def _update_title(self, text):
-        self.lbl_title.setText(text if text else "Untitled Preset")
+        title = text if text else "Untitled Preset"
+        if hasattr(self, "btn_toggle") and not self.btn_toggle.isChecked():
+            title += "  (off)"
+        self.lbl_title.setText(title)
 
     def set_defaults(self, data):
         if data:
@@ -276,6 +303,7 @@ class PresetWidget(QFrame):
             self.review_representation.setText(data.get("Review Representation", "h264"))
             self.review_colorspace.setText(data.get("Review Colorspace", "Output - sRGB"))
             self.review_rep_tags.setText(data.get("Review Tags", "passing;ftrackreview;webreview"))
+            self.btn_toggle.setChecked(bool(data.get("Enabled", True)))
             
             self._update_title(self.name.text())
             return
@@ -383,5 +411,6 @@ class PresetWidget(QFrame):
             "Convert Review Command": self.convert_review_cmd.toPlainText(),
             "Review Representation": self.review_representation.text(),
             "Review Colorspace": self.review_colorspace.text(),
-            "Review Tags": self.review_rep_tags.text()
+            "Review Tags": self.review_rep_tags.text(),
+            "Enabled": self.btn_toggle.isChecked(),
         }

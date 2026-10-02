@@ -99,8 +99,9 @@ class _Resolver:
         return md.get(key)
 
     def _ayon(self, key):
-        """Value coming from the AYON assignment (only while assigned)."""
-        it = self.item
+        """Value coming from the AYON assignment (only while assigned).
+        A paired review uses its main file's assignment."""
+        it = getattr(self.item, "pair_main", None) or self.item
         if not getattr(it, "ayon_path", ""):
             return None
         ctx = getattr(it, "ayon_context", None) or {}
@@ -210,6 +211,9 @@ class _Resolver:
         return getattr(self.item, "variant_user", "") or ""
 
     def t_variant(self):
+        main = getattr(self.item, "pair_main", None)
+        if main is not None:  # a paired review uses its main file's variant
+            return _Resolver(main, self.s).value("variant")
         tmpl = getattr(self.item, "effective_variant", None)
         if tmpl is None:
             tmpl = getattr(self.item, "variant", "") or ""
@@ -341,9 +345,20 @@ class _Resolver:
     def t_ingestdesktop(self): return (self._get("app_dir", "") or "").replace("\\", "/")
 
 
+_ENV_RE = re.compile(r"\$\{([^}]+)\}")
+
+
+def expand_env(text):
+    """${NAME} -> value of the environment variable NAME (kept as is when not set)."""
+    if not text or "${" not in text:
+        return text
+    return _ENV_RE.sub(lambda m: os.environ.get(m.group(1), m.group(0)), text)
+
+
 def _expand_with(resolver, template, camel):
     if not template:
         return ""
+    template = expand_env(template)  # ${USERNAME} etc. first, then {tokens}
 
     def repl(m):
         raw = m.group(1)

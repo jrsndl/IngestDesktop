@@ -84,7 +84,10 @@ class ProjectMixin:
             "items": [],
             "text_notes": [],
             "backdrops": [],
-            "draw_items": []
+            "draw_items": [],
+            "unpaired_reviews": list(self.config.get("unpaired_reviews", []) or []),
+            "manual_pairs": list(self.config.get("manual_pairs", []) or []),
+            "panels": self._gather_panel_state(),
         }
         
         # Gather items
@@ -123,12 +126,19 @@ class ProjectMixin:
                 "ayon_task_name": item.ayon_task_name,
                 "conversion_thumb_path": item.conversion_thumb_path,
                 "is_sequence": item.is_sequence,
+                "frame_start": item.frame_start,
+                "frame_end": item.frame_end,
                 "is_selected": is_selected,
-                "position": item.position,
+                # the live canvas position (an item carried by a backdrop drag, or
+                # moved in code, may not have updated item.position)
+                "position": ((lambda t: (t.pos().x(), t.pos().y()) if t is not None else item.position)(
+                    self.thumb_area.item_to_thumb.get(item) if getattr(self, "thumb_area", None) else None)),
                 "size": getattr(item, "size", 150),
                 "is_custom_size": getattr(item, "is_custom_size", False),
                 "metadata": item.metadata,
                 "ingest_status": item.ingest_status,
+                **({k: v for k, v in item.own_fields().items() if k not in ("last_ayon_version",)}
+                   if getattr(item, "pair_main", None) is not None else {}),  # a paired review saves its own values
                 "z_value": (self.thumb_area.item_to_thumb.get(item).zValue()
                              if self.thumb_area and self.thumb_area.item_to_thumb.get(item) else 0)
             }
@@ -222,6 +232,151 @@ class ProjectMixin:
         except Exception as e:
             self.log_message(f"Failed to save project: {e}", "error")
 
+    # -- panel state saved with a project ---------------------------------------
+    def _gather_panel_state(self):
+        """View and switch state of every panel (pan/zoom, toggles, filters)."""
+        st = {}
+        ta = getattr(self, "thumb_area", None)
+        if ta is not None:
+            v = ta.view
+            c = v.mapToScene(v.viewport().rect().center())
+            st["canvas"] = {
+                "scale": v.transform().m11(),
+                "center": [c.x(), c.y()],
+                "show_reviews": ta.btn_show_reviews.isChecked(),
+                "show_text": ta.btn_show_text.isChecked(),
+                "show_frames": ta.btn_show_frames.isChecked(),
+                "text_size": ta.slider_text_size.value(),
+                "thumb_size": ta.slider_thumb_size.value(),
+                "player_mode": getattr(ta, "player_mode", "stop"),
+                "tag_filter": getattr(ta, "_tag_filter_state", "all"),
+                "arrange": dict(getattr(ta, "_last_arrange_vals", {}) or {}),
+            }
+        fp = getattr(self, "filter_panel", None)
+        if fp is not None:
+            st["files"] = dict(fp.get_toggle_states(), reviews=fp.btn_show_reviews.isChecked(),
+                               search_enabled=fp.chk_search.isChecked(), search_text=fp.search_bar.text(),
+                               ignore_enabled=fp.chk_ignore.isChecked(), ignore_text=fp.ignore_bar.text(),
+                               age_enabled=fp.chk_age.isChecked(), age_value=fp.spin_age.value(),
+                               age_units=fp.combo_units.currentText())
+        sp = getattr(self, "spreadsheet", None)
+        if sp is not None:
+            st["spreadsheet"] = {
+                "selected_only": sp.btn_selected_only.isChecked(),
+                "enabled_only": sp.btn_tagged_only.isChecked(),
+                "assigned_only": sp.btn_assigned_only.isChecked(),
+                "show_grouped": sp.btn_show_grouped.isChecked(),
+                "show_reviews": sp.btn_show_reviews.isChecked(),
+                "csv": sp.btn_csv.isChecked(),
+                "row_height": sp.slider_row_height.value(),
+            }
+        return st
+
+    def _restore_panel_state(self, st):
+        """Apply what _gather_panel_state saved (missing keys keep the current state)."""
+        st = st or {}
+        ta = getattr(self, "thumb_area", None)
+        cv = st.get("canvas") or {}
+        if ta is not None and cv:
+            if "text_size" in cv:
+                ta.slider_text_size.setValue(int(cv["text_size"]))
+            if "thumb_size" in cv:
+                ta.slider_thumb_size.setValue(int(cv["thumb_size"]))
+            if "show_text" in cv and ta.btn_show_text.isChecked() != bool(cv["show_text"]):
+                ta.btn_show_text.setChecked(bool(cv["show_text"]))
+                ta._on_show_text_toggled(bool(cv["show_text"]))  # the button reacts to clicks only
+            if "show_frames" in cv:
+                ta.btn_show_frames.setChecked(bool(cv["show_frames"]))
+            if "show_reviews" in cv and ta.btn_show_reviews.isChecked() != bool(cv["show_reviews"]):
+                ta.btn_show_reviews.setChecked(bool(cv["show_reviews"]))  # re-lays out the canvas
+            if cv.get("arrange"):
+                ta._last_arrange_vals.update(cv["arrange"])
+            mode = cv.get("player_mode")
+            if mode in ("stop", "selected", "all"):
+                ta.player_mode = mode
+                ta.btn_player_mode.setText(f"Player: {mode.capitalize()}")
+            tag = cv.get("tag_filter")
+            if tag in ("all", "enabled", "disabled") and tag != ta._tag_filter_state:
+                ta._tag_filter_state = tag
+                ta.btn_tag_filter.setText(f"Filter: {tag.capitalize()}")
+                ta.rearrange_items()
+
+            def apply_view(cv=cv, ta=ta):
+                try:
+                    s = float(cv.get("scale") or 0)
+                    if s > 0:
+                        ta.view.resetTransform()
+                        ta.view.scale(s, s)
+                    if cv.get("center"):
+                        x, y = cv["center"]
+                        ta.view.centerOn(float(x), float(y))
+                    ta.update_zoom_indicator()
+                    ta.update_video_overlay_geometry()
+                except Exception as e:
+                    print(f"[Project] Could not restore the view: {e}")
+            QTimer.singleShot(0, apply_view)  # after the layout of the loaded items
+        fp = getattr(self, "filter_panel", None)
+        fs = st.get("files") or {}
+        if fp is not None and fs:
+            fp.set_toggle_states({k: fs[k] for k in ("files_only", "flat", "v_stack", "sequences") if k in fs})
+            if "reviews" in fs and fp.btn_show_reviews.isChecked() != bool(fs["reviews"]):
+                fp.btn_show_reviews.setChecked(bool(fs["reviews"]))
+            if "search_enabled" in fs: fp.chk_search.setChecked(bool(fs["search_enabled"]))
+            if "search_text" in fs: fp.search_bar.setText(fs["search_text"] or "")
+            if "ignore_enabled" in fs: fp.chk_ignore.setChecked(bool(fs["ignore_enabled"]))
+            if "ignore_text" in fs: fp.ignore_bar.setText(fs["ignore_text"] or "")
+            if "age_enabled" in fs: fp.chk_age.setChecked(bool(fs["age_enabled"]))
+            if "age_value" in fs: fp.spin_age.setValue(int(fs["age_value"]))
+            if "age_units" in fs: fp.combo_units.setCurrentText(fs["age_units"])
+        sp = getattr(self, "spreadsheet", None)
+        ss = st.get("spreadsheet") or {}
+        if sp is not None and ss:
+            for key, btn in (("selected_only", sp.btn_selected_only), ("enabled_only", sp.btn_tagged_only),
+                             ("assigned_only", sp.btn_assigned_only), ("show_grouped", sp.btn_show_grouped),
+                             ("show_reviews", sp.btn_show_reviews), ("csv", sp.btn_csv)):
+                if key in ss and btn.isChecked() != bool(ss[key]):
+                    btn.setChecked(bool(ss[key]))  # runs the button's normal handler
+            if "row_height" in ss:
+                sp.slider_row_height.setValue(int(ss["row_height"]))
+
+    # -- last session (Preferences > General > Sessions Folder) ----------------
+    def _last_session_path(self):
+        """<Sessions Folder>/last.yaml, with ${ENV} expanded; None when not set."""
+        from utils import expand_env_vars
+        folder = (expand_env_vars(self.secrets.get("sessions_folder", "") or "") or "").strip()
+        if not folder or "${" in folder:
+            return None
+        return os.path.join(folder, "last.yaml")
+
+    def save_last_session(self):
+        """Save the current project as 'last' in the Sessions Folder (on exit)."""
+        path = self._last_session_path()
+        if not path:
+            return False
+        if not getattr(self.model, "items", None):
+            return False  # nothing loaded (e.g. the network was down): keep the previous 'last'
+        keep = getattr(self, "current_project_path", None)
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            self.save_project_files(path)
+            return True
+        except Exception as e:
+            print(f"[Session] Could not save the last session to {path}: {e}")
+            return False
+        finally:
+            self.current_project_path = keep  # 'last' is not the user's own project file
+
+    def load_last_session(self):
+        """Open <Sessions Folder>/last.yaml if it exists. Returns True when loaded."""
+        path = self._last_session_path()
+        if not path or not os.path.isfile(path):
+            return False
+        ok = self.load_project_file(path)
+        self.current_project_path = None  # Save asks for a name instead of overwriting 'last'
+        if ok:
+            self.log_message(f"Continued the last session from {path}", "success")
+        return ok
+
     def perform_open_project(self):
         from PySide6.QtWidgets import QFileDialog
         path, _ = QFileDialog.getOpenFileName(
@@ -229,7 +384,10 @@ class ProjectMixin:
         )
         if not path:
             return
-            
+        self.load_project_file(path)
+
+    def load_project_file(self, path):
+        """Load a saved project (.yaml + its .json preferences). Returns True on success."""
         import yaml
         try:
             # 1. Look for and load corresponding JSON config
@@ -293,6 +451,8 @@ class ProjectMixin:
                 
                 # Check for standard model keys
                 item.is_sequence = it.get("is_sequence", False)
+                item.frame_start = it.get("frame_start")
+                item.frame_end = it.get("frame_end")
                 item.conversion_thumb_path = it.get("conversion_thumb_path", "")
                 
                 # Keep selected flag
@@ -327,6 +487,28 @@ class ProjectMixin:
                 
                 reconstructed_items.append(item)
                 
+            # Drop duplicates (a project saved after a rescan that added sequences twice)
+            from logic.pairing import footage_id
+            seen_ids, unique_items = set(), []
+            for it in reconstructed_items:
+                fid = (footage_id(it.file_path), bool(it.is_sequence)) if it.file_path else id(it)
+                if fid in seen_ids:
+                    continue
+                seen_ids.add(fid)
+                unique_items.append(it)
+            if len(unique_items) != len(reconstructed_items):
+                self.log_message(f"Removed {len(reconstructed_items) - len(unique_items)} duplicate item(s) "
+                                 f"from the project.", "info")
+            reconstructed_items = unique_items
+
+            # Paired reviews take AYON path / variant / version / comment from their main file again
+            from logic.image_model import link_pairs_from_metadata
+            link_pairs_from_metadata(reconstructed_items)
+            if "unpaired_reviews" in project_data:
+                self.config["unpaired_reviews"] = list(project_data.get("unpaired_reviews") or [])
+            if "manual_pairs" in project_data:
+                self.config["manual_pairs"] = list(project_data.get("manual_pairs") or [])
+
             # Save the loaded positions, selection states, and z-values before resetting the model
             saved_positions = {it.file_path: it.position for it in reconstructed_items}
             saved_selections = {it.file_path: it.is_selected for it in reconstructed_items}
@@ -342,6 +524,7 @@ class ProjectMixin:
             self.model.source_folder = source_folder
             self.top_bar.path_display.setText(source_folder)
             self.model.endResetModel()
+            self.model.order_pairs()  # paired reviews right below their main file
             
             # Now restore backdrops and text notes
             from gui.thumbnail_area import TextNoteItem, BackdropItem
@@ -489,10 +672,30 @@ class ProjectMixin:
             
             # Re-run layout updates
             self.thumb_area.rearrange_items()
-            
+
+            # Panels as they were when the project was saved (pan/zoom, switches, filters)
+            try:
+                self._restore_panel_state(project_data.get("panels"))
+            except Exception as e:
+                self.log_message(f"Could not restore the panel state: {e}", "warning")
+
             self.log_message(f"Successfully loaded project {path}", "success")
+
+            # Bring the project up to date with the disk: the file panel shows the source
+            # folder, and a rescan drops missing files and adds new ones
+            from utils import expand_env_vars
+            src = expand_env_vars(source_folder or "")
+            if src and os.path.isdir(src):
+                self.config["last_source_folder"] = src
+                self.filter_panel.set_root_folder(src)
+                self.rescan_current()
+            elif source_folder:
+                self.log_message(f"Source folder {source_folder} is not reachable: showing the project as saved, "
+                                 f"without a rescan.", "warning")
+            return True
         except Exception as e:
             self.log_message(f"Failed to load project: {e}", "error")
+            return False
 
     def _add_to_recent(self, path):
         recent = self.config.get("recent_folders", [])

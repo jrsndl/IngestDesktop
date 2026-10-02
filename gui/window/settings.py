@@ -129,8 +129,8 @@ class SettingsMixin:
         self._restore_gui_state()
         self.thumb_area.high_res_size = self.config.get("thumb_size", 512)
         
-        self.thumb_area.slider_text_size.valueChanged.connect(self._on_text_size_changed)
-        self.thumb_area.slider_thumb_size.valueChanged.connect(self._on_thumb_size_changed)
+        self.thumb_area.slider_text_size.sizeChanged.connect(self._on_text_size_changed)
+        self.thumb_area.slider_thumb_size.sizeChanged.connect(self._on_thumb_size_changed)
 
         # Update model presets mapping
         self._update_model_presets()
@@ -150,7 +150,13 @@ class SettingsMixin:
         if not last_folder or not os.path.exists(last_folder):
             last_folder = expand_env_vars(self.config.get("default_scan_folder", ""))
             
-        if last_folder and os.path.exists(last_folder):
+        # Continue the last session ('last' project in the Sessions Folder) instead
+        # of scanning the last folder again
+        last_session = self._last_session_path() if hasattr(self, "_last_session_path") else None
+        if (self.secrets.get("load_last_session", True) and last_session and os.path.isfile(last_session)
+                and not os.environ.get("INGESTDESKTOP_NO_SAVE")):
+            QTimer.singleShot(0, self._open_last_session_or_scan)
+        elif last_folder and os.path.exists(last_folder):
             self.start_scan(last_folder)
         
         # Initial AYON refresh (handled by refresh_ayon_async above)
@@ -263,6 +269,14 @@ class SettingsMixin:
             
         self.model.layoutChanged.emit()
 
+    def _open_last_session_or_scan(self):
+        if self.load_last_session():
+            return
+        from utils import expand_env_vars
+        last_folder = expand_env_vars(self.config.get("last_source_folder", "") or "")
+        if last_folder and os.path.exists(last_folder):
+            self.start_scan(last_folder)
+
     def show_preferences(self):
         # Store old values to check if re-scan is needed
         old_detect = self.config.get("detect_sequences", True)
@@ -291,6 +305,8 @@ class SettingsMixin:
         prefs_io.with_aliases(self.config)
         from gui.video_player import set_inline_video_disabled
         set_inline_video_disabled(self.config.get("disable_inline_video", False))
+        if getattr(self, "edge_swipe", None) is not None:
+            self.edge_swipe.enabled = bool(self.config.get("edge_swipe_panels", True))
         
         default_cols = self.config.get("default_columns", 12)
         default_text_size = self.config.get("default_text_size", 10)
@@ -450,6 +466,7 @@ class SettingsMixin:
         if hasattr(self, "thumb_area") and self.thumb_area:
             self.config["default_columns"] = self.thumb_area._last_arrange_vals["cols"]
             self.config["thumbnails_show_text"] = self.thumb_area.btn_show_text.isChecked()
+            self.config["thumbnails_show_frames"] = self.thumb_area.btn_show_frames.isChecked()
             self.config["default_text_size"] = self.thumb_area.slider_text_size.value()
             self.config["default_thumb_size"] = self.thumb_area.slider_thumb_size.value()
             self.config["player_mode"] = self.thumb_area.player_mode
@@ -504,6 +521,7 @@ class SettingsMixin:
             show_text = self.config.get("thumbnails_show_text", True)
             self.thumb_area.btn_show_text.setChecked(show_text)
             self.thumb_area._on_show_text_toggled(show_text)
+            self.thumb_area.btn_show_frames.setChecked(self.config.get("thumbnails_show_frames", True))
             
             player_mode = self.config.get("player_mode", "stop")
             self.thumb_area.player_mode = player_mode

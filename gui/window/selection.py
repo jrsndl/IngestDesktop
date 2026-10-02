@@ -254,7 +254,7 @@ class SelectionMixin:
                     if self.thumb_area._tag_filter_state == "enabled": show_by_tag = is_tagged
                     elif self.thumb_area._tag_filter_state == "disabled": show_by_tag = not is_tagged
                     
-                    is_young_enough = not age_enabled or (item_data.age_minutes <= age_val)
+                    is_young_enough = not age_enabled or (item_data.age_minutes < age_val)
                     matches_search = (not search_term or 
                                       search_term in item_data.label.lower() or 
                                       search_term in item_data.filename.lower())
@@ -545,7 +545,9 @@ class SelectionMixin:
                         item_norm = os.path.normpath(os.path.abspath(item.file_path)).lower()
                         if item_norm == p_norm or item_norm.startswith(p_norm + os.sep) or p_norm.startswith(item_norm):
                             target_items.add(item)
-                        else:
+                        elif getattr(item, "is_sequence", False):
+                            # a frame of a sequence item selects that sequence item; with
+                            # Sequences off every frame is its own item and matches only itself
                             item_dir = os.path.dirname(item_norm)
                             p_dir = os.path.dirname(p_norm)
                             if item_dir == p_dir:
@@ -1046,6 +1048,87 @@ class SelectionMixin:
         level = "success" if sample_item.is_tagged else "info"
         self.log_message(f"{action_str}: {count} items.", level)
 
+    def _on_unpair_requested(self, pairs):
+        """Unpair (main, review) pairs from a context menu. The review shows its own
+        AYON path / variant / version / comment again, and the unpair is remembered
+        so a rescan does not pair them again."""
+        from logic.pairing import unpair_key
+        pairs = [(m, r) for m, r in (pairs or []) if m is not None and r is not None]
+        if not pairs:
+            return
+        from logic.pairing import key_matches
+        remembered = list(self.config.get("unpaired_reviews", []) or [])
+        for main, review in pairs:
+            main.unpair_review(review)
+            key = unpair_key(main.file_path, review.file_path)
+            if key not in remembered:
+                remembered.append(key)
+        self.config["unpaired_reviews"] = remembered
+        # an unpaired manual pair ("Pair as main") is forgotten too
+        self.config["manual_pairs"] = [
+            k for k in (self.config.get("manual_pairs", []) or [])
+            if not any(key_matches(k, m.file_path, r.file_path) for m, r in pairs)]
+        self.save_config()
+        self._refresh_after_pairing_change()
+        names = ", ".join(os.path.basename(r.file_path) for _m, r in pairs)
+        self.log_message(f"Unpaired {len(pairs)} review(s): {names}", "info")
+
+    def _on_pair_requested(self, pairs):
+        """Pair (main, review) pairs by hand: "Pair" (again) and "Pair as main".
+        Pairings that conflict are undone (and remembered as unpaired); the new
+        pairs are remembered as manual pairs, so a rescan keeps them."""
+        from logic.pairing import unpair_key, key_matches
+        pairs = [(m, r) for m, r in (pairs or []) if m is not None and r is not None and m is not r]
+        if not pairs:
+            return
+        unpaired = list(self.config.get("unpaired_reviews", []) or [])
+        manual = list(self.config.get("manual_pairs", []) or [])
+
+        def remember_unpair(m, r):
+            if any(a is m and b is r for a, b in pairs):
+                return  # being paired again right now
+            k = unpair_key(m.file_path, r.file_path)
+            if k not in unpaired:
+                unpaired.append(k)
+            manual[:] = [x for x in manual if not key_matches(x, m.file_path, r.file_path)]
+
+        for main, review in pairs:
+            if main.pair_main is not None:          # the new main was someone's review
+                remember_unpair(main.pair_main, main)
+                main.pair_main.unpair_review(main)
+            for r in list(review.paired_reviews):   # the new review was a main file
+                remember_unpair(review, r)
+                review.unpair_review(r)
+            if review.pair_main is not None and review.pair_main is not main:
+                remember_unpair(review.pair_main, review)
+                review.pair_main.unpair_review(review)
+            main.pair_review(review)
+            # forget the unpair, whichever frame of the sequence it was remembered with
+            unpaired = [k for k in unpaired if not key_matches(k, main.file_path, review.file_path)]
+            if not any(key_matches(k, main.file_path, review.file_path) for k in manual):
+                manual.append(unpair_key(main.file_path, review.file_path))
+        self.config["unpaired_reviews"] = unpaired
+        self.config["manual_pairs"] = manual
+        self.save_config()
+        self.model.order_pairs()
+        self._refresh_after_pairing_change()
+        names = ", ".join(os.path.basename(r.file_path) for _m, r in pairs)
+        self.log_message(f"Paired {len(pairs)} review(s): {names}", "info")
+
+    def _refresh_after_pairing_change(self):
+        try:
+            self._update_grouping_and_inheritance()
+        except Exception as e:
+            self.log_message(f"Regrouping after a pairing change failed: {e}", "warning")
+        self.model.layoutChanged.emit()
+        if hasattr(self, "filter_panel"):
+            self.filter_panel.proxy._rebuild_cache()
+            self.filter_panel.refresh_views_if_active()
+        if hasattr(self, "thumb_area"):
+            self.thumb_area.rearrange_items()
+        if hasattr(self, "spreadsheet"):
+            self.spreadsheet.update_filtering()
+
     def _on_show_reviews_toggled(self, checked):
         was_off = not getattr(self, "show_reviews", True)
         self.config["show_reviews"] = checked
@@ -1066,9 +1149,7 @@ class SelectionMixin:
             if is_rev:
                 review_items.append(item)
 
-        if hasattr(self, "thumb_area"):
-            self.thumb_area.set_show_reviews(checked)
-            self.thumb_area.rearrange_items()
+        # Only the spreadsheet: the canvas and the file panel have their own toggles
         if hasattr(self, "spreadsheet"):
             self.spreadsheet.update_filtering()
 
